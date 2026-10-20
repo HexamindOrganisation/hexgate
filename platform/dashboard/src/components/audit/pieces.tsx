@@ -335,7 +335,17 @@ function argsPreview(args: unknown): string {
   return parts.length ? `(${parts.join(", ")})` : "";
 }
 
-const fmtTime = (d: Date) => d.toLocaleTimeString("en-US", { hour12: false });
+// h23, not hour12:false: Chromium renders midnight as "24:mm" with the latter.
+// Milliseconds kept so calls within one second stay apart.
+const fmtTime = (d: Date) =>
+  d.toLocaleTimeString("en-US", {
+    hourCycle: "h23",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }) +
+  "." +
+  String(d.getMilliseconds()).padStart(3, "0");
 
 function dayLabel(d: Date, now = new Date()): string {
   const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
@@ -353,7 +363,7 @@ function dayLabel(d: Date, now = new Date()): string {
 }
 
 const LOG_COLS =
-  "grid grid-cols-[76px_92px_minmax(0,1.5fr)_120px_96px_minmax(0,1.6fr)_16px] items-center gap-3.5";
+  "grid grid-cols-[96px_92px_minmax(0,1.5fr)_120px_96px_minmax(0,1.6fr)_16px] items-center gap-3.5";
 
 export function EventsTable({
   rows,
@@ -399,7 +409,7 @@ export function EventsTable({
         </Button>
       </div>
       <div className="overflow-x-auto scrollbar-thin">
-        <div className="min-w-[920px]">
+        <div className="min-w-[940px]">
           <div
             className={cn(
               LOG_COLS,
@@ -523,6 +533,9 @@ function SeverityBadge({ severity }: { severity: AnomalySeverity }) {
   );
 }
 
+// The endpoint returns every burst; show the worst few up front.
+const ANOMALIES_SHOWN = 3;
+
 export function AnomaliesCard({
   rows,
   onRowClick,
@@ -531,73 +544,79 @@ export function AnomaliesCard({
   rows: AuditAnomaly[];
   onRowClick: (from: Date, to: Date, userId: string) => void;
   /** When set, each row gets a "Ban user" action (admins only — the caller
-   * gates on role). Undefined hides the column entirely. */
+   * gates on role). Undefined hides the action entirely. */
   onBanUser?: (userId: string) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const shown = expanded ? rows : rows.slice(0, ANOMALIES_SHOWN);
   return (
     <section aria-label="Anomalies" className="space-y-2">
-      <div className="text-caption font-semibold uppercase tracking-wider text-muted-foreground">
+      <div className="flex items-center gap-3 text-caption font-semibold uppercase tracking-wider text-muted-foreground">
         Anomalies · {rows.length} detected
+        {rows.length > ANOMALIES_SHOWN && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="normal-case tracking-normal text-primary hover:underline"
+          >
+            {expanded
+              ? "Show fewer"
+              : `Show ${rows.length - ANOMALIES_SHOWN} more`}
+          </button>
+        )}
       </div>
-      {rows.map((row) => (
-        <Callout
-          key={`${row.user_id}-${row.first_seen}`}
-          icon={<TriangleAlert />}
-          title={
-            <span className="flex flex-wrap items-center gap-2">
-              Denial burst from
-              <button
-                type="button"
-                title="Filter the page to this burst"
-                onClick={() =>
-                  onRowClick(
-                    new Date(row.first_seen),
-                    new Date(row.last_seen),
-                    row.user_id,
-                  )
-                }
-                className="font-mono font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {row.user_id}
-              </button>
-              <SeverityBadge severity={row.severity} />
-            </span>
-          }
-          actions={
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  onRowClick(
-                    new Date(row.first_seen),
-                    new Date(row.last_seen),
-                    row.user_id,
-                  )
-                }
-              >
-                Inspect
-              </Button>
-              {onBanUser && (
-                <Button
-                  size="sm"
-                  className="gap-1.5"
-                  onClick={() => onBanUser(row.user_id)}
+      {shown.map((row) => {
+        const inspect = () =>
+          onRowClick(
+            new Date(row.first_seen),
+            new Date(row.last_seen),
+            row.user_id,
+          );
+        return (
+          <Callout
+            key={`${row.user_id}-${row.first_seen}`}
+            icon={<TriangleAlert />}
+            title={
+              <span className="flex flex-wrap items-center gap-2">
+                Denial burst from
+                <button
+                  type="button"
+                  title="Filter the page to this burst"
+                  onClick={inspect}
+                  className="font-mono font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  <Ban className="size-3.5" />
-                  Ban user
+                  {row.user_id}
+                </button>
+                <SeverityBadge severity={row.severity} />
+              </span>
+            }
+            actions={
+              <>
+                <Button variant="outline" size="sm" onClick={inspect}>
+                  Inspect
                 </Button>
-              )}
-            </>
-          }
-        >
-          {row.deny} of {row.all} calls denied ·{" "}
-          <span>{(row.deny_rate * 100).toFixed(0)}%</span> deny rate ·{" "}
-          <span className="font-mono">
-            {fmtBurst(row.first_seen, row.last_seen)}
-          </span>
-        </Callout>
-      ))}
+                {onBanUser && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => onBanUser(row.user_id)}
+                  >
+                    <Ban className="size-3.5" />
+                    Ban user
+                  </Button>
+                )}
+              </>
+            }
+          >
+            {row.deny} of {row.all} calls denied ·{" "}
+            <span>{(row.deny_rate * 100).toFixed(0)}%</span> deny rate ·{" "}
+            <span className="font-mono">
+              {fmtBurst(row.first_seen, row.last_seen)}
+            </span>
+          </Callout>
+        );
+      })}
     </section>
   );
 }

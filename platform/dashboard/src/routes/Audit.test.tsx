@@ -417,6 +417,20 @@ describe("AuditPage", () => {
     );
   });
 
+  it("does not call a filtered count the project total", async () => {
+    useAuditFilters.setState((st) => ({
+      filters: { ...st.filters, tool: "read_file" },
+    }));
+    stubFetch();
+    renderWithProviders(<AuditPage />);
+    const header = (await screen.findByRole("heading", { name: "Audit" }))
+      .parentElement as HTMLElement;
+    await waitFor(() =>
+      expect(header).toHaveTextContent(/10 decisions match these filters/),
+    );
+    expect(header).not.toHaveTextContent("for demo-project");
+  });
+
   it("shows next steps instead of zeros when the range holds nothing", async () => {
     stubFetch([], "owner", {
       totals: counts(0, 0, 0),
@@ -1125,6 +1139,19 @@ describe("AuditPage", () => {
         ).toBe(true);
       });
       expect(screen.getByText("Clear all")).toBeInTheDocument();
+    });
+
+    it("shows the first three bursts and folds the rest", async () => {
+      stubFetch(
+        ["a", "b", "c", "d", "e"].map((u) => ({ ...ANOMALY, user_id: u })),
+      );
+      const user = userEvent.setup();
+      renderWithProviders(<AuditPage />);
+
+      expect(await screen.findByText("c")).toBeInTheDocument();
+      expect(screen.queryByText("d")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Show 2 more" }));
+      expect(screen.getByText("e")).toBeInTheDocument();
     });
 
     it("renders a Medium badge for medium-severity anomalies", async () => {
