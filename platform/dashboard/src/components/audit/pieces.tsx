@@ -32,7 +32,7 @@ import { Sparkline } from "@/components/ui/charts";
 import { cn } from "@/lib/utils";
 import { BreakdownCardShell } from "@/components/ui/breakdown-card";
 import { BreakdownBar, type BreakdownDatum } from "./charts";
-import { fmtClock } from "./fmt";
+import { argsPreview, fmtClock } from "./fmt";
 import { OUT_LABEL, OUT_SWATCH, OUTCOME_SERIES } from "./chart-tokens";
 
 // Map a server breakdown row ({key, all, ...}) to the chart datum ({total, ...}).
@@ -327,18 +327,6 @@ export function OutcomeLabel({ d }: { d: AuditOutcome }) {
       {OUT_LABEL[d]}
     </span>
   );
-}
-
-/** `(k=v, …)` for the log row, capped so a huge argument can't flood the
- * DOM; the drawer shows the full arguments. */
-export function argsPreview(args: unknown): string {
-  if (args == null || typeof args !== "object") return "";
-  const clip = (t: string, n: number) =>
-    t.length > n ? t.slice(0, n - 1) + "…" : t;
-  const parts = Object.entries(args as Record<string, unknown>)
-    .slice(0, 6)
-    .map(([k, v]) => `${k}=${clip(JSON.stringify(v) ?? "", 40)}`);
-  return parts.length ? clip(`(${parts.join(", ")})`, 160) : "";
 }
 
 function dayLabel(d: Date): string {
