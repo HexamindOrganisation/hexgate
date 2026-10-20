@@ -580,7 +580,7 @@ class PolicyPreviewResponse(BaseModel):
     """The effective policy per role for the draft, plus any resolution lints."""
 
     resolved: dict[str, dict] | None = None
-    matrix: "PolicyMatrixResponse | None" = None
+    matrix: PolicyMatrixResponse | None = None
     lints: list[PolicyLintOut] = Field(default_factory=list)
 
 

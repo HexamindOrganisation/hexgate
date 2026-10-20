@@ -82,6 +82,23 @@ describe("InspectorTabs", () => {
     ).toBeInTheDocument();
   });
 
+  it("states a fenced fallback with its condition", () => {
+    renderInspector({
+      matrix: {
+        ...MATRIX,
+        defaults: { support: { mode: "allow", constraint: "user.tier == 1" } },
+      },
+    });
+    expect(
+      screen.getByText(/support allow \(if user\.tier == 1\)/),
+    ).toBeInTheDocument();
+  });
+
+  it("says when the grid couldn't load", () => {
+    renderInspector({ matrix: null });
+    expect(screen.getByText(/Couldn't load the grid/)).toBeInTheDocument();
+  });
+
   it("drills from a grid cell into the role's table", async () => {
     renderInspector();
     await userEvent.click(

@@ -551,11 +551,12 @@ async def is_modular(session: AsyncSession, project_id: str) -> bool:
     return row is not None
 
 
-def matrix_json(result) -> dict:
+def matrix_json(result, extra_tools: Iterable[str] = ()) -> dict:
     """Roles x tools for a resolution, tabulated by the engine's own fallback
     and constraint composition (``hexgate.security.matrix``) — the grid the AI
     Act report evidences, so the editor can't read a grant the engine won't
-    enforce."""
+    enforce. ``extra_tools`` the policy doesn't list get the engine's fallback
+    cells (reserved keys deny) in ``cells``, but stay out of ``tools``."""
     from hexgate.security.matrix import authorisation_matrix
 
     m = authorisation_matrix(result.policy_set)
@@ -563,10 +564,14 @@ def matrix_json(result) -> dict:
     def cell(c) -> dict:
         return {"mode": c.mode, "constraint": c.constraint_text}
 
+    cells = {t: {r: cell(m.cell(t, r)) for r in m.roles} for t in m.tools}
+    for t in extra_tools:
+        if t not in cells:
+            cells[t] = {r: cell(m.default_cell(t, r)) for r in m.roles}
     return {
         "roles": list(m.roles),
         "tools": list(m.tools),
-        "cells": {t: {r: cell(m.cells[(t, r)]) for r in m.roles} for t in m.tools},
+        "cells": cells,
         "defaults": {r: cell(c) for r, c in m.defaults.items()},
         "aliased_default": m.aliased_default,
     }
