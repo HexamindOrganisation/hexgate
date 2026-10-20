@@ -42,7 +42,7 @@ import { useLogout, useUser } from "@/lib/auth";
 import { useOrgs } from "@/lib/orgs";
 import { useProjects } from "@/lib/projects";
 import { useUi } from "@/lib/ui";
-import { isDark, schemeAccent, useTheme, type Scheme } from "@/lib/theme";
+import { isDark, SCHEMES, schemeAccent, useTheme } from "@/lib/theme";
 import { usePresentMode } from "@/lib/present";
 import { cn } from "@/lib/utils";
 
@@ -455,13 +455,8 @@ const MODES = [
   ["system", Monitor, "System"],
 ] as const;
 
-const SCHEMES: [Scheme, string][] = [
-  ["blue", "Blue"],
-  ["plum", "Plum"],
-];
-
 /** Appearance picker inside the account menu: mode (light/dark/system) + accent
- * scheme (blue/plum). Plain buttons so a pick doesn't close the menu. */
+ * scheme. Plain buttons so a pick doesn't close the menu. */
 function AppearanceControl() {
   const mode = useTheme((s) => s.mode);
   const scheme = useTheme((s) => s.scheme);
@@ -471,46 +466,50 @@ function AppearanceControl() {
   // so the dots track light/dark like the real --primary token.
   const dark = isDark(mode);
 
-  const seg =
-    "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs text-muted-foreground transition-colors hover:text-foreground";
-  const on = "bg-accent text-foreground";
-
   return (
-    <div className="px-2 py-1.5">
-      <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">
+    <div className="space-y-3 px-2 py-2">
+      <div className="text-caption font-semibold uppercase tracking-wider text-muted-foreground">
         Appearance
       </div>
-      <div className="flex gap-1">
+      <div className="grid grid-cols-3 gap-0.5 rounded-lg bg-muted p-0.5">
         {MODES.map(([m, Icon, label]) => (
           <button
             key={m}
             type="button"
-            title={label}
-            aria-label={label}
+            aria-pressed={mode === m}
             onClick={() => setMode(m)}
-            className={cn(seg, mode === m && on)}
+            className={cn(
+              "flex h-7 items-center justify-center gap-1.5 rounded-md text-xs font-medium text-muted-foreground transition-colors hover:text-foreground",
+              mode === m && "bg-card text-foreground shadow-xs",
+            )}
           >
-            <Icon className="size-4" />
-          </button>
-        ))}
-      </div>
-      <div className="mt-1 flex gap-1">
-        {SCHEMES.map(([s, label]) => (
-          <button
-            key={s}
-            type="button"
-            title={`${label} accent`}
-            aria-label={`${label} accent`}
-            onClick={() => setScheme(s)}
-            className={cn(seg, scheme === s && on)}
-          >
-            <span
-              className="size-3 rounded-full"
-              style={{ backgroundColor: `hsl(${schemeAccent(s, dark)})` }}
-            />
+            <Icon className="size-3.5" />
             {label}
           </button>
         ))}
+      </div>
+      <div>
+        <div className="mb-1.5 text-xs font-medium text-muted-foreground">
+          Accent
+        </div>
+        <div className="flex gap-2">
+          {SCHEMES.map(({ id, label }) => (
+            <button
+              key={id}
+              type="button"
+              title={label}
+              aria-label={`${label} accent`}
+              aria-pressed={scheme === id}
+              onClick={() => setScheme(id)}
+              className={cn(
+                "size-6 rounded-full transition-shadow",
+                scheme === id &&
+                  "ring-2 ring-foreground ring-offset-2 ring-offset-popover",
+              )}
+              style={{ backgroundColor: `hsl(${schemeAccent(id, dark)})` }}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );

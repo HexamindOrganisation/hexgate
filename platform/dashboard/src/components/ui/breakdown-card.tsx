@@ -37,9 +37,7 @@ export function BarRow({
       onClick={onClick}
       className={`mb-[11px] transition-opacity ${onClick ? "cursor-pointer" : ""} ${active === false ? "opacity-45" : ""}`}
     >
-      <div className="mb-1 flex justify-between gap-2 text-[12.5px]">
-        {header}
-      </div>
+      <div className="mb-1 flex justify-between gap-2 text-meta">{header}</div>
       <div
         className="flex h-1.5 min-w-6 overflow-hidden rounded-[3px] bg-secondary"
         style={{ width: `${Math.max(widthPct, 4)}%` }}
@@ -131,7 +129,7 @@ export function BreakdownCardShell<
             );
           })
         ) : (
-          <div className="py-2 text-[12.5px] text-muted-foreground">
+          <div className="py-2 text-meta text-muted-foreground">
             {emptyMessage}
           </div>
         )}
