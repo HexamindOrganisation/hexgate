@@ -43,6 +43,15 @@ import { PageHeader } from "@/components/ui/page-header";
 
 const ZERO_COUNTS: Counts = { allow: 0, deny: 0, needs_approval: 0, total: 0 };
 
+/** "day", "hour", "6 hours", "15 minutes" for a bucket width. */
+function bucketUnit(minutes: number): string {
+  if (minutes >= 1440 && minutes % 1440 === 0)
+    return minutes === 1440 ? "day" : `${minutes / 1440} days`;
+  if (minutes % 60 === 0)
+    return minutes === 60 ? "hour" : `${minutes / 60} hours`;
+  return `${minutes} minutes`;
+}
+
 const fmtFull = (d: Date) =>
   d.toISOString().replace("T", " ").replace("Z", " UTC");
 
@@ -445,7 +454,7 @@ export function AuditPage() {
     enabled: !!projectId,
     queryFn: () => api.getAuditSummary(optionsScope, projectId as string),
   });
-  // Scoped summary/timeseries: KPIs, donut, area, breakdown.
+  // Scoped summary/timeseries: stat strip, chart, breakdown.
   const summaryQ = useQuery({
     queryKey: ["audit", "summary", projectId, scope],
     enabled: !!projectId,
@@ -506,11 +515,18 @@ export function AuditPage() {
       }
     : ZERO_COUNTS;
 
+  // The server sizes buckets by span (e.g. 6 h over 7 days), so read the
+  // width off the data rather than the preset.
+  const bucketMinutes = useMemo(() => {
+    const d = tsQ.data;
+    if (!d || d.length < 2) return 1440;
+    return Math.round((+new Date(d[1].bucket) - +new Date(d[0].bucket)) / 6e4);
+  }, [tsQ.data]);
   const days: ChartBucket[] = useMemo(
     () =>
       (tsQ.data ?? []).map((p) => ({
         label: new Date(p.bucket),
-        mode: f.range === "24h" ? "hour" : "day",
+        mode: bucketMinutes >= 1440 ? "day" : "hour",
         values: {
           allow: p.allow,
           deny: p.deny,
@@ -518,7 +534,7 @@ export function AuditPage() {
         },
         total: p.allow + p.deny + p.needs_approval,
       })),
-    [tsQ.data, f.range],
+    [tsQ.data, bucketMinutes],
   );
   const spark = useMemo(
     () => ({
@@ -549,6 +565,8 @@ export function AuditPage() {
 
   const options = optionsQ.data;
   const rangeTotal = options?.totals.all ?? 0;
+  // Filters that narrow the summary (outcome only narrows the log).
+  const scopeFiltered = !!(f.agent || f.role || f.tool || f.user);
   const hasFilters = !!(
     f.agent ||
     f.role ||
@@ -599,13 +617,21 @@ export function AuditPage() {
         <PageHeader
           title="Audit"
           description={
-            counts.total > 0 ? (
+            // Placeholder data is the previous range's: hold the numbers
+            // until the new range lands.
+            counts.total > 0 && !summaryQ.isPlaceholderData ? (
               <>
                 <span className="font-semibold text-foreground">
                   {counts.total.toLocaleString()}
                 </span>{" "}
-                policy decisions {rangePhrase} for{" "}
-                <span className="font-mono text-foreground">{projectName}</span>
+                {scopeFiltered
+                  ? `decisions match these filters ${rangePhrase}`
+                  : `policy decisions ${rangePhrase} for `}
+                {!scopeFiltered && (
+                  <span className="font-mono text-foreground">
+                    {projectName}
+                  </span>
+                )}
                 . Deny rate{" "}
                 <span className="font-semibold text-deny">{denyRate}%</span>.
               </>
@@ -644,7 +670,7 @@ export function AuditPage() {
         {showOnboarding ? (
           <AuditOnboarding
             onWiden={
-              f.range !== "90d" || f.start_date
+              f.range !== "90d"
                 ? () =>
                     setF((p) => ({
                       ...p,
@@ -744,9 +770,7 @@ export function AuditPage() {
               <Card className="p-5">
                 <div className="mb-5 flex flex-wrap items-baseline justify-between gap-2">
                   <h2 className="text-body font-semibold">
-                    {f.range === "24h" && !f.start_date
-                      ? "Decisions per hour"
-                      : "Decisions per day"}
+                    Decisions per {bucketUnit(bucketMinutes)}
                   </h2>
                   <div className="flex gap-3.5 text-xs text-muted-foreground">
                     {[...OUTCOME_SERIES].reverse().map((s) => (
