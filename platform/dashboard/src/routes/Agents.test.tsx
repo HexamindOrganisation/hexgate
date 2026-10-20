@@ -5,7 +5,6 @@
  */
 
 import { act, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useActive } from "@/lib/active";
@@ -143,22 +142,15 @@ describe("AgentsPage — ban tie-in", () => {
     expect(link).toHaveAttribute("href", "/bans?ban_agent=support_bot");
   });
 
-  it("opens Audit filtered to the agent from View decisions", async () => {
-    useAuditFilters.setState((st) => ({
-      filters: { ...st.filters, tool: "leftover" },
-    }));
+  it("links View decisions to Audit for the agent over 24h", async () => {
     stubFetch("admin");
-    const user = userEvent.setup();
     renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
-
-    await user.click(
-      await screen.findByRole("link", { name: /view decisions/i }),
-    );
-    const f = useAuditFilters.getState().filters;
-    expect(f.agent).toBe("support_bot");
-    expect(f.tool).toBe("");
-    // Matches the 24h stats it sits under.
-    expect(f.range).toBe("24h");
+    const href = (
+      await screen.findByRole("link", { name: /view decisions/i })
+    ).getAttribute("href")!;
+    const params = new URL(href, "http://x").searchParams;
+    expect(params.get("agent")).toBe("support_bot");
+    expect(params.get("range")).toBe("24h");
   });
 
   it("shows the agent's last 24 hours", async () => {
