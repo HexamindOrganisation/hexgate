@@ -630,9 +630,9 @@ function stateIcon(state: ToolCall["state"], className: string) {
 }
 
 function ToolStep({ call }: { call: ToolCall }) {
-  const variant: "allow" | "deny" | "approval" =
+  const variant: "success" | "deny" | "approval" =
     call.state === "completed"
-      ? "allow"
+      ? "success"
       : call.state === "failed"
         ? "deny"
         : "approval";

@@ -36,11 +36,8 @@
   --color-allow: hsl(var(--semantic-allow));
   --color-deny: hsl(var(--semantic-deny));
   --color-approval: hsl(var(--semantic-approval));
-  /* *-soft: tinted grounds behind a label. allow-fill: the quiet chart bar. */
-  --color-allow-soft: hsl(var(--semantic-allow-soft));
+  /* The quiet chart bar for allow. */
   --color-allow-fill: hsl(var(--semantic-allow-fill));
-  --color-deny-soft: hsl(var(--semantic-deny-soft));
-  --color-approval-soft: hsl(var(--semantic-approval-soft));
 
   /* Named type scale — use these instead of one-off text-[Npx] sizes. */
   --text-caption: 11.5px;
@@ -96,17 +93,14 @@
 
   --action: 223 36% 11%;
   --action-foreground: 0 0% 100%;
-  --success: 154 67% 37%;
+  --success: 154 72% 30%;
 
   /* Deny is the only loud colour; allow is a quiet neutral that still reads
-     as text (~4.5:1 on white). */
-  --semantic-allow: 214 16% 49%;
-  --semantic-allow-soft: 214 30% 94%;
+     as small text (~5:1 on white). */
+  --semantic-allow: 214 18% 43%;
   --semantic-allow-fill: 214 22% 74%;
   --semantic-deny: 14 84% 43%;
-  --semantic-deny-soft: 17 85% 92%;
   --semantic-approval: 39 82% 49%;
-  --semantic-approval-soft: 39 86% 89%;
 
   /* Code-pane ground — mode-aware so `bg-editor` surfaces (tabs/tree/inspector)
      track the CodeMirror editor and read correctly under theme-aware text in
@@ -176,12 +170,9 @@
   --success: 152 58% 48%;
 
   --semantic-allow: 217 15% 62%;
-  --semantic-allow-soft: 217 24% 16%;
   --semantic-allow-fill: 217 20% 32%;
   --semantic-deny: 14 76% 53%;
-  --semantic-deny-soft: 14 49% 15%;
   --semantic-approval: 39 86% 59%;
-  --semantic-approval-soft: 37 57% 15%;
 
   /* Code-pane ground — dark variant (matches the dark CodeMirror editor). */
   --editor: 222 33% 6%;
@@ -220,7 +211,7 @@
    above owns every neutral and decision colour. Applied via `data-scheme` on
    <html>; blue is the :root/.dark default. Keep in sync with SCHEME_ACCENTS
    in lib/theme.ts. No red, amber or green: those mean deny, approval and
-   connected. */
+   connected, and no grey: allow is grey. */
 [data-scheme="violet"] {
   --primary: 254 71% 59%;
   --ring: 254 71% 59%;
@@ -245,13 +236,13 @@
   --primary: 179 52% 50%;
   --ring: 179 52% 50%;
 }
-[data-scheme="graphite"] {
-  --primary: 218 16% 45%;
-  --ring: 218 16% 45%;
+[data-scheme="indigo"] {
+  --primary: 236 48% 42%;
+  --ring: 236 48% 42%;
 }
-.dark[data-scheme="graphite"] {
-  --primary: 217 18% 76%;
-  --ring: 217 18% 76%;
+.dark[data-scheme="indigo"] {
+  --primary: 234 70% 76%;
+  --ring: 234 70% 76%;
 }
 
 @layer base {
