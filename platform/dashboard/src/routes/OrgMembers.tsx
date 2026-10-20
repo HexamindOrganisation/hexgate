@@ -31,6 +31,7 @@ import {
   type MemberRead,
 } from "@/lib/members";
 import { useOrgs, type Role } from "@/lib/orgs";
+import { PageHeader } from "@/components/ui/page-header";
 
 /**
  * `/orgs/:orgId/members` — two adjacent tables in one page.
@@ -157,22 +158,18 @@ export function OrgMembersPage() {
         Back to {org.name}
       </Button>
 
-      <header className="flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Members of {org.name}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Manage who can access this organization.
-          </p>
-        </div>
-        {canManage && (
-          <Button onClick={() => setInviteOpen(true)}>
-            <Plus className="h-4 w-4" />
-            Invite member
-          </Button>
-        )}
-      </header>
+      <PageHeader
+        title={`Members of ${org.name}`}
+        description="Manage who can access this organization."
+        actions={
+          canManage && (
+            <Button onClick={() => setInviteOpen(true)}>
+              <Plus className="h-4 w-4" />
+              Invite member
+            </Button>
+          )
+        }
+      />
 
       {/* ----- Members table ----- */}
       <section className="rounded-lg border border-border bg-card">

@@ -13,7 +13,6 @@ import {
   FileText,
   LoaderCircle,
   Lock,
-  Scale,
   TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -42,6 +41,7 @@ import {
   type AgentClassificationRead,
   type AiActReport,
 } from "@/lib/api";
+import { PageHeader } from "@/components/ui/page-header";
 
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString();
@@ -629,7 +629,7 @@ export function AiActPage() {
   if (scope.status === "no-project") {
     return (
       <div className="mx-auto max-w-[1400px]">
-        <h1 className="text-2xl font-semibold tracking-tight">Governance</h1>
+        <PageHeader title="Governance" />
         <NoProjectEmptyState resource="AI Act evidence" />
       </div>
     );
@@ -639,16 +639,10 @@ export function AiActPage() {
 
   return (
     <div className="mx-auto max-w-[1400px] space-y-5">
-      <div>
-        <h1 className="flex items-center gap-2.5 text-2xl font-semibold tracking-tight">
-          <Scale className="size-6 text-primary" />
-          Governance
-        </h1>
-        <p className="mt-2 max-w-[720px] text-sm text-muted-foreground">
-          Generate a signed document describing the controls in place on this
-          project's AI systems and the events recorded about them over a period.
-        </p>
-      </div>
+      <PageHeader
+        title="Governance"
+        description="Generate a signed document describing the controls in place on this project's AI systems and the events recorded about them over a period."
+      />
 
       <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
         <CircleAlert className="mt-px size-4 shrink-0" />

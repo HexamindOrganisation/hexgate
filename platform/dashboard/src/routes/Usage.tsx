@@ -19,6 +19,7 @@ import {
 } from "@/components/usage/pieces";
 import { TopUsersCard } from "@/components/usage/top-users";
 import { useUsageFilters } from "@/lib/usage-filters";
+import { PageHeader } from "@/components/ui/page-header";
 
 // Compact token counts (1.2M / 84.6K) — KpiCard values elsewhere use
 // toLocaleString() directly, but raw token counts run into the millions
@@ -92,16 +93,16 @@ export function UsagePage() {
 
   return (
     <div className="mx-auto max-w-[1400px]">
-      <header className="mb-6 flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Usage</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+      <PageHeader
+        title="Usage"
+        description={
+          <>
             LLM token usage for project{" "}
             <span className="font-mono text-foreground">{projectName}</span>
-          </p>
-        </div>
-        <DashboardRangePicker f={f} setF={setF} />
-      </header>
+          </>
+        }
+        actions={<DashboardRangePicker f={f} setF={setF} />}
+      />
 
       <UsageFilterBar
         f={f}
