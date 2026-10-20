@@ -42,7 +42,7 @@ import { useLogout, useUser } from "@/lib/auth";
 import { useOrgs } from "@/lib/orgs";
 import { useProjects } from "@/lib/projects";
 import { useUi } from "@/lib/ui";
-import { isDark, SCHEMES, schemeAccent, useTheme } from "@/lib/theme";
+import { SCHEMES, schemeAccent, useIsDark, useTheme } from "@/lib/theme";
 import { usePresentMode } from "@/lib/present";
 import { cn } from "@/lib/utils";
 
@@ -206,7 +206,7 @@ function NavItem({
         <span className="text-[11px] text-muted-foreground">{badge}</span>
       )}
       {!collapsed && status && (
-        <span className="rounded-full bg-allow/15 px-1.5 py-0.5 text-[10px] font-medium text-allow">
+        <span className="rounded-full bg-success/15 px-1.5 py-0.5 text-[10px] font-medium text-success">
           {status}
         </span>
       )}
@@ -462,9 +462,8 @@ function AppearanceControl() {
   const scheme = useTheme((s) => s.scheme);
   const setMode = useTheme((s) => s.setMode);
   const setScheme = useTheme((s) => s.setScheme);
-  // Resolve the swatch colour for the current palette from theme's single source
-  // so the dots track light/dark like the real --primary token.
-  const dark = isDark(mode);
+  // Reactive, so the dots follow an OS light/dark flip while mode is "system".
+  const dark = useIsDark();
 
   return (
     <div className="space-y-3 px-2 py-2">

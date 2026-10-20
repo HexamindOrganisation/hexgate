@@ -66,7 +66,7 @@ export function BreakdownBar({
         </>
       }
       segments={[
-        { className: "bg-allow", widthPct: seg("allow") },
+        { className: "bg-allow-soft", widthPct: seg("allow") },
         { className: "bg-approval", widthPct: seg("needs_approval") },
         { className: "bg-deny", widthPct: seg("deny") },
       ]}

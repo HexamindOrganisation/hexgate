@@ -314,10 +314,10 @@ function AgentStatus({
         {online ? (
           <>
             <span className="relative inline-flex size-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-allow opacity-60" />
-              <span className="relative inline-flex size-2 rounded-full bg-allow" />
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-60" />
+              <span className="relative inline-flex size-2 rounded-full bg-success" />
             </span>
-            <span className="text-allow">connected</span>
+            <span className="text-success">connected</span>
           </>
         ) : (
           <>
@@ -932,7 +932,7 @@ function ApprovalPromptCard({
         </Button>
         <Button
           size="sm"
-          className="h-7 gap-1.5 bg-allow text-xs text-white hover:bg-allow/90"
+          className="h-7 gap-1.5 bg-action text-xs text-action-foreground hover:bg-action/85"
           onClick={() => onDecide(request.decision_id, true)}
         >
           <Check className="size-3" />
