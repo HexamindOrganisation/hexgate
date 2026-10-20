@@ -14,7 +14,8 @@ import { Link } from "react-router-dom";
 
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { OUTCOME_SERIES } from "@/components/audit/chart-tokens";
-import { argsPreview, OutcomeLabel } from "@/components/audit/pieces";
+import { argsPreview } from "@/components/audit/fmt";
+import { OutcomeLabel } from "@/components/audit/pieces";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { type ChartBucket, StackedBars } from "@/components/ui/charts";
@@ -209,10 +210,16 @@ export function HomePage() {
       to: "/agents",
     });
   }
-  const staleKeys = (tokensQ.data ?? []).filter(
-    (t) =>
-      !t.last_used_at ||
-      Date.now() - +new Date(t.last_used_at) > STALE_KEY_DAYS * 864e5,
+  // "Now" is when the keys were fetched, so render stays pure.
+  const staleKeys = useMemo(
+    () =>
+      (tokensQ.data ?? []).filter(
+        (t) =>
+          !t.last_used_at ||
+          tokensQ.dataUpdatedAt - +new Date(t.last_used_at) >
+            STALE_KEY_DAYS * 864e5,
+      ),
+    [tokensQ.data, tokensQ.dataUpdatedAt],
   );
   if (staleKeys.length) {
     attention.push({
