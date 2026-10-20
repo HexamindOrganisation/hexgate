@@ -49,6 +49,9 @@ interface AuditFilterState {
   tableLimit: number;
   setFilters: SetAuditFilters;
   loadMore: () => void;
+  /** Start Audit from a clean slate plus `filters`, so a deep link can't be
+   * narrowed by whatever was dialled in on an earlier visit. */
+  openAudit: (filters?: Partial<AuditFilters>) => void;
 }
 
 export const useAuditFilters = create<AuditFilterState>()((set) => ({
@@ -58,4 +61,9 @@ export const useAuditFilters = create<AuditFilterState>()((set) => ({
     set((s) => ({ filters: updater(s.filters), tableLimit: PAGE_SIZE })),
   loadMore: () =>
     set((s) => ({ tableLimit: Math.min(s.tableLimit + PAGE_SIZE, MAX_LIMIT) })),
+  openAudit: (filters = {}) =>
+    set({
+      filters: { ...EMPTY_AUDIT_FILTERS, ...filters },
+      tableLimit: PAGE_SIZE,
+    }),
 }));
