@@ -1,6 +1,5 @@
 import { useMemo, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { endOfDay, startOfDay } from "date-fns";
 import {
   ArrowRight,
   Bot,
@@ -13,7 +12,7 @@ import {
 import { Link } from "react-router-dom";
 
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
-import { rankAnomalies } from "@/components/audit/anomalies";
+import { burstFilters, rankAnomalies } from "@/components/audit/anomalies";
 import { OUTCOME_SERIES } from "@/components/audit/chart-tokens";
 import { argsPreview } from "@/components/audit/fmt";
 import { OutcomeLabel } from "@/components/audit/pieces";
@@ -69,10 +68,19 @@ function Panel({
   );
 }
 
-function PanelLink({ to, children }: { to: string; children: ReactNode }) {
+function PanelLink({
+  to,
+  onClick,
+  children,
+}: {
+  to: string;
+  onClick?: () => void;
+  children: ReactNode;
+}) {
   return (
     <Link
       to={to}
+      onClick={onClick}
       className="text-meta font-medium text-primary hover:underline"
     >
       {children}
@@ -122,18 +130,18 @@ function deriveAttention({
       tone: "bg-deny/15 text-deny",
       title: (
         <>
-          Denial burst from <span className="font-mono">{a.user_id}</span>
+          Denial burst from{" "}
+          <span className="font-mono">{a.user_id || "(no user id)"}</span>
         </>
       ),
       sub: `${a.deny} of ${a.all} calls denied · ${formatRelative(a.last_seen)}`,
       cta: "Inspect",
       to: "/audit",
-      filters: {
-        customMode: true,
-        start_date: startOfDay(new Date(a.first_seen)),
-        end_date: endOfDay(new Date(a.last_seen)),
-        user: a.user_id,
-      },
+      filters: burstFilters(
+        a.user_id,
+        new Date(a.first_seen),
+        new Date(a.last_seen),
+      ),
     });
   }
   if (ranked.length > ATTENTION_BURSTS) {
@@ -232,7 +240,6 @@ export function HomePage() {
     queryKey: ["agent-manifests", pid],
     enabled: on,
     queryFn: () => api.listAgentManifests(pid!),
-    refetchInterval: SLOW_MS,
   });
   // Keys and usage are best-effort: a member without access just doesn't
   // get those rows.
@@ -241,7 +248,6 @@ export function HomePage() {
     enabled: on,
     queryFn: () => api.listTokens(pid!),
     retry: false,
-    refetchInterval: SLOW_MS,
   });
   const usageQ = useQuery({
     queryKey: ["usage", "summary", pid, { window: "24h" }],
@@ -267,10 +273,17 @@ export function HomePage() {
       }),
     [anomaliesQ.data, totals, agents, tokensQ.data, tokensQ.dataUpdatedAt],
   );
+  // Each burst counts once; the "N more" row stands for N of them.
+  const attentionCount =
+    attention.length -
+    (attention.some((t) => t.key === "anomaly-more") ? 1 : 0) +
+    Math.max((anomaliesQ.data?.length ?? 0) - ATTENTION_BURSTS, 0);
   // Attention needs the signals that can raise an alarm; until they land
   // (or if they fail) it must not claim the coast is clear.
-  const attentionPending = anomaliesQ.isPending || summaryQ.isPending;
-  const attentionFailed = anomaliesQ.isError || summaryQ.isError;
+  const attentionPending =
+    anomaliesQ.isPending || summaryQ.isPending || agentsQ.isPending;
+  const attentionFailed =
+    anomaliesQ.isError || summaryQ.isError || agentsQ.isError;
 
   // 7d comes back in 6-hour buckets; roll them up to UTC days (the window
   // touches 8 of them, the first and last partly).
@@ -358,9 +371,9 @@ export function HomePage() {
           title={
             <>
               Needs attention{" "}
-              {attention.length > 0 && (
+              {attentionCount > 0 && (
                 <span className="font-medium text-muted-foreground">
-                  · {attention.length}
+                  · {attentionCount}
                 </span>
               )}
             </>
@@ -473,7 +486,11 @@ export function HomePage() {
               </span>
             </span>
           }
-          aside={<PanelLink to="/audit">View all</PanelLink>}
+          aside={
+            <PanelLink to="/audit" onClick={() => openAudit({ range: "24h" })}>
+              View all
+            </PanelLink>
+          }
         >
           {feedQ.isPending ? (
             <PanelNote>Loading…</PanelNote>
@@ -505,7 +522,11 @@ export function HomePage() {
           ) : (
             <PanelNote>
               No decisions in the last 24 hours.{" "}
-              <Link to="/audit" className="text-primary hover:underline">
+              <Link
+                to="/audit"
+                onClick={() => openAudit()}
+                className="text-primary hover:underline"
+              >
                 Getting started
               </Link>
             </PanelNote>

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 
 import { useActive } from "@/lib/active";
-import { useAuditFilters } from "@/lib/audit-filters";
+import { EMPTY_AUDIT_FILTERS, useAuditFilters } from "@/lib/audit-filters";
 import { HomePage } from "@/routes/Home";
 import { renderWithProviders } from "@/test/render";
 
@@ -101,7 +101,10 @@ describe("HomePage", () => {
   beforeEach(() => {
     act(() => useActive.setState({ activeOrgId: "o1", activeProjectId: "p1" }));
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useAuditFilters.setState({ filters: EMPTY_AUDIT_FILTERS });
+  });
 
   it("leads with Open audit and today's numbers", async () => {
     stub();
