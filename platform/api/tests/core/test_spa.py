@@ -87,6 +87,7 @@ def test_is_api_path_unit() -> None:
     assert spa._is_api_path("v1/agents")
     assert spa._is_api_path("health")
     assert spa._is_api_path("openapi.json")
+    assert spa._is_api_path(".well-known/nope")
     assert not spa._is_api_path("playground")
     assert not spa._is_api_path("")
 
