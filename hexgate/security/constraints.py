@@ -84,7 +84,12 @@ from functools import lru_cache
 from typing import Any
 
 from hexgate.security.errors import PolicyDeniedError
-from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
+from hexgate.security.usage_inputs import (
+    AGENT_USAGE_ROOT,
+    NO_USAGE,
+    USER_USAGE_ROOT,
+    UsageInputs,
+)
 
 
 class ConstraintParseError(ValueError):
@@ -248,7 +253,7 @@ FACTS = ("role", "tool")
 # ``ctx``, the run's ``run``, the agent's cross-run ``agent_usage`` and the end
 # user's cross-run ``user_usage`` (the context :func:`check_constraints` builds).
 # Facts are plain strings, so a path dotted into one is never set either.
-PATH_ROOTS = ("args", "ctx", "run", "agent_usage", "user_usage")
+PATH_ROOTS = ("args", "ctx", "run", AGENT_USAGE_ROOT, USER_USAGE_ROOT)
 
 _FUNCS = ("startswith", "endswith", "contains", "matches")
 _FUNC_RE = re.compile(r"^([a-z]+)\((.*)\)$", re.DOTALL)
