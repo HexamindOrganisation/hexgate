@@ -96,7 +96,8 @@ _KEY_UNREADABLE_MESSAGE: Final = (
 )
 _EXECUTOR_THREAD_PREFIX: Final = "hexgate-usage"
 # Single-flight per scope already, so workers only keep one slow scope from
-# delaying another's refresh.
+# delaying another's refresh. Agents and users share them: a user burst can delay an
+# agent's background refresh, never its run-boundary fetch.
 _EXECUTOR_MAX_WORKERS: Final = 4
 
 

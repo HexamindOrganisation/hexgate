@@ -33,7 +33,11 @@ R-USAGE-001 with a second scope kind, and adds only what a user key needs:
   the exception class, never a user failure's message.
 - A user fetch failure MUST pause every user's fetch, not only that user's. A user ID
   the platform would refuse MUST NOT be sent.
-- Agent reads MUST NOT wait behind user reads on the platform.
+- Agent reads MUST NOT wait behind user reads on the platform, where user reads have
+  their own pool and memo. In the SDK, an agent's run-boundary fetch MUST NOT wait
+  behind user fetches: it runs on the boundary's own worker. Background refreshes MAY
+  share the source's pool, so a burst of stale users can delay an agent's background
+  refresh; that only ages its snapshot until the next run boundary fetches it.
 - Each decision MUST carry its per-scope states (`Decision.usage_states`;
   `sec_ai.usage_state` for the agent, `sec_ai.user_usage_state` for the user). A denial
   MUST expose `quota_scopes`, the usage roots its failing constraints reference, on the
