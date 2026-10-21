@@ -92,7 +92,7 @@ fmt-check: ## Check formatting without writing changes
 check: lint fmt-check test ## Python CI parity: lint + fmt-check + test (no coverage overhead)
 
 .PHONY: check-all
-check-all: lint fmt-check coverage platform-api-check dashboard-lint dashboard-typecheck dashboard-fmt-check collector-check mcp-check ## Full stack: lint + fmt + tests with coverage on all four surfaces, plus the MCP server
+check-all: lint fmt-check coverage platform-api-check dashboard-lint dashboard-typecheck dashboard-fmt-check collector-check mcp-check ## Full stack: lint + fmt + tests with coverage on all four surfaces, plus the MCP server's lint + tests
 	# Dashboard tests via the coverage script (vitest --coverage); same
 	# entry point CI uses so a green `check-all` proves the surfaces
 	# Codecov sees are the same surfaces a contributor saw locally.
@@ -114,9 +114,10 @@ mcp-test: ## Run the MCP server test suite
 	cd platform/mcp && uv run pytest tests/
 
 .PHONY: mcp-check
-mcp-check: mcp-test ## Lint + format check + test on the MCP server
+mcp-check: ## Lint + format check + test on the MCP server
 	cd platform/mcp && uv run ruff check .
 	cd platform/mcp && uv run ruff format --check .
+	$(MAKE) mcp-test
 
 # -------- Policy / M2 demo helpers --------
 

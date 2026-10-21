@@ -171,6 +171,11 @@ jobs:
       - name: Lint, format check and tests
         run: make mcp-check
 
+      # Nothing else builds the image before the box does, so a broken
+      # Dockerfile or dockerignore (and its docs/policy check) fails here.
+      - name: Build the image
+        run: docker build -f platform/mcp/Dockerfile .
+
   platform-api-postgres:
     # The platform-api job runs the whole suite on SQLite, never exercising
     # asyncpg. This job sets DATABASE_URL and runs the opt-in Postgres tests:
