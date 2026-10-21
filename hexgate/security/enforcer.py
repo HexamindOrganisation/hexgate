@@ -136,7 +136,7 @@ def _current_run_age(
     admitting: bool,
 ) -> float | None:
     """The age of the run being decided inside, if it recorded itself on ``ledger``;
-    ``ledger_namespace`` then leaves that run out of ``invocations_*``.
+    the reading then leaves that run out of ``invocations_*``.
 
     Never while admitting: the run being admitted isn't recorded yet, and the
     current run is an enclosing parent whose invocation must still count."""
@@ -145,14 +145,15 @@ def _current_run_age(
     return run[_RUN_ELAPSED]
 
 
-def _anonymous_user_usage(
+def _anonymous_user_reading(
     paths: frozenset[str], on_unavailable: OnUnavailable
-) -> dict[str, int] | None:
+) -> UsageReading:
     """No user, no ledger, so the user's usage is unavailable: zeros under
     ``allow``, every path missing under ``deny``."""
-    if on_unavailable is OnUnavailable.DENY:
-        return None
-    return dict.fromkeys(paths, 0)
+    namespace = (
+        None if on_unavailable is OnUnavailable.DENY else dict.fromkeys(paths, 0)
+    )
+    return UsageReading(namespace, UsageState.UNAVAILABLE)
 
 
 def _namespace_of(reading: UsageReading | None) -> dict[str, int] | None:
@@ -160,13 +161,14 @@ def _namespace_of(reading: UsageReading | None) -> dict[str, int] | None:
 
 
 def _states_of(
-    readings: Mapping[UsageScopeKind, UsageReading | None],
+    agent: UsageReading | None, user: UsageReading | None
 ) -> dict[UsageScopeKind, str]:
-    return {
-        kind: reading.state.value
-        for kind, reading in readings.items()
-        if reading is not None
-    }
+    states = {}
+    if agent is not None:
+        states[UsageScopeKind.AGENT] = agent.state.value
+    if user is not None:
+        states[UsageScopeKind.USER] = user.state.value
+    return states
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,9 +353,7 @@ class PolicyEnforcer:
             # The same snapshot the verdict saw, never a second read: the
             # record and the decision must not disagree about the run.
             run=RunAttribution.from_namespace(run_snapshot),
-            usage_states=_states_of(
-                {UsageScopeKind.AGENT: agent_reading, UsageScopeKind.USER: user_reading}
-            ),
+            usage_states=_states_of(agent_reading, user_reading),
             quota_scopes=usage_roots_of(verdict.failed_constraints),
         )
 
@@ -401,10 +401,7 @@ class PolicyEnforcer:
             return None
         user_id = context.user_id if context is not None else ""
         if not user_id:
-            return UsageReading(
-                _anonymous_user_usage(paths, bound.on_unavailable),
-                UsageState.UNAVAILABLE,
-            )
+            return _anonymous_user_reading(paths, bound.on_unavailable)
         # The run's user is fixed at run entry, so a context entered for another user
         # inside the run reads that user's ledger without leaving this run out.
         return self._scope_reading(

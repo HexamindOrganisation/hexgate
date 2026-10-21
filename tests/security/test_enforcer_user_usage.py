@@ -8,6 +8,7 @@ so enabling it here would leak into every later test.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -26,16 +27,13 @@ from hexgate.security.enforcer import PolicyEnforcer
 from hexgate.security.policy_set import PolicySet, load_policy_set_from_dict
 from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.security.usage_source import (
-    USER_REFRESH_DEFAULTS,
     OnUnavailable,
     PlatformUsageSource,
-    ScopeKindSpec,
     UsageReading,
     UsageState,
     local_reading,
-    user_id_is_readable,
 )
-from tests.security.test_usage_source import _FakeFetcher, _InlineExecutor
+from tests.security.test_usage_source import _FakeFetcher, _user_rig
 
 _AGENT = "billing"
 _OTHER_AGENT = "support"
@@ -430,12 +428,9 @@ def _refreshing(policy: PolicySet) -> PolicyEnforcer:
     )
 
 
-def test_no_context_has_no_user_refresh() -> None:
-    assert _refreshing(_user_admission_cap(2)).usage_refreshes(None) == ()
-
-
-def test_an_anonymous_context_has_no_user_refresh() -> None:
-    assert _refreshing(_user_admission_cap(2)).usage_refreshes(_context("")) == ()
+@pytest.mark.parametrize("context", [None, _context("")], ids=["none", "anonymous"])
+def test_an_anonymous_run_has_no_user_refresh(context: HexgateContext | None) -> None:
+    assert _refreshing(_user_admission_cap(2)).usage_refreshes(context) == ()
 
 
 def test_no_source_has_no_refreshes() -> None:
@@ -469,40 +464,23 @@ def test_each_refresh_sees_one_policys_paths() -> None:
 # --- the cross-process read ---------------------------------------------------
 
 
+@dataclass
 class _Platform:
-    """A source keeping users as ``get_usage_source`` does, on the ledgers' clock."""
-
-    def __init__(self, clock: _FakeClock, values: Mapping[str, int]) -> None:
-        self.users = _FakeFetcher(clock, values)  # type: ignore[arg-type]
-        self.agents = _FakeFetcher(clock, {})  # type: ignore[arg-type]
-        self.source = PlatformUsageSource(
-            {
-                UsageScopeKind.AGENT: ScopeKindSpec(
-                    self.agents.fetch, USER_REFRESH_DEFAULTS
-                ),
-                UsageScopeKind.USER: ScopeKindSpec(
-                    self.users.fetch,
-                    USER_REFRESH_DEFAULTS,
-                    capacity=2,
-                    shared_backoff=True,
-                    accepts=user_id_is_readable,
-                ),
-            },
-            _InlineExecutor(),
-            clock,
-        )
+    source: PlatformUsageSource
+    users: _FakeFetcher
 
 
 def _cross_process(
     policy: PolicySet, values: Mapping[str, int]
 ) -> tuple[PolicyEnforcer, UsageLedgers, _Platform]:
-    clock = _FakeClock()
-    ledgers = _ledgers(clock)
-    platform = _Platform(clock, values)
+    """A source keeping users as ``get_usage_source`` does, on the ledgers' clock."""
+    rig = _user_rig()
+    rig.user_fetcher.values = dict(values)
+    ledgers = UsageLedgers(lambda: new_usage_ledger(clock=rig.clock))
     enforcer = PolicyEnforcer(
-        policy, agent_name=_AGENT, ledgers=ledgers, usage_source=platform.source
+        policy, agent_name=_AGENT, ledgers=ledgers, usage_source=rig.source
     )
-    return enforcer, ledgers, platform
+    return enforcer, ledgers, _Platform(rig.source, rig.user_fetcher)
 
 
 def _refresh(enforcer: PolicyEnforcer, context: HexgateContext) -> None:

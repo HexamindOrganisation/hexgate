@@ -973,15 +973,13 @@ def check_constraints(
         **usage.namespaces(),
         _CONSTS_KEY: consts or {},
     }
-    failed = tuple(
-        parsed.source
-        for parsed in (
-            parse_constraint(entry) if isinstance(entry, str) else entry
-            for entry in constraints
-        )
-        if not evaluate_constraint(parsed, context)
-    )
+    failed: list[str] = []
+    for entry in constraints:
+        parsed = parse_constraint(entry) if isinstance(entry, str) else entry
+        if not evaluate_constraint(parsed, context):
+            failed.append(parsed.source)
     if failed:
         raise ConstraintsFailedError(
-            f'Policy on "{tool_name}" denied: constraint failed — {failed[0]}', failed
+            f'Policy on "{tool_name}" denied: constraint failed — {failed[0]}',
+            tuple(failed),
         )
