@@ -87,7 +87,8 @@ _KIND_PAUSED_MESSAGE: Final = (
     "pausing every %s refresh for %.0f s, using last-good"
 )
 _ROUTE_MISSING_MESSAGE: Final = (
-    "this platform has no %s usage read; user_usage.* reads local usage only"
+    "this platform has no %s usage read; user_usage.* reads as unavailable "
+    "(local counts under usage.on_unavailable: allow, refused under deny)"
 )
 _KEY_UNREADABLE_MESSAGE: Final = (
     f"%s is not a key the platform can read (over {USER_ID_MAX_LENGTH} characters "
