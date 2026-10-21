@@ -6,8 +6,8 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
 from hexgate_mcp.tools import reference
-from tests.conftest import JWKS_URL, jwks
-from tests.test_server import client, initialize
+from tests.conftest import JWKS_URL, jwks, mcp_client, post_mcp
+from tests.test_server import initialize
 
 REPO_DOCS = Path(__file__).resolve().parents[3] / "docs" / "policy"
 LIST_TOOLS = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
@@ -16,7 +16,7 @@ LIST_TOOLS = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
 async def call(sections: dict[str, str], **arguments: str) -> str:
     mcp = FastMCP("test")
     reference.register(mcp, sections)
-    content, _ = await mcp.call_tool("policy_reference", arguments)
+    content = await mcp.call_tool("policy_reference", arguments)
     return content[0].text
 
 
@@ -37,7 +37,7 @@ def test_when_package_sits_beside_the_docs_then_find_docs_dir_finds_them(tmp_pat
 async def test_policy_reference_happy_path():
     mcp = FastMCP("test")
     reference.register(mcp)
-    content, _ = await mcp.call_tool("policy_reference", {})
+    content = await mcp.call_tool("policy_reference", {})
     text = content[0].text
 
     assert text.startswith("Sections")
@@ -81,7 +81,7 @@ def test_when_frontmatter_is_absent_then_index_text_lists_the_name():
 def test_when_initialized_then_instructions_are_sent(key):
     respx.get(JWKS_URL).respond(json=jwks(key))
 
-    with client() as c:
+    with mcp_client() as c:
         response = initialize(c, key.mint())
 
     assert reference.INSTRUCTIONS in response.text
@@ -95,10 +95,28 @@ def test_when_server_is_built_then_policy_reference_is_listed(key):
         "Authorization": f"Bearer {key.mint()}",
     }
 
-    with client() as c:
+    with mcp_client() as c:
         response = c.post("/mcp", json=LIST_TOOLS, headers=headers)
 
     assert '"policy_reference"' in response.text
     # The description repeats the instructions for clients that drop them.
     assert reference.INSTRUCTIONS in response.text
     assert '"readOnlyHint":true' in response.text
+
+
+@respx.mock
+def test_when_policy_reference_is_called_then_text_is_sent_once(key):
+    respx.get(JWKS_URL).respond(json=jwks(key))
+    call = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {"name": "policy_reference", "arguments": {}},
+    }
+
+    with mcp_client() as c:
+        response = post_mcp(c, call, key.mint())
+
+    assert response.status_code == 200
+    assert '"isError":false' in response.text
+    assert "structuredContent" not in response.text
