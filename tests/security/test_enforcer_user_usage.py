@@ -391,6 +391,18 @@ def test_a_user_only_decision_has_no_usage_state() -> None:
     assert decision.usage_states == {UsageScopeKind.USER: "local"}
 
 
+def test_a_decision_s_usage_states_are_read_only() -> None:
+    enforcer = PolicyEnforcer(
+        _user_admission_cap(2), agent_name=_AGENT, ledgers=_ledgers()
+    )
+
+    with _context(_ALICE).sync_scope():
+        decision = enforcer.decide(AGENT_RUN_TOOL, {"agent": _AGENT})
+
+    with pytest.raises(TypeError):
+        decision.usage_states[UsageScopeKind.AGENT] = "fresh"  # type: ignore[index]
+
+
 def test_every_role_reads_one_user_namespace() -> None:
     engine = _RecordingEngine(frozenset({_INVOCATIONS}))
     enforcer = PolicyEnforcer(engine, agent_name=_AGENT, ledgers=_ledgers())

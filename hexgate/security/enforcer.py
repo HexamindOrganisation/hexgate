@@ -17,6 +17,7 @@ import copy
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from hexgate.audit import AuditEvent, configure
@@ -162,13 +163,13 @@ def _namespace_of(reading: UsageReading | None) -> dict[str, int] | None:
 
 def _states_of(
     agent: UsageReading | None, user: UsageReading | None
-) -> dict[UsageScopeKind, str]:
-    states = {}
+) -> Mapping[UsageScopeKind, str]:
+    states: dict[UsageScopeKind, str] = {}
     if agent is not None:
         states[UsageScopeKind.AGENT] = agent.state.value
     if user is not None:
         states[UsageScopeKind.USER] = user.state.value
-    return states
+    return MappingProxyType(states)
 
 
 @dataclass(frozen=True, slots=True)
