@@ -1259,7 +1259,8 @@ def test_when_a_constraint_path_has_no_root_then_unknown_root(constraint, path):
         (
             "warning",
             f"a constraint reads {path}: no call sets it. A path starts with "
-            "args., ctx., run. or agent_usage., and role and tool are plain strings",
+            "args., ctx., run., agent_usage. or user_usage., and role and tool are "
+            "plain strings",
         )
     ]
 
@@ -1340,8 +1341,15 @@ def test_path_roots_match_what_check_constraints_sets():
             "t",
             attributes={"x": 1},
             run={"x": 1},
-            usage=UsageInputs(agent_usage={"x": 1}),
+            usage=UsageInputs(agent_usage={"x": 1}, user_usage={"x": 1}),
         )
+
+
+def test_when_a_module_reads_user_usage_then_no_unknown_root():
+    cap = _mod(
+        "c", "capability", {"refund": _allow(["user_usage.invocations_1h < 50"])}
+    )
+    assert [lint for lint in check([], [cap]) if lint.code == "unknown-root"] == []
 
 
 def test_when_a_module_reads_agent_usage_then_no_unknown_root():
@@ -1404,6 +1412,30 @@ def _usage_cap_doc(constraint, usage):
 def test_negated_usage_cap_is_an_error_only_under_deny(constraint, usage, expected):
     ps = load_policy_set_from_dict(_usage_cap_doc(constraint, usage))
     assert [s for s, _ in _negated_usage_caps(analyze_policy(ps))] == expected
+
+
+def test_a_negated_user_usage_cap_under_deny_is_an_error():
+    doc = _usage_cap_doc(
+        "not (user_usage.invocations_1h >= 50)", {"on_unavailable": "deny"}
+    )
+    ps = load_policy_set_from_dict(doc)
+    assert _negated_usage_caps(analyze_policy(ps)) == [
+        (
+            "error",
+            "a constraint reads user_usage.invocations_1h under an odd number of not "
+            "(a boundary deny counts as one): under usage.on_unavailable: deny a "
+            "missing value makes it true and the call passes; write the cap as a "
+            "plain comparison, such as user_usage.invocations_1h < N",
+        )
+    ]
+
+
+def test_when_a_boundary_denies_on_user_usage_then_negated_usage_cap_warning():
+    boundary = _mod(
+        "b", "boundary", {"refund": _deny(["user_usage.invocations_1h >= 50"])}
+    )
+    cap = _mod("c", "capability", {"refund": _allow()})
+    assert [s for s, _ in _negated_usage_caps(check([boundary], [cap]))] == ["warning"]
 
 
 def test_when_a_default_constraint_has_an_unknown_root_then_unknown_root():

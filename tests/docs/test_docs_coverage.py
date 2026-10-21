@@ -85,9 +85,6 @@ KNOWN_ENV_VARS = {
     "HEXGATE_USAGE_MAX_STALENESS_SECONDS",
     "HEXGATE_USAGE_REFRESH_SECONDS",
     "HEXGATE_USAGE_SYNC_AFTER_SECONDS",
-    # Sizes the user usage ledgers, which stay off until a policy can reference
-    # user_usage.*: document it with that namespace.
-    "HEXGATE_USAGE_USER_CACHE",
     # The user refresh thresholds, read by the platform usage source but inert
     # until the run boundary refreshes user scopes: document them with that wiring.
     "HEXGATE_USAGE_USER_MAX_STALENESS_SECONDS",

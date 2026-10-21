@@ -17,16 +17,21 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from hexgate.runtime.agent_usage import (
+    AGENT_USAGE_PATHS,
+    AGENT_USAGE_VOCABULARY,
     DEFAULT_USER_CACHE_SIZE,
     FINE_BUCKET_SECONDS,
     FINE_RETENTION_SECONDS,
     HOUR_BUCKET_SECONDS,
     KNOWN_AGENT_USAGE_PATHS,
+    KNOWN_USER_USAGE_PATHS,
     MAX_WINDOW_SECONDS,
     MINUTE_BUCKET_SECONDS,
     USAGE_LEDGERS,
     USAGE_WINDOWS,
     USER_CACHE_ENV,
+    USER_USAGE_PATHS,
+    USER_USAGE_VOCABULARY,
     BucketSeries,
     UsageLedger,
     UsageLedgers,
@@ -523,6 +528,14 @@ def test_the_registry_is_every_metric_over_every_window() -> None:
 
     assert len(expected) == 35
     assert KNOWN_AGENT_USAGE_PATHS == expected
+
+
+def test_both_roots_share_one_vocabulary() -> None:
+    """``ledger_namespace`` looks every path up in ``AGENT_USAGE_PATHS``, so a user
+    registry that diverged would turn a user read into a ``KeyError``."""
+    assert USER_USAGE_PATHS is AGENT_USAGE_PATHS
+    assert KNOWN_USER_USAGE_PATHS == KNOWN_AGENT_USAGE_PATHS
+    assert USER_USAGE_VOCABULARY == AGENT_USAGE_VOCABULARY
 
 
 def test_no_window_outlasts_the_ledger() -> None:

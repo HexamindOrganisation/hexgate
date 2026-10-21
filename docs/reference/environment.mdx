@@ -60,6 +60,14 @@ All optional — see [WASM bundles](/policy/wasm-bundles) and
 | `HEXGATE_BUNDLE_REQUIRE_SIGNATURE` | `true` to refuse unsigned or unverifiable bundles (default: warn only). |
 | `HEXGATE_OPA_BIN` | Override the `opa` binary location (default: search `PATH`). |
 
+## Usage quotas
+
+Optional — see [constraints](/policy/constraints#user-usage-user_usage).
+
+| Env var | Purpose |
+|---|---|
+| `HEXGATE_USAGE_USER_CACHE` | How many end users' `user_usage.*` counts one process keeps (default `10000`). Each costs about 118 KB, so the default bounds them at about 1.2 GB; the least recently seen user is dropped first and starts again from zero. Read when a policy first references `user_usage.*`; a value below 1 or not a number logs a warning and uses the default. |
+
 ## Self-hosted platform (control plane)
 
 Read from the real environment or `platform/api/.env`. See
