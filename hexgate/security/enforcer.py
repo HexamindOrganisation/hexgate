@@ -283,10 +283,6 @@ class PolicyEnforcer:
             )
         return tuple(refreshes)
 
-    def usage_refresh(self) -> UsageRefresh | None:
-        """The agent's refresh alone (see :meth:`usage_refreshes`)."""
-        return next(iter(self.usage_refreshes(None)), None)
-
     def decide(self, tool_name: str, arguments: Mapping[str, Any]) -> Decision:
         """Fold one verdict per role from the active context into a
         :class:`Decision`. Access is granted iff any role grants it.

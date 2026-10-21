@@ -360,7 +360,7 @@ def test_a_user_only_policy_has_no_agent_refresh() -> None:
         usage_source=_RecordingSource(),  # type: ignore[arg-type]
     )
 
-    assert enforcer.usage_refresh() is None
+    assert enforcer.usage_refreshes(None) == ()
 
 
 def test_a_user_only_policy_refreshes_the_context_user() -> None:
