@@ -70,7 +70,7 @@ def test_protected_resource_metadata_happy_path():
 
     assert response.status_code == 200
     assert response.json()["resource"] == RESOURCE
-    assert response.json()["authorization_servers"] == [f"{ISSUER}/"]
+    assert response.json()["authorization_servers"] == [SETTINGS.issuer]
     assert set(response.json()["scopes_supported"]) == OAUTH_SCOPES
     assert len(c.app.router.routes) == len(
         {getattr(r, "path", None) for r in c.app.router.routes}

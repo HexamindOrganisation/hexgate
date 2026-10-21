@@ -1,13 +1,17 @@
 """The FastMCP app: streamable HTTP at /mcp behind the JWKS token verifier."""
 
+from urllib.parse import urlparse
+
 import httpx
-from mcp.server.auth.routes import create_protected_resource_routes
+from mcp.server.auth.routes import build_resource_metadata_url, cors_middleware
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.shared.auth import ProtectedResourceMetadata
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.routing import Route
 
 from hexgate_mcp.auth import JwksTokenVerifier
 from hexgate_mcp.jwks import JwksCache
@@ -54,26 +58,37 @@ def build_app(settings: Settings, http: httpx.AsyncClient) -> Starlette:
     mcp.custom_route("/health", methods=["GET"], include_in_schema=False)(health)
     reference.register(mcp)
     app = mcp.streamable_http_app()
-    _advertise_scopes(app, auth)
+    _serve_resource_metadata(app, auth, settings.issuer)
     return app
 
 
-def _advertise_scopes(app: Starlette, auth: AuthSettings) -> None:
-    """Replace the SDK's protected-resource metadata with one that lists
-    `scopes_supported`. The SDK fills that field from `required_scopes`, which
-    stays None because each tool checks its own scope; without the field a
-    client that follows the MCP spec asks /authorize for no scope at all, and
-    its token can call nothing. mcp 1.30 has no other way to set the field."""
-    ours = create_protected_resource_routes(
-        resource_url=auth.resource_server_url,
-        authorization_servers=[auth.issuer_url],
+def _serve_resource_metadata(app: Starlette, auth: AuthSettings, issuer: str) -> None:
+    """Replace the SDK's protected-resource metadata with our own document.
+    The SDK fills `scopes_supported` from `required_scopes`, which stays None
+    because each tool checks its own scope; without the field a client that
+    follows the MCP spec asks /authorize for no scope at all, and its token can
+    call nothing. The SDK also types `authorization_servers` as AnyHttpUrl,
+    which serialises the issuer with a trailing slash, so it no longer equals
+    the API's metadata `issuer` and an RFC 8414 §3.3 check fails. The SDK
+    model still builds the rest of the document, so its defaults carry over."""
+    document = ProtectedResourceMetadata(
+        resource=auth.resource_server_url,
+        authorization_servers=[issuer],
         scopes_supported=sorted(OAUTH_SCOPES),
+    ).model_dump(mode="json", exclude_none=True) | {"authorization_servers": [issuer]}
+
+    async def metadata(_: Request) -> JSONResponse:
+        return JSONResponse(document, headers={"Cache-Control": "public, max-age=3600"})
+
+    url = build_resource_metadata_url(auth.resource_server_url)
+    path = urlparse(str(url)).path
+    route = Route(
+        path,
+        endpoint=cors_middleware(metadata, ["GET", "OPTIONS"]),
+        methods=["GET", "OPTIONS"],
     )
-    paths = {route.path for route in ours}
-    app.router.routes[:] = ours + [
-        route
-        for route in app.router.routes
-        if getattr(route, "path", None) not in paths
+    app.router.routes[:] = [route] + [
+        r for r in app.router.routes if getattr(r, "path", None) != path
     ]
 
 
