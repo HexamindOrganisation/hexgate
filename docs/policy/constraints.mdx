@@ -552,9 +552,11 @@ admission:
 
 <Warning>
 **In this release `user_usage.*` counts this process only**, even with an API key.
-Every process keeps its own count of each user, and a restart resets it. A
-single-process app gets an exact cap; with N replicas a user can reach up to N times
-the cap. Cross-process counts come in a later release.
+Every process keeps its own count of each user, and a restart resets it, so the cap is
+per-process: with N replicas a user can reach up to N times the cap. Within one process
+it is still a soft quota, as for `agent_usage.*`
+([Shared across processes](#shared-across-processes)). Cross-process counts come in a
+later release.
 </Warning>
 
 - **Across agents.** Every run started with `user_id="alice"` in context counts for
