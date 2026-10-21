@@ -411,7 +411,7 @@ class AuditEvent:
             # Spread so the wire names live in one place.
             **d.run.as_span_attributes(),
         }
-        agent_state = d.usage_states.get(UsageScopeKind.AGENT)
+        agent_state = d.usage_state
         if agent_state is not None:
             attrs[semconv.USAGE_STATE] = agent_state
         user_state = d.usage_states.get(UsageScopeKind.USER)
