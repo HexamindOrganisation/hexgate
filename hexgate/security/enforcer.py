@@ -23,9 +23,11 @@ from hexgate.audit import AuditEvent, configure
 from hexgate.config.env import platform_of
 from hexgate.runtime.agent_usage import (
     USAGE_LEDGERS,
+    UsageLedger,
     UsageLedgers,
     UsageScope,
     UsageScopeKind,
+    ledger_namespace,
 )
 from hexgate.runtime.context import get_current_context
 from hexgate.runtime.roles import resolve_role_set
@@ -36,7 +38,8 @@ from hexgate.security.decision import (
     RunAttribution,
     combine_role_verdicts,
 )
-from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
+from hexgate.security.models import AGENT_RUN_TOOL
+from hexgate.security.usage_inputs import UsageInputs
 from hexgate.security.usage_source import (
     OnUnavailable,
     PlatformUsageSource,
@@ -53,7 +56,7 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-# run.* path the agent_usage namespace reads to age out the current run's invocation.
+# run.* path the usage namespaces read to age out the current run's invocation.
 _RUN_ELAPSED = "elapsed_seconds"
 
 _warned_role_cap = False
@@ -103,11 +106,15 @@ def _snapshot(values: Mapping[str, Any], *, deep: bool) -> dict[str, Any]:
     return copy.deepcopy(dict(values)) if deep else dict(values)
 
 
-def _usage_paths_of(engine: PolicyEngine) -> frozenset[str]:
-    """The engine's ``agent_usage.*`` paths; none for an engine predating the method.
-    Its ``evaluate`` must still accept the ``usage`` keyword, as the protocol
+_AGENT_USAGE_PATHS_METHOD = "agent_usage_paths"
+_USER_USAGE_PATHS_METHOD = "user_usage_paths"
+
+
+def _usage_paths_of(engine: PolicyEngine, method: str) -> frozenset[str]:
+    """The engine's paths under one usage root; none for an engine predating the
+    method. Its ``evaluate`` must still accept the ``usage`` keyword, as the protocol
     requires: :meth:`PolicyEnforcer.decide` always passes it."""
-    paths = getattr(engine, "agent_usage_paths", None)
+    paths = getattr(engine, method, None)
     return paths() if paths is not None else frozenset()
 
 
@@ -120,6 +127,33 @@ def _on_unavailable_of(engine: PolicyEngine) -> OnUnavailable:
     return read() if read is not None else OnUnavailable.ALLOW
 
 
+def _current_run_age(
+    run_ledger: UsageLedger | None,
+    ledger: UsageLedger,
+    run: Mapping[str, Any],
+    *,
+    admitting: bool,
+) -> float | None:
+    """The age of the run being decided inside, if it recorded itself on ``ledger``;
+    ``ledger_namespace`` then leaves that run out of ``invocations_*``.
+
+    Never while admitting: the run being admitted isn't recorded yet, and the
+    current run is an enclosing parent whose invocation must still count."""
+    if admitting or run_ledger is not ledger:
+        return None
+    return run[_RUN_ELAPSED]
+
+
+def _anonymous_user_usage(
+    paths: frozenset[str], on_unavailable: OnUnavailable
+) -> dict[str, int] | None:
+    """No user, no ledger, so the user's usage is unavailable: zeros under
+    ``allow``, every path missing under ``deny``."""
+    if on_unavailable is OnUnavailable.DENY:
+        return None
+    return dict.fromkeys(paths, 0)
+
+
 @dataclass(frozen=True, slots=True)
 class _BoundPolicy:
     """An engine, its usage paths and its fail mode, published by one attribute
@@ -127,7 +161,8 @@ class _BoundPolicy:
     answers it."""
 
     engine: PolicyEngine
-    usage_paths: frozenset[str]
+    agent_usage_paths: frozenset[str]
+    user_usage_paths: frozenset[str]
     on_unavailable: OnUnavailable
 
 
@@ -157,10 +192,10 @@ class PolicyEnforcer:
     the Rego enforcement path). The enforcer only knows the protocol, so
     it never branches on which engine ran.
 
-    ``ledgers`` supplies the local term of the ``agent_usage.*`` namespace.
-    Binding a policy that references a usage path enables it, on construction and
-    on every swap. ``usage_source`` adds the platform term; ``None`` reads the
-    ledger alone.
+    ``ledgers`` supplies the local term of both usage namespaces; binding a policy
+    enables each kind it references, on construction and on every swap.
+    ``usage_source`` adds the platform term for agents (``None`` reads the ledger
+    alone); ``user_usage.*`` is read from the ledger alone.
     """
 
     def __init__(
@@ -192,16 +227,22 @@ class PolicyEnforcer:
 
     @policy.setter
     def policy(self, engine: PolicyEngine) -> None:
-        usage_paths = _usage_paths_of(engine)
-        if usage_paths:
-            # Before publishing: the first decision on the new policy must find a ledger.
+        agent_usage_paths = _usage_paths_of(engine, _AGENT_USAGE_PATHS_METHOD)
+        user_usage_paths = _usage_paths_of(engine, _USER_USAGE_PATHS_METHOD)
+        # Before publishing: the first decision on the new policy must find a ledger.
+        # Per kind, so an agent-only policy never starts counting users.
+        if agent_usage_paths:
             self._ledgers.enable(UsageScopeKind.AGENT)
-        self._bound = _BoundPolicy(engine, usage_paths, _on_unavailable_of(engine))
+        if user_usage_paths:
+            self._ledgers.enable(UsageScopeKind.USER)
+        self._bound = _BoundPolicy(
+            engine, agent_usage_paths, user_usage_paths, _on_unavailable_of(engine)
+        )
 
     def usage_refresh(self) -> UsageRefresh | None:
         """The boundary's usage refresh, or None when there is nothing to fetch, so
         an agent without usage paths pays nothing at run start."""
-        paths = self._bound.usage_paths
+        paths = self._bound.agent_usage_paths
         if self._usage_source is None or not paths:
             return None
         return UsageRefresh(
@@ -238,12 +279,16 @@ class PolicyEnforcer:
         facts = get_run_facts()
         run_snapshot = facts.as_namespace(tool_name)
         bound = self._bound
-        # Feeds the ``agent_usage.*`` namespace. Read once per decision, like run.*,
-        # so roles can't disagree about the agent's usage. None when the policy
-        # references none.
-        reading = self._usage_reading(bound, facts, run_snapshot)
-        usage = (
-            NO_USAGE if reading is None else UsageInputs(agent_usage=reading.namespace)
+        # Feeds the usage namespaces. Read once per decision, like run.*, so roles
+        # can't disagree about anyone's usage. None for a root the policy doesn't
+        # reference.
+        admitting = tool_name == AGENT_RUN_TOOL
+        reading = self._usage_reading(bound, facts, run_snapshot, admitting=admitting)
+        usage = UsageInputs(
+            agent_usage=reading.namespace if reading is not None else None,
+            user_usage=self._user_usage(
+                bound, facts, run_snapshot, context, admitting=admitting
+            ),
         )
 
         verdict, deciding_role = combine_role_verdicts(
@@ -281,11 +326,16 @@ class PolicyEnforcer:
         return decision
 
     def _usage_reading(
-        self, bound: _BoundPolicy, facts: RunFacts, run: Mapping[str, Any]
+        self,
+        bound: _BoundPolicy,
+        facts: RunFacts,
+        run: Mapping[str, Any],
+        *,
+        admitting: bool,
     ) -> UsageReading | None:
         # By agent name, not RunFacts: admission is decided before run_scope opens,
-        # while RunFacts is still DETACHED and carries no ledger.
-        if not bound.usage_paths:
+        # while RunFacts is DETACHED or belongs to an enclosing parent run.
+        if not bound.agent_usage_paths:
             return None
         scope = UsageScope.agent(self.agent_name)
         ledger = self._ledgers.ledger_for(scope)
@@ -294,19 +344,49 @@ class PolicyEnforcer:
         # Inside a run that recorded its invocation on this ledger (not a parent's,
         # not DETACHED, not one opened before the ledgers were enabled), so that
         # invocation is left out of invocations_*, as it was at admission.
-        in_own_run = facts.ledger is ledger
-        current_run_age = run[_RUN_ELAPSED] if in_own_run else None
+        current_run_age = _current_run_age(
+            facts.ledger, ledger, run, admitting=admitting
+        )
         if self._usage_source is None:
             return local_reading(
-                ledger, bound.usage_paths, current_run_age=current_run_age
+                ledger, bound.agent_usage_paths, current_run_age=current_run_age
             )
         return self._usage_source.read(
             scope,
-            bound.usage_paths,
+            bound.agent_usage_paths,
             ledger,
             on_unavailable=bound.on_unavailable,
             current_run_age=current_run_age,
         )
+
+    def _user_usage(
+        self,
+        bound: _BoundPolicy,
+        facts: RunFacts,
+        run: Mapping[str, Any],
+        context: HexgateContext | None,
+        *,
+        admitting: bool,
+    ) -> dict[str, int] | None:
+        """The ``user_usage.*`` namespace for the context's user, from this process's
+        ledger alone, whether or not a platform is configured: the platform can't
+        answer user reads yet, and asking the source would keep per-user state it
+        never evicts."""
+        paths = bound.user_usage_paths
+        if not paths:
+            return None
+        user_id = context.user_id if context is not None else ""
+        if not user_id:
+            return _anonymous_user_usage(paths, bound.on_unavailable)
+        ledger = self._ledgers.ledger_for(UsageScope.user(user_id))
+        if ledger is None:
+            return None
+        # The run's user is fixed at run entry, so a context entered for another user
+        # inside the run reads that user's ledger without leaving this run out.
+        current_run_age = _current_run_age(
+            facts.user_ledger, ledger, run, admitting=admitting
+        )
+        return ledger_namespace(ledger, paths, current_run_age=current_run_age)
 
     def record(
         self, decision: Decision, *, user_id: str = "", session_id: str = ""

@@ -34,6 +34,24 @@ class Settings(BaseSettings):
     enricher_max_poll_records: int = 500
     enricher_insert_max_backoff_s: float = 30.0
 
+    # OAuth for MCP clients. public_url is the token `iss` and the base of every
+    # URL in the authorization-server metadata. mcp_resource_url is the only
+    # accepted `aud`; in dev the MCP server listens on :8080 with no proxy in
+    # front, so it is not public_url + "/mcp".
+    public_url: str = "http://localhost:8000"
+    mcp_resource_url: str = "http://localhost:8080/mcp"
+
+    @model_validator(mode="after")
+    def _refuse_public_url_trailing_slash(self) -> "Settings":
+        # The metadata's issuer must equal the token's `iss` character for
+        # character, and the endpoint URLs are appended to it.
+        if self.public_url.endswith("/"):
+            raise ValueError(
+                f"public_url={self.public_url!r} ends with '/' — set "
+                "HEXGATE_PUBLIC_URL without the trailing slash."
+            )
+        return self
+
     @model_validator(mode="after")
     def _refuse_dev_password_on_remote_host(self) -> "Settings":
         # The dev default keeps `make clickhouse-up` zero-setup, but pointing

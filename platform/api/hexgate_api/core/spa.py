@@ -33,7 +33,9 @@ _log = logging.getLogger(__name__)
 # treats a not-found endpoint as success and then chokes on HTML-as-JSON.
 # These match the first path segment, so e.g. ``v1/agentz`` and ``health/x``
 # are excluded while real SPA routes like ``playground`` fall through.
-_API_PATH_HEADS = frozenset({"v1", "health", "ready", "docs", "redoc", "openapi.json"})
+_API_PATH_HEADS = frozenset(
+    {"v1", "health", "ready", "docs", "redoc", "openapi.json", ".well-known"}
+)
 
 
 def _is_api_path(full_path: str) -> bool:
