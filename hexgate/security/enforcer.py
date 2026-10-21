@@ -161,7 +161,7 @@ class _BoundPolicy:
     answers it."""
 
     engine: PolicyEngine
-    usage_paths: frozenset[str]
+    agent_usage_paths: frozenset[str]
     user_usage_paths: frozenset[str]
     on_unavailable: OnUnavailable
 
@@ -227,22 +227,22 @@ class PolicyEnforcer:
 
     @policy.setter
     def policy(self, engine: PolicyEngine) -> None:
-        usage_paths = _usage_paths_of(engine, _AGENT_USAGE_PATHS_METHOD)
+        agent_usage_paths = _usage_paths_of(engine, _AGENT_USAGE_PATHS_METHOD)
         user_usage_paths = _usage_paths_of(engine, _USER_USAGE_PATHS_METHOD)
         # Before publishing: the first decision on the new policy must find a ledger.
         # Per kind, so an agent-only policy never starts counting users.
-        if usage_paths:
+        if agent_usage_paths:
             self._ledgers.enable(UsageScopeKind.AGENT)
         if user_usage_paths:
             self._ledgers.enable(UsageScopeKind.USER)
         self._bound = _BoundPolicy(
-            engine, usage_paths, user_usage_paths, _on_unavailable_of(engine)
+            engine, agent_usage_paths, user_usage_paths, _on_unavailable_of(engine)
         )
 
     def usage_refresh(self) -> UsageRefresh | None:
         """The boundary's usage refresh, or None when there is nothing to fetch, so
         an agent without usage paths pays nothing at run start."""
-        paths = self._bound.usage_paths
+        paths = self._bound.agent_usage_paths
         if self._usage_source is None or not paths:
             return None
         return UsageRefresh(
@@ -335,7 +335,7 @@ class PolicyEnforcer:
     ) -> UsageReading | None:
         # By agent name, not RunFacts: admission is decided before run_scope opens,
         # while RunFacts is DETACHED or belongs to an enclosing parent run.
-        if not bound.usage_paths:
+        if not bound.agent_usage_paths:
             return None
         scope = UsageScope.agent(self.agent_name)
         ledger = self._ledgers.ledger_for(scope)
@@ -349,11 +349,11 @@ class PolicyEnforcer:
         )
         if self._usage_source is None:
             return local_reading(
-                ledger, bound.usage_paths, current_run_age=current_run_age
+                ledger, bound.agent_usage_paths, current_run_age=current_run_age
             )
         return self._usage_source.read(
             scope,
-            bound.usage_paths,
+            bound.agent_usage_paths,
             ledger,
             on_unavailable=bound.on_unavailable,
             current_run_age=current_run_age,
