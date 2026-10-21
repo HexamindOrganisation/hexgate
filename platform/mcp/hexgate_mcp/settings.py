@@ -1,5 +1,6 @@
-"""Environment configuration, read once at start-up (prefix ``HEXGATE_MCP_``,
-except the issuer, which shares the API's ``HEXGATE_PUBLIC_URL``)."""
+"""Environment configuration, read once at start-up from the process
+environment only (prefix ``HEXGATE_MCP_``, except the issuer, which shares the
+API's ``HEXGATE_PUBLIC_URL``). The API's ``.env`` is never read here."""
 
 import os
 from dataclasses import dataclass
@@ -10,8 +11,10 @@ class Settings:
     # Where the server calls the API, and fetches its JWKS: the private network
     # in deploy, so neither request leaves it.
     api_url: str
-    # The API's public URL, the only accepted token `iss`. Read from the API's
-    # own variable so the two cannot disagree.
+    # The API's public URL, the only accepted token `iss`. It agrees with the
+    # API only when HEXGATE_PUBLIC_URL is exported to both processes: this
+    # server does not read the API's .env. In deploy both services get it from
+    # the same compose env.
     issuer: str
     # The URL clients connect to, the only accepted token `aud`.
     resource_url: str
