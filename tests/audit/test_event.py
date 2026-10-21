@@ -435,12 +435,23 @@ def test_span_attributes_omit_an_absent_usage_state() -> None:
 
 def test_span_attributes_carry_the_user_usage_state_and_identity() -> None:
     wire = AuditEvent(
-        decision=_decision(usage_states={UsageScopeKind.USER: _STALE})
+        decision=_decision(usage_states={UsageScopeKind.USER: _STALE}),
+        user_id="alice",
     ).span_attributes()
 
     assert wire[semconv.USER_USAGE_STATE] == _STALE
     assert wire[semconv.USAGE_IDENTITY] == "asserted"
     assert semconv.USAGE_STATE not in wire
+
+
+def test_an_anonymous_caller_has_no_asserted_identity() -> None:
+    """No ``user_id`` means nothing was asserted, even with a user state."""
+    wire = AuditEvent(
+        decision=_decision(usage_states={UsageScopeKind.USER: "unavailable"})
+    ).span_attributes()
+
+    assert wire[semconv.USER_USAGE_STATE] == "unavailable"
+    assert semconv.USAGE_IDENTITY not in wire
 
 
 def test_an_agent_only_decision_has_no_user_attributes() -> None:

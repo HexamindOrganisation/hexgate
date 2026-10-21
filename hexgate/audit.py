@@ -417,7 +417,8 @@ class AuditEvent:
         user_state = d.usage_states.get(UsageScopeKind.USER)
         if user_state is not None:
             attrs[semconv.USER_USAGE_STATE] = user_state
-            attrs[semconv.USAGE_IDENTITY] = _ASSERTED_IDENTITY
+            if self.user_id:
+                attrs[semconv.USAGE_IDENTITY] = _ASSERTED_IDENTITY
         if d.arguments is not None:
             attrs[semconv.ARGUMENTS] = json.dumps(
                 _truncate_json(

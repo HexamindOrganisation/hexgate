@@ -407,7 +407,7 @@ Every decision that reads a usage root carries its state on its audit span:
 | `unavailable` | No snapshot, or one over five minutes old (by default); every path follows the fail mode. When the platform refuses the request (an agent not registered in the API key's project, or a rejected key), the fetch is retried only every five minutes. A snapshot fetched before the refusal is still used, and reads `fresh`, `stale` or `partial` as above, until it is five minutes old; then the state is `unavailable`, and under `deny` its `agent_usage.*` constraints fail closed on every run until the problem is fixed. It is also the state of an anonymous caller's `user_usage.*`, in every mode, and of a `user_id` the platform can't read (over 256 characters, or not valid UTF-8) |
 | `local` | No platform to ask: local mode, local policy, or no API key. Values are this process's count; `on_unavailable` is ignored (an anonymous caller's `user_usage.*` still follows it) |
 
-A decision that reads `user_usage.*` also carries `sec_ai.usage_identity = asserted`:
+A decision that reads `user_usage.*` for a named caller also carries `sec_ai.usage_identity = asserted`:
 the `user_id` is the one your code put in the context. It is the only tier today.
 
 The platform doesn't store or display `usage_state`, `user_usage_state` or
