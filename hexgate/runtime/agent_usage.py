@@ -5,8 +5,9 @@ Counts what *this process* did for each scope, in time buckets, so a policy can 
 "invocations in the last hour" without a network call. Recorded from ``RunFacts``, so
 each metric is counted on the same line as its ``run.*`` twin.
 
-Each kind is inert until :meth:`UsageLedgers.enable`: a process whose policy references
-no ``agent_usage.*`` path never creates a ledger. User ledgers are bounded by an LRU
+Each kind is inert until :meth:`UsageLedgers.enable`, called only when the policy
+references its root (``agent_usage.*`` or ``user_usage.*``): a process whose policy
+references neither never creates a ledger. User ledgers are bounded by an LRU
 (``HEXGATE_USAGE_USER_CACHE``).
 """
 
