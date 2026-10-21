@@ -28,12 +28,14 @@ from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.security.usage_source import (
     OnUnavailable,
     PlatformUsageSource,
+    ScopeKindSpec,
     UsageRefreshSettings,
     UsageState,
 )
 from hexgate.tracing import _senders
 
 _AGENT = "billing"
+_USER_ID = "alice"
 _SCOPE = UsageScope.agent(_AGENT)
 _START = 1_000_000.0
 _HOUR = 3_600.0
@@ -301,8 +303,10 @@ class _FakeFetcher:
     def __init__(self, values: Mapping[str, int] | None = None) -> None:
         self.values = dict(values or {})
         self.error: Exception | None = None
+        self.calls: list[str] = []
 
     def get_agent_usage(self, name: str, paths: Sequence[str]) -> Mapping[str, Any]:
+        self.calls.append(name)
         if self.error is not None:
             raise self.error
         return {
@@ -327,11 +331,18 @@ class _Platform:
     def __init__(self, values: Mapping[str, int] | None = None) -> None:
         self.clock = _FakeClock()
         self.fetcher = _FakeFetcher(values)
+        self.user_fetcher = _FakeFetcher(values)
         self.ledgers = _ledgers(self.clock)
         self.source = PlatformUsageSource(
-            {UsageScopeKind.AGENT: self.fetcher.get_agent_usage},
+            {
+                UsageScopeKind.AGENT: ScopeKindSpec(
+                    self.fetcher.get_agent_usage, UsageRefreshSettings()
+                ),
+                UsageScopeKind.USER: ScopeKindSpec(
+                    self.user_fetcher.get_agent_usage, UsageRefreshSettings()
+                ),
+            },
             _InlineExecutor(),
-            UsageRefreshSettings(),
             self.clock,
         )
 
@@ -469,12 +480,12 @@ def test_an_agent_usage_policy_enables_only_the_agent_scope() -> None:
     assert platform.ledgers.is_enabled(UsageScopeKind.AGENT)
     assert not platform.ledgers.is_enabled(UsageScopeKind.USER)
 
-    platform.boundary(enforcer)
-    assert enforcer.decide(AGENT_RUN_TOOL, _ADMISSION_ARGS).allowed
+    with HexgateContext(user_id=_USER_ID).sync_scope():
+        platform.boundary(enforcer)
+        assert enforcer.decide(AGENT_RUN_TOOL, _ADMISSION_ARGS).allowed
 
-    assert {scope.kind for scope in platform.source._snapshots} == {
-        UsageScopeKind.AGENT
-    }
+    assert platform.fetcher.calls == [_AGENT]
+    assert platform.user_fetcher.calls == []
 
 
 def test_the_own_run_is_left_out_through_the_source() -> None:

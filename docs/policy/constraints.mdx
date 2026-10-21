@@ -68,9 +68,10 @@ a quantifier body.
 Besides `args.*`, constraints can reference two **call-scope facts**: `role`
 (the caller's role) and `tool` (the tool being invoked) — e.g.
 `role == "admin"` or `tool == "refund_order"`. These mirror Rego's
-`input.role` / `input.tool`. Three further namespaces follow below: `ctx.*` (who
-is calling), `run.*` (what this invocation has done so far) and `agent_usage.*`
-(what this agent has done across runs).
+`input.role` / `input.tool`. Four further namespaces follow below: `ctx.*` (who
+is calling), `run.*` (what this invocation has done so far), `agent_usage.*`
+(what this agent has done across runs) and `user_usage.*` (what one end user has
+done across agents).
 
 ## Caller attributes (`ctx.*`)
 
@@ -403,7 +404,7 @@ its audit span, saying how the values were built:
 | `stale` | Last good snapshot, over a minute old but under five (by default) |
 | `partial` | Usable snapshot that lacks some paths; those follow the fail mode |
 | `unavailable` | No snapshot, or one over five minutes old (by default); every path follows the fail mode. When the platform refuses the request (an agent not registered in the API key's project, or a rejected key), the fetch is retried only every five minutes. A snapshot fetched before the refusal is still used, and reads `fresh`, `stale` or `partial` as above, until it is five minutes old; then the state is `unavailable`, and under `deny` its `agent_usage.*` constraints fail closed on every run until the problem is fixed |
-| `local` | No platform to ask: local mode, local policy, or no API key. Values are this process's count; `on_unavailable` is ignored |
+| `local` | No platform to ask: local mode, local policy, or no API key. Values are this process's count; `on_unavailable` is ignored for `agent_usage.*` (an anonymous caller's `user_usage.*` still follows it) |
 
 The platform doesn't store or display `usage_state` yet.
 
@@ -483,9 +484,13 @@ role only fails validation:
 policy schema: usage.on_unavailable must resolve to the same value across all roles (the usage snapshot is per agent); got default=allow, ops=deny. Put it in a mixin every role inherits.
 ```
 
-The value is signed into the bundle. While the counts are local to the process
-(see above), there is no platform count to miss, so the setting doesn't change any
-decision yet.
+The value is signed into the bundle. While `agent_usage.*` counts are local to the
+process (see above), there is no platform count to miss, so the setting doesn't change
+those decisions yet. It does change `user_usage.*` today, with an API key or without
+one: a caller with no `user_id` has no usage to read, so under `deny` every
+`user_usage.*` constraint fails closed for it, at zero usage
+([Anonymous callers](#user-usage-user_usage)). A `hexgate chat` session or a scheduled
+run without a `HexgateContext` user is then refused.
 
 ### Dry-running a quota
 
@@ -498,20 +503,77 @@ hexgate policy test policy.yaml --role default --tool agent.run \
   --args '{"agent": "billing"}' --agent-usage '{"invocations_1h": 100}'
 ```
 
-In a pytest suite, build the namespace with `agent_usage_namespace`:
+`--user-usage` does the same for `user_usage.*`
+([User usage](#user-usage-user_usage)):
+
+```bash
+hexgate policy test policy.yaml --role default --tool agent.run \
+  --args '{"agent": "billing"}' --user-usage '{"invocations_1h": 50}'
+```
+
+In a pytest suite, build the namespace with `agent_usage_namespace`, or
+`user_usage_namespace` for a user cap:
 
 ```python
-from hexgate.security import agent_usage_namespace, assert_denies
+from hexgate.security import (
+    agent_usage_namespace,
+    assert_denies,
+    user_usage_namespace,
+)
 
 assert_denies(
     policy, "agent.run", {"agent": "billing"},
     agent_usage=agent_usage_namespace(invocations_1h=100),
+)
+assert_denies(
+    policy, "agent.run", {"agent": "billing"},
+    user_usage=user_usage_namespace(invocations_1h=50),
 )
 ```
 
 On an `agent_usage.*` denial the model is told what it is told for `run.*`
 ([What a denied model is told](#what-a-denied-model-is-told)), and never the
 `usage_state`.
+
+## User usage (`user_usage.*`)
+
+`agent_usage.*` caps the agent as a whole, so one heavy user can use up the cap for
+everyone. `user_usage.*` caps **one end user across every agent**: the user is
+`HexgateContext.user_id`, and the paths are the agent ones, under a second root
+([The paths](#the-paths)).
+
+```yaml
+admission:
+  mode: allow
+  constraints:
+    - agent_usage.invocations_1h < 1000   # the agent's ceiling
+    - user_usage.invocations_1h < 50      # each user's share of it
+```
+
+<Warning>
+**In this release `user_usage.*` counts this process only**, even with an API key.
+Every process keeps its own count of each user, and a restart resets it, so the cap is
+per-process: with N replicas a user can reach up to N times the cap. Within one process
+it is still a soft quota, as for `agent_usage.*`
+([Shared across processes](#shared-across-processes)). Cross-process counts come in a
+later release.
+</Warning>
+
+- **Across agents.** Every run started with `user_id="alice"` in context counts for
+  alice, whatever the agent. A hexgate agent called as a tool opens its own run, so it
+  counts a second invocation, as for `agent_usage.*`.
+- **Anonymous callers.** An empty `user_id`, or no `HexgateContext`, has no usage to
+  read, so `usage.on_unavailable` decides
+  ([When platform counts are unavailable](#when-platform-counts-are-unavailable-usageon_unavailable)):
+  under `allow` every `user_usage.*` path reads zero, and under `deny` they are missing
+  and the constraints fail closed. Anonymous callers never share a count. To limit
+  them, use `agent_usage.*` or a `ctx.*` or role rule.
+- **Memory.** The process keeps one count per user for the
+  `HEXGATE_USAGE_USER_CACHE` most recent users (default 10 000), about 118 KB each.
+  A user dropped from that cache starts again from zero.
+- **Dry-run** with `--user-usage` (same shape as `--agent-usage`), or
+  `user_usage_namespace` with `assert_denies(..., user_usage=...)`
+  ([Dry-running a quota](#dry-running-a-quota)).
 
 ## Where a constraint can live
 

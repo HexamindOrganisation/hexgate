@@ -8,6 +8,7 @@ semantics the ``agent_usage.*`` namespace and PR 6 build on.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections.abc import Iterable, Mapping
@@ -16,16 +17,21 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from hexgate.runtime.agent_usage import (
+    AGENT_USAGE_PATHS,
+    AGENT_USAGE_VOCABULARY,
     DEFAULT_USER_CACHE_SIZE,
     FINE_BUCKET_SECONDS,
     FINE_RETENTION_SECONDS,
     HOUR_BUCKET_SECONDS,
     KNOWN_AGENT_USAGE_PATHS,
+    KNOWN_USER_USAGE_PATHS,
     MAX_WINDOW_SECONDS,
     MINUTE_BUCKET_SECONDS,
     USAGE_LEDGERS,
     USAGE_WINDOWS,
     USER_CACHE_ENV,
+    USER_USAGE_PATHS,
+    USER_USAGE_VOCABULARY,
     BucketSeries,
     UsageLedger,
     UsageLedgers,
@@ -338,6 +344,25 @@ def test_usage_scope_is_a_value_and_prints_its_kind() -> None:
     assert str(UsageScope.agent("b")) == "agent 'b'"
 
 
+def test_a_user_scope_prints_a_fingerprint_not_its_key() -> None:
+    """G10: a user key is often an email, and every usage log line prints a scope."""
+    scope = UsageScope.user("alice@example.com")
+
+    assert re.fullmatch(r"user #[0-9a-f]{12}", str(scope))
+    assert "alice" not in str(scope)
+    assert "alice" not in repr(scope)
+    assert "alice" not in f"{scope!r}"
+
+
+def test_one_user_prints_one_fingerprint() -> None:
+    assert str(UsageScope.user("alice")) == str(UsageScope.user("alice"))
+    assert str(UsageScope.user("alice")) != str(UsageScope.user("bob"))
+
+
+def test_a_lone_surrogate_user_prints() -> None:
+    assert str(UsageScope.user("\ud800")).startswith("user #")
+
+
 def _user_ledgers(capacity: int = 2) -> UsageLedgers:
     ledgers = UsageLedgers(new_usage_ledger, user_capacity=lambda: capacity)
     ledgers.enable(UsageScopeKind.USER)
@@ -503,6 +528,14 @@ def test_the_registry_is_every_metric_over_every_window() -> None:
 
     assert len(expected) == 35
     assert KNOWN_AGENT_USAGE_PATHS == expected
+
+
+def test_both_roots_share_one_vocabulary() -> None:
+    """``ledger_namespace`` looks every path up in ``AGENT_USAGE_PATHS``, so a user
+    registry that diverged would turn a user read into a ``KeyError``."""
+    assert USER_USAGE_PATHS is AGENT_USAGE_PATHS
+    assert KNOWN_USER_USAGE_PATHS == KNOWN_AGENT_USAGE_PATHS
+    assert USER_USAGE_VOCABULARY == AGENT_USAGE_VOCABULARY
 
 
 def test_no_window_outlasts_the_ledger() -> None:
