@@ -396,7 +396,7 @@ def test_wrap_shows_guards_and_policy_only_model_supplied_args(
 
 class _CountingBinding:
     # A policy without agent_usage.* paths: the boundary has no usage refresh.
-    enforcer = SimpleNamespace(usage_refresh=lambda: None)
+    enforcer = SimpleNamespace(usage_refreshes=lambda _context: ())
 
     def __init__(self) -> None:
         self.refreshes = 0

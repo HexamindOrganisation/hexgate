@@ -187,6 +187,10 @@ class AgentNotAdmittedError(RuntimeError):
     engine's ``decision.reason`` is *not* interpolated — it is phrased against the
     lowered ``agent.run`` key ("tool 'agent.run' is denied…"), which would leak
     that synthetic key here; read it off ``.decision`` instead.
+
+    ``quota_scopes`` names the usage roots the failing constraint references, such
+    as ``{"user_usage"}``, so the caller can tell a user over quota from an agent
+    over quota.
     """
 
     def __init__(self, decision: Decision) -> None:
@@ -195,6 +199,10 @@ class AgentNotAdmittedError(RuntimeError):
             f"admission denied for agent {decision.agent_name!r}; this caller may "
             "not run it. The run did not start."
         )
+
+    @property
+    def quota_scopes(self) -> frozenset[str]:
+        return self.decision.quota_scopes
 
 
 class ReachNotAllowedError(RuntimeError):

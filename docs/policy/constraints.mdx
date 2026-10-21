@@ -395,21 +395,26 @@ fails closed, like any missing field.
 - **`on_unavailable` is required.** An empty `usage: {}` is a load error, and so is
   `usage: null` in a role: omit the key to inherit a parent's value.
 
-Every decision that reads `agent_usage.*` carries a `sec_ai.usage_state` attribute on
-its audit span, saying how the values were built:
+Every decision that reads a usage root carries its state on its audit span:
+`sec_ai.usage_state` for `agent_usage.*`, `sec_ai.user_usage_state` for
+`user_usage.*`. The state says how the values were built:
 
 | `usage_state` | Meaning |
 |---|---|
 | `fresh` | Snapshot under a minute old (by default), with every path the policy needs |
 | `stale` | Last good snapshot, over a minute old but under five (by default) |
 | `partial` | Usable snapshot that lacks some paths; those follow the fail mode |
-| `unavailable` | No snapshot, or one over five minutes old (by default); every path follows the fail mode. When the platform refuses the request (an agent not registered in the API key's project, or a rejected key), the fetch is retried only every five minutes. A snapshot fetched before the refusal is still used, and reads `fresh`, `stale` or `partial` as above, until it is five minutes old; then the state is `unavailable`, and under `deny` its `agent_usage.*` constraints fail closed on every run until the problem is fixed |
-| `local` | No platform to ask: local mode, local policy, or no API key. Values are this process's count; `on_unavailable` is ignored for `agent_usage.*` (an anonymous caller's `user_usage.*` still follows it) |
+| `unavailable` | No snapshot, or one over five minutes old (by default); every path follows the fail mode. When the platform refuses the request (an agent not registered in the API key's project, or a rejected key), the fetch is retried only every five minutes. A snapshot fetched before the refusal is still used, and reads `fresh`, `stale` or `partial` as above, until it is five minutes old; then the state is `unavailable`, and under `deny` its `agent_usage.*` constraints fail closed on every run until the problem is fixed. It is also the state of an anonymous caller's `user_usage.*`, in every mode, and of a `user_id` the platform can't read (over 256 characters, or not valid UTF-8) |
+| `local` | No platform to ask: local mode, local policy, or no API key. Values are this process's count; `on_unavailable` is ignored (an anonymous caller's `user_usage.*` still follows it) |
 
-The platform doesn't store or display `usage_state` yet.
+A decision that reads `user_usage.*` also carries `sec_ai.usage_identity = asserted`:
+the `user_id` is the one your code put in the context. It is the only tier today.
+
+The platform doesn't store or display `usage_state`, `user_usage_state` or
+`usage_identity` yet.
 
 <Note>
-Three environment variables tune the refresh:
+Three environment variables tune the agent refresh:
 
 - `HEXGATE_USAGE_REFRESH_SECONDS` (default `5`): the snapshot age after which a run
   start refreshes it in the background;
@@ -418,8 +423,13 @@ Three environment variables tune the refresh:
 - `HEXGATE_USAGE_MAX_STALENESS_SECONDS` (default `300`): the age after which the
   snapshot is unavailable.
 
-They must satisfy `0 < refresh ≤ sync_after ≤ max_staleness`. A bad value logs a
-warning, and all three fall back to their defaults. A shorter refresh means less
+Three more tune the user refresh, with the same meaning:
+`HEXGATE_USAGE_USER_REFRESH_SECONDS` (default `30`),
+`HEXGATE_USAGE_USER_SYNC_AFTER_SECONDS` (default `60`) and
+`HEXGATE_USAGE_USER_MAX_STALENESS_SECONDS` (default `300`).
+
+Each trio must satisfy `0 < refresh ≤ sync_after ≤ max_staleness`. A bad value logs
+a warning, and that trio falls back to its defaults. A shorter refresh means less
 overshoot and more load on the platform.
 </Note>
 
@@ -462,8 +472,8 @@ The differences:
 
 ### When platform counts are unavailable (`usage.on_unavailable`)
 
-Counts shared across processes will come from the platform. The `usage` block
-says what a decision reads when the platform's count is missing:
+Counts shared across processes come from the platform. The `usage` block says what a
+decision reads when the platform's count is missing:
 
 ```yaml
 usage:
@@ -484,13 +494,13 @@ role only fails validation:
 policy schema: usage.on_unavailable must resolve to the same value across all roles (the usage snapshot is per agent); got default=allow, ops=deny. Put it in a mixin every role inherits.
 ```
 
-The value is signed into the bundle. While `agent_usage.*` counts are local to the
-process (see above), there is no platform count to miss, so the setting doesn't change
-those decisions yet. It does change `user_usage.*` today, with an API key or without
-one: a caller with no `user_id` has no usage to read, so under `deny` every
-`user_usage.*` constraint fails closed for it, at zero usage
-([Anonymous callers](#user-usage-user_usage)). A `hexgate chat` session or a scheduled
-run without a `HexgateContext` user is then refused.
+The value is signed into the bundle. It applies to both roots whenever the platform
+can't supply a value: the state is `partial` (for the missing paths) or
+`unavailable`. In local mode there is no platform count to miss, so it doesn't
+apply, with one exception: a caller with no `user_id` has no usage to read, so under
+`deny` every `user_usage.*` constraint fails closed for it, at zero usage and in every
+mode ([Anonymous callers](#user-usage-user_usage)). A `hexgate chat` session or a
+scheduled run without a `HexgateContext` user is then refused.
 
 ### Dry-running a quota
 
@@ -551,17 +561,83 @@ admission:
 ```
 
 <Warning>
-**In this release `user_usage.*` counts this process only**, even with an API key.
-Every process keeps its own count of each user, and a restart resets it, so the cap is
-per-process: with N replicas a user can reach up to N times the cap. Within one process
-it is still a soft quota, as for `agent_usage.*`
-([Shared across processes](#shared-across-processes)). Cross-process counts come in a
-later release.
+**`user_id` is asserted by your code.** Derive it from your authenticated session
+(`HexgateContext(user_id=session.user.id)`), never from a value the end user sends: a
+user who can choose their ID can rotate it and dodge the cap.
 </Warning>
 
+### Always pair it with an agent ceiling
+
+A rotated or anonymous ID still counts against `agent_usage.*`, so the two caps go
+together: the user cap bounds each user's share, the agent ceiling bounds the total
+whatever IDs arrive. The example above shows the pair.
+
+### Shared across processes (users)
+
+A user's value is the platform's count for that user across every process and agent
+of the project, as last fetched, plus what this process did since shortly before the
+fetch. It is a soft quota, as for agents
+([Shared across processes](#shared-across-processes)).
+
+- **Fetched at run start**, alongside the policy, ban and agent fetches, only when the
+  policy references `user_usage.*` and the context has a `user_id`.
+- **A cold user waits once.** A user whose snapshot is missing or over a minute old
+  waits for one fetch (2-second timeout). A user who keeps running is refreshed in the
+  background every 30 seconds.
+- **One failure pauses every user.** After a failed user fetch, every user stops
+  waiting for 30 seconds and reads the fail mode. A 401, 403, 404, 405 or 422 pauses
+  every user fetch for five minutes (the platform has no user read, or refuses the key
+  or the request).
+- **Unreadable IDs are never sent.** A `user_id` over 256 characters, or not valid
+  UTF-8, reads `unavailable`.
+- **Local in the same three cases as agents**: local mode, local policy, or no API
+  key.
+- **Logs never print the ID.** A user appears in SDK log lines as a 12-character
+  fingerprint.
+
+Per-user overshoot, at the moment a user crosses the cap:
+
+| Traffic | Overshoot |
+|---|---|
+| One session, sticky routing | About zero: this process's ledger covers them |
+| A scripted user, round-robin over N pods at r runs/s | About (N − 1) × r × (30 s + ingest lag); 4 pods × 0.5 runs/s ≈ 50 runs |
+| A cold user | None added: the run waits for the fetch |
+| ID rotation | Not overshoot but a bypass; only `agent_usage.*` bounds it |
+
+### Telling the user from the agent
+
+`AgentNotAdmittedError.quota_scopes` (and `Decision.quota_scopes`, for a tool denial)
+names the usage roots the failing constraints reference, so your app can answer a user
+over quota (a 429 to them) differently from an agent over quota (an ops alert):
+
+```python
+from hexgate.security import AgentNotAdmittedError
+
+try:
+    result = await agent.ainvoke(prompt)
+except AgentNotAdmittedError as exc:
+    if "user_usage" in exc.quota_scopes:
+        return {"status": 429, "message": "You've hit your usage limit. Try again later."}
+    logger.error("run refused: %s", exc.decision.reason)  # page whoever owns the agent
+    raise
+```
+
+- **It names the roots a failing constraint references, not which side of an `or`
+  failed.** `user_usage.invocations_1h < 50 or ctx.plan == "pro"` reports
+  `{"user_usage"}`.
+- **Every failing constraint counts.** Both engines report each one, so a run over
+  both caps names both roots.
+- **An unavailable value counts too.** A cap that fails because its value is missing
+  under `deny` names its root. Read `decision.usage_states` to tell the two apart.
+- **The model is told nothing** about either.
+
+### How it counts
+
 - **Across agents.** Every run started with `user_id="alice"` in context counts for
-  alice, whatever the agent. A hexgate agent called as a tool opens its own run, so it
-  counts a second invocation, as for `agent_usage.*`.
+  alice, whatever the agent. The cap is project-wide, so a user's runs of a cheap
+  agent count against a cap on an expensive one, and can lock the user out of it. A
+  hexgate agent called as a tool opens its own run, so it counts a second invocation,
+  as for `agent_usage.*`.
 - **Anonymous callers.** An empty `user_id`, or no `HexgateContext`, has no usage to
   read, so `usage.on_unavailable` decides
   ([When platform counts are unavailable](#when-platform-counts-are-unavailable-usageon_unavailable)):
@@ -570,7 +646,9 @@ later release.
   them, use `agent_usage.*` or a `ctx.*` or role rule.
 - **Memory.** The process keeps one count per user for the
   `HEXGATE_USAGE_USER_CACHE` most recent users (default 10 000), about 118 KB each.
-  A user dropped from that cache starts again from zero.
+  Every window's buckets are kept per user, with a platform or without, so the cost
+  stays the same. A user dropped from that cache starts again from its platform
+  count, or from zero without one.
 - **Dry-run** with `--user-usage` (same shape as `--agent-usage`), or
   `user_usage_namespace` with `assert_denies(..., user_usage=...)`
   ([Dry-running a quota](#dry-running-a-quota)).

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator
 from langfuse import propagate_attributes
 
 from hexgate.runtime import HexgateContext, run_scope
+from hexgate.runtime.agent_usage import UsageScopeKind
 
 if TYPE_CHECKING:
     from hexgate.security.bans import BanGate
@@ -30,9 +31,10 @@ _log = logging.getLogger(__name__)
 # values are dropped too). Only bites on an unusually large role list.
 _MAX_METADATA_CHARS = 200
 
-# The ban fetch and the usage refresh, each on its own worker.
-_MAX_PREFETCH_WORKERS = 2
+# The ban fetch and each usage scope's refresh, each on its own worker.
+_MAX_PREFETCH_WORKERS = 3
 _USAGE_REFRESH_FAILED = "usage refresh for %s failed"
+_USER_USAGE_REFRESH_FAILED = "usage refresh for %s failed (%s)"
 
 
 def langfuse_propagate_kwargs(context: HexgateContext, tag: str) -> dict[str, Any]:
@@ -94,17 +96,17 @@ async def aprepare_run(
     binding: PolicyBinding | None,
 ) -> None:
     """Pre-run work shared by every boundary: the policy refresh, the ban fetch and
-    the usage refresh run concurrently, then the ban decision. Admission stays with
-    the caller, after this returns, so it reads the refreshed policy.
+    each usage scope's refresh run concurrently, then the ban decision. Admission
+    stays with the caller, after this returns, so it reads the refreshed policy.
 
-    The concurrent usage refresh asks for the pre-refresh policy's paths (02 §5.5
+    The concurrent usage refreshes ask for the pre-refresh policy's paths (02 §5.5
     Rule 2); paths the policy refresh adds are refreshed once it returns."""
-    usage = _usage_refresh_of(binding)
-    if ban_gate is None and usage is None:
+    usages = _usage_refreshes_of(binding, context)
+    if ban_gate is None and not usages:
         await refresh_policy
     else:
-        await _aprefetch_alongside(refresh_policy, ban_gate, context, usage)
-    if (added := _usage_added_by_refresh(binding, usage)) is not None:
+        await _aprefetch_alongside(refresh_policy, ban_gate, context, usages)
+    for added in _usage_added_by_refresh(binding, context, usages):
         await _arefresh_usage(added)
 
 
@@ -117,12 +119,12 @@ def prepare_run(
 ) -> None:
     """Sync mirror of :func:`aprepare_run`: the ban and usage fetches run on worker
     threads while the policy refresh runs on the caller's."""
-    usage = _usage_refresh_of(binding)
-    if ban_gate is None and usage is None:
+    usages = _usage_refreshes_of(binding, context)
+    if ban_gate is None and not usages:
         refresh_policy()
     else:
-        _prefetch_alongside(refresh_policy, ban_gate, context, usage)
-    if (added := _usage_added_by_refresh(binding, usage)) is not None:
+        _prefetch_alongside(refresh_policy, ban_gate, context, usages)
+    for added in _usage_added_by_refresh(binding, context, usages):
         _refresh_usage(added)
 
 
@@ -130,11 +132,10 @@ async def _aprefetch_alongside(
     refresh_policy: Awaitable[None],
     ban_gate: BanGate | None,
     context: HexgateContext | None,
-    usage: UsageRefresh | None,
+    usages: tuple[UsageRefresh, ...],
 ) -> None:
     fetches: list[Awaitable[Any]] = [refresh_policy]
-    if usage is not None:
-        fetches.append(_arefresh_usage(usage))
+    fetches.extend(_arefresh_usage(usage) for usage in usages)
     if ban_gate is None:
         await asyncio.gather(*fetches)
         return
@@ -146,7 +147,7 @@ def _prefetch_alongside(
     refresh_policy: Callable[[], None],
     ban_gate: BanGate | None,
     context: HexgateContext | None,
-    usage: UsageRefresh | None,
+    usages: tuple[UsageRefresh, ...],
 ) -> None:
     # Per call, not module-level: a shared pool used before a fork never runs
     # work in the child.
@@ -160,14 +161,13 @@ def _prefetch_alongside(
             if ban_gate is not None
             else None
         )
-        pending_usage = (
+        pending_usages = [
             pool.submit(contextvars.copy_context().run, _refresh_usage, usage)
-            if usage is not None
-            else None
-        )
+            for usage in usages
+        ]
         refresh_policy()
-        if pending_usage is not None:
-            pending_usage.result()
+        for pending in pending_usages:
+            pending.result()
         bans = pending_bans.result() if pending_bans is not None else None
     finally:
         # The fetches are done on success; on an interrupt, don't block on them.
@@ -176,31 +176,45 @@ def _prefetch_alongside(
         ban_gate.enforce(bans, context)
 
 
-def _usage_refresh_of(binding: PolicyBinding | None) -> UsageRefresh | None:
-    return binding.enforcer.usage_refresh() if binding is not None else None
+def _usage_refreshes_of(
+    binding: PolicyBinding | None, context: HexgateContext | None
+) -> tuple[UsageRefresh, ...]:
+    return binding.enforcer.usage_refreshes(context) if binding is not None else ()
 
 
 def _usage_added_by_refresh(
-    binding: PolicyBinding | None, before: UsageRefresh | None
-) -> UsageRefresh | None:
-    """The refreshed policy's usage refresh when it wants paths the prefetch didn't
-    ask for. Without it, a policy's first ``agent_usage.*`` cap has no snapshot, so
-    its first decisions read ``UNAVAILABLE`` and fall back to the local ledger."""
-    after = _usage_refresh_of(binding)
-    if after is None or (before is not None and after.paths <= before.paths):
-        return None
-    return after
+    binding: PolicyBinding | None,
+    context: HexgateContext | None,
+    before: tuple[UsageRefresh, ...],
+) -> tuple[UsageRefresh, ...]:
+    """The refreshed policy's usage refreshes whose paths the prefetch didn't ask
+    for, per scope. Without them, a policy's first usage cap has no snapshot, so its
+    first decisions read ``UNAVAILABLE`` and fall back to the local ledger."""
+    asked = {usage.scope: usage.paths for usage in before}
+    return tuple(
+        usage
+        for usage in _usage_refreshes_of(binding, context)
+        if not usage.paths <= asked.get(usage.scope, frozenset())
+    )
 
 
 def _refresh_usage(usage: UsageRefresh) -> None:
     try:
         usage.run()
-    except Exception:  # noqa: BLE001 — a usage refresh must never fail a run
-        _log.warning(_USAGE_REFRESH_FAILED, usage.scope, exc_info=True)
+    except Exception as exc:  # noqa: BLE001 — a usage refresh must never fail a run
+        _log_refresh_failure(usage, exc)
 
 
 async def _arefresh_usage(usage: UsageRefresh) -> None:
     try:
         await usage.arun()
-    except Exception:  # noqa: BLE001 — a usage refresh must never fail a run
-        _log.warning(_USAGE_REFRESH_FAILED, usage.scope, exc_info=True)
+    except Exception as exc:  # noqa: BLE001 — a usage refresh must never fail a run
+        _log_refresh_failure(usage, exc)
+
+
+def _log_refresh_failure(usage: UsageRefresh, exc: Exception) -> None:
+    # A user failure's message may carry the user's ID; log its class only.
+    if usage.scope.kind is UsageScopeKind.USER:
+        _log.warning(_USER_USAGE_REFRESH_FAILED, usage.scope, type(exc).__name__)
+    else:
+        _log.warning(_USAGE_REFRESH_FAILED, usage.scope, exc_info=exc)

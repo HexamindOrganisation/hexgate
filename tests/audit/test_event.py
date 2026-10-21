@@ -15,6 +15,7 @@ from hexgate.audit import (
     AuditEvent,
 )
 from hexgate.runtime import MAX_EVALUATED_ROLES
+from hexgate.runtime.agent_usage import UsageScopeKind
 from hexgate.security.decision import Decision, DecisionOutcome, RunAttribution
 from hexgate.tracing import semconv
 
@@ -418,7 +419,9 @@ _STALE = "stale"
 
 
 def test_span_attributes_carry_the_usage_state() -> None:
-    wire = AuditEvent(decision=_decision(usage_state=_STALE)).span_attributes()
+    wire = AuditEvent(
+        decision=_decision(usage_states={UsageScopeKind.AGENT: _STALE})
+    ).span_attributes()
 
     assert wire[semconv.USAGE_STATE] == _STALE
 
@@ -430,9 +433,28 @@ def test_span_attributes_omit_an_absent_usage_state() -> None:
     assert semconv.USAGE_STATE not in wire
 
 
+def test_span_attributes_carry_the_user_usage_state_and_identity() -> None:
+    wire = AuditEvent(
+        decision=_decision(usage_states={UsageScopeKind.USER: _STALE})
+    ).span_attributes()
+
+    assert wire[semconv.USER_USAGE_STATE] == _STALE
+    assert wire[semconv.USAGE_IDENTITY] == "asserted"
+    assert semconv.USAGE_STATE not in wire
+
+
+def test_an_agent_only_decision_has_no_user_attributes() -> None:
+    wire = AuditEvent(
+        decision=_decision(usage_states={UsageScopeKind.AGENT: _STALE})
+    ).span_attributes()
+
+    assert semconv.USER_USAGE_STATE not in wire
+    assert semconv.USAGE_IDENTITY not in wire
+
+
 def test_error_payload_never_carries_the_usage_state() -> None:
     """The model must not learn about its budget's state, as with ``run``."""
-    with_state = _decision(usage_state=_STALE)
+    with_state = _decision(usage_states={UsageScopeKind.AGENT: _STALE})
 
     assert with_state.as_error_payload() == _decision().as_error_payload()
     assert _STALE not in with_state.as_error_message()

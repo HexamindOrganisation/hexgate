@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
-from hexgate.security.constraints import check_constraints
+from hexgate.security.constraints import ConstraintsFailedError, check_constraints
 from hexgate.security.decision import DecisionOutcome, Verdict
 from hexgate.security.errors import ApprovalRequiredError, PolicyDeniedError
 from hexgate.security.file_scope import build_file_scope_hint, is_path_allowed
@@ -113,8 +113,10 @@ def evaluate_tool_call(
             run=run,
             usage=usage,
         )
-    except PolicyDeniedError as exc:
-        return Verdict(outcome=DecisionOutcome.DENY, reason=str(exc))
+    except ConstraintsFailedError as exc:
+        return Verdict(
+            outcome=DecisionOutcome.DENY, reason=str(exc), failed_constraints=exc.failed
+        )
 
     if isinstance(tool_policy, FileToolPolicy) and not is_path_allowed(
         tool_name, arguments, tool_policy
@@ -233,6 +235,7 @@ def verdict_from_rego(rego: Any, *, tool_name: str, role: str) -> Verdict:
             outcome=DecisionOutcome.DENY,
             reason=f'Policy denied tool "{tool_name}": {reasons}',
             violations=tuple(rego.violations),
+            failed_constraints=tuple(rego.violations),
         )
     return Verdict(
         outcome=DecisionOutcome.DENY,

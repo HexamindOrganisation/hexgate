@@ -66,6 +66,12 @@ Optional — see [constraints](/policy/constraints#user-usage-user_usage).
 
 | Env var | Purpose |
 |---|---|
+| `HEXGATE_USAGE_REFRESH_SECONDS` | Age after which a run start refreshes an agent's usage snapshot in the background (default `5`). See [constraints](/policy/constraints#shared-across-processes). |
+| `HEXGATE_USAGE_SYNC_AFTER_SECONDS` | Age after which a run start waits for a fresh agent snapshot (default `60`). |
+| `HEXGATE_USAGE_MAX_STALENESS_SECONDS` | Age after which an agent snapshot is unavailable and its paths follow `usage.on_unavailable` (default `300`). The agent trio must satisfy `0 < refresh ≤ sync_after ≤ max_staleness`; a bad value logs a warning and all three use their defaults. |
+| `HEXGATE_USAGE_USER_REFRESH_SECONDS` | As `HEXGATE_USAGE_REFRESH_SECONDS`, for an end user's `user_usage.*` snapshot (default `30`). See [constraints](/policy/constraints#shared-across-processes-users). |
+| `HEXGATE_USAGE_USER_SYNC_AFTER_SECONDS` | As `HEXGATE_USAGE_SYNC_AFTER_SECONDS`, for users (default `60`). |
+| `HEXGATE_USAGE_USER_MAX_STALENESS_SECONDS` | As `HEXGATE_USAGE_MAX_STALENESS_SECONDS`, for users (default `300`). The user trio follows the same ordering rule, on its own. |
 | `HEXGATE_USAGE_USER_CACHE` | How many end users' `user_usage.*` counts one process keeps (default `10000`). Each costs about 118 KB, so the default bounds them at about 1.2 GB; the least recently seen user is dropped first and starts again from zero. Read when a policy first references `user_usage.*`; a value below 1 or not a number logs a warning and uses the default. |
 
 ## Self-hosted platform (control plane)

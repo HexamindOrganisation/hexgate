@@ -7,10 +7,12 @@ stub evaluator rather than an engine.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
 
 import pytest
 
+from hexgate.runtime.agent_usage import UsageScopeKind
 from hexgate.runtime.roles import MAX_EVALUATED_ROLES
 from hexgate.runtime.run_facts import RunFacts
 from hexgate.security.decision import (
@@ -613,3 +615,65 @@ def test_error_payload_withholds_the_run_from_the_model() -> None:
     rendered = repr(payload) + decision.as_error_message()
     assert "run-secret" not in rendered
     assert "4321" not in rendered
+
+
+# ---------------------------------------------------------------------------
+# Usage states, quota scopes and failed constraints
+# ---------------------------------------------------------------------------
+
+
+def test_merged_denials_union_failed_constraints() -> None:
+    evaluate, _ = _engine(
+        {
+            "a": _deny("a", failed_constraints=("user_usage.invocations_1h < 5",)),
+            "b": _deny(
+                "b",
+                failed_constraints=(
+                    "user_usage.invocations_1h < 5",
+                    "agent_usage.invocations_1h < 50",
+                ),
+            ),
+        }
+    )
+
+    verdict, _ = combine_role_verdicts(["a", "b"], evaluate)
+
+    assert verdict.failed_constraints == (
+        "user_usage.invocations_1h < 5",
+        "agent_usage.invocations_1h < 50",
+    )
+
+
+def test_quota_scopes_never_reach_the_model() -> None:
+    plain = _deny_decision()
+    with_usage = dataclasses.replace(
+        plain,
+        quota_scopes=frozenset({"user_usage"}),
+        usage_states={UsageScopeKind.USER: "fresh"},
+    )
+
+    assert with_usage.as_error_payload() == plain.as_error_payload()
+    assert with_usage.as_error_message() == plain.as_error_message()
+
+
+def test_usage_state_is_the_agent_state() -> None:
+    decision = Decision.from_verdict(
+        _deny(),
+        agent_name="a",
+        tool_name="t",
+        usage_states={UsageScopeKind.AGENT: "stale", UsageScopeKind.USER: "fresh"},
+    )
+
+    assert decision.usage_state == "stale"
+    assert (
+        Decision.from_verdict(_deny(), agent_name="a", tool_name="t").usage_state
+        is None
+    )
+
+
+def test_from_verdict_carries_the_quota_scopes() -> None:
+    decision = Decision.from_verdict(
+        _deny(), agent_name="a", tool_name="t", quota_scopes=frozenset({"user_usage"})
+    )
+
+    assert decision.quota_scopes == {"user_usage"}

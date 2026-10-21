@@ -26,6 +26,7 @@ from hexgate.security.constraints import (
     Call,
     Cmp,
     ConstraintParseError,
+    ConstraintsFailedError,
     ConstRef,
     Count,
     Elem,
@@ -38,6 +39,7 @@ from hexgate.security.constraints import (
     evaluate_constraint,
     iter_cmp_operands,
     parse_constraint,
+    usage_roots_of,
 )
 
 
@@ -708,9 +710,10 @@ def test_check_is_implicit_and_first_failure_raises() -> None:
         )
 
 
-def test_check_short_circuits_before_parsing_later_entries() -> None:
-    """A failing early constraint raises before a later (garbage) one is parsed."""
-    with pytest.raises(PolicyDeniedError, match="args.amount <= 50"):
+def test_check_evaluates_entries_after_a_failure() -> None:
+    """Every constraint is evaluated so all failures are reported; a policy's
+    constraints are parsed at load, so a later garbage one surfaces here."""
+    with pytest.raises(ConstraintParseError):
         check_constraints(
             ["args.amount <= 50", "THIS WOULD NOT PARSE"],
             {"amount": 999},
@@ -1014,3 +1017,51 @@ def test_iter_cmp_operands_recurses_through_boolean_composition() -> None:
 
 def test_iter_cmp_operands_yields_nothing_for_a_string_call() -> None:
     assert not list(iter_cmp_operands(parse_constraint('startswith(args.p, "src/")')))
+
+
+# ---------------------------------------------------------------------------
+# Every failure reported; the usage roots a denial names
+# ---------------------------------------------------------------------------
+
+_FAILING = ["args.a < 1", "args.b < 1", "args.c < 1"]
+_OVER = {"a": 5, "b": 5, "c": 5}
+
+
+def test_every_failing_constraint_is_reported() -> None:
+    with pytest.raises(ConstraintsFailedError) as caught:
+        check_constraints(["args.ok < 1", *_FAILING], {"ok": 0, **_OVER}, "refund")
+
+    assert caught.value.failed == tuple(_FAILING)
+
+
+def test_the_message_names_the_first_failure() -> None:
+    with pytest.raises(ConstraintsFailedError) as caught:
+        check_constraints(_FAILING, _OVER, "refund")
+
+    assert str(caught.value) == (
+        'Policy on "refund" denied: constraint failed — args.a < 1'
+    )
+
+
+@pytest.mark.parametrize(
+    ("sources", "roots"),
+    [
+        (["agent_usage.invocations_1h < 5"], {"agent_usage"}),
+        (["user_usage.invocations_1h < 5"], {"user_usage"}),
+        (
+            ["agent_usage.invocations_1h < 5", "user_usage.total_tokens_24h < 9"],
+            {"agent_usage", "user_usage"},
+        ),
+        (['user_usage.invocations_1h < 5 or ctx.plan == "pro"'], {"user_usage"}),
+        (["not (user_usage.invocations_1h >= 5)"], {"user_usage"}),
+        (["count(user_usage.invocations_1h) < 5"], {"user_usage"}),
+        (["every(agent_usage.invocations_1h, . < 5)"], {"agent_usage"}),
+        (["any(user_usage.invocations_1h, . < 5)"], {"user_usage"}),
+        (["args.amount <= 50", "run.tool_calls < 3"], set()),
+        (["THIS WOULD NOT PARSE"], set()),
+    ],
+)
+def test_usage_roots_of_names_the_referenced_roots(
+    sources: list[str], roots: set[str]
+) -> None:
+    assert usage_roots_of(sources) == roots

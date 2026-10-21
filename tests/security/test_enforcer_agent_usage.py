@@ -472,6 +472,17 @@ def test_the_usage_refresh_follows_the_bound_policy() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "context", [None, HexgateContext(user_id=""), HexgateContext(user_id="alice")]
+)
+def test_usage_refreshes_holds_the_agent_refresh(
+    context: HexgateContext | None,
+) -> None:
+    enforcer = _Platform().enforcer(_admission_cap(2))
+
+    assert enforcer.usage_refreshes(context) == (enforcer.usage_refresh(),)
+
+
 def test_an_agent_usage_policy_enables_only_the_agent_scope() -> None:
     """G3: an agent quota never turns on user ledgers or user fetches."""
     platform = _Platform({_INVOCATIONS: 0})

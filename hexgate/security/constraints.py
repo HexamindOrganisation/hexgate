@@ -78,10 +78,10 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any
+from typing import Any, Final
 
 from hexgate.security.errors import PolicyDeniedError
 from hexgate.security.usage_inputs import (
@@ -94,6 +94,15 @@ from hexgate.security.usage_inputs import (
 
 class ConstraintParseError(ValueError):
     """Raised on malformed constraint source — surfaces at policy load."""
+
+
+class ConstraintsFailedError(PolicyDeniedError):
+    """A call failed one or more constraints. ``str()`` names the first, as before;
+    ``failed`` holds every failing constraint's source, in policy order."""
+
+    def __init__(self, message: str, failed: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.failed = failed
 
 
 @dataclass(frozen=True, slots=True)
@@ -591,6 +600,25 @@ def iter_arg_refs_negated(node: Node, negated: bool = False):
         yield from iter_arg_refs_negated(node.inner, not negated)
 
 
+# The cross-run usage roots, the ones a quota denial can name.
+_USAGE_ROOTS: Final = frozenset({AGENT_USAGE_ROOT, USER_USAGE_ROOT})
+
+
+def usage_roots_of(constraints: Iterable[str]) -> frozenset[str]:
+    """The usage roots the given constraint sources reference. A source this SDK
+    can't parse (a bundle built by a newer one) names none."""
+    roots: set[str] = set()
+    for source in constraints:
+        try:
+            node = parse_constraint(source)
+        except ConstraintParseError:
+            continue
+        roots.update(
+            path[0] for path in iter_arg_refs(node) if path and path[0] in _USAGE_ROOTS
+        )
+    return frozenset(roots)
+
+
 LEFT = "left"
 RIGHT = "right"
 
@@ -920,7 +948,7 @@ def check_constraints(
     run: Mapping[str, Any] | None = None,
     usage: UsageInputs = NO_USAGE,
 ) -> None:
-    """Evaluate every constraint; raise on the first failure.
+    """Evaluate every constraint; raise once, naming the first failure.
 
     Caller passes raw source strings (typical YAML path) or pre-parsed
     nodes. Source strings are parsed once per call here for simplicity —
@@ -945,9 +973,15 @@ def check_constraints(
         **usage.namespaces(),
         _CONSTS_KEY: consts or {},
     }
-    for entry in constraints:
-        parsed = parse_constraint(entry) if isinstance(entry, str) else entry
-        if not evaluate_constraint(parsed, context):
-            raise PolicyDeniedError(
-                f'Policy on "{tool_name}" denied: constraint failed — {parsed.source}'
-            )
+    failed = tuple(
+        parsed.source
+        for parsed in (
+            parse_constraint(entry) if isinstance(entry, str) else entry
+            for entry in constraints
+        )
+        if not evaluate_constraint(parsed, context)
+    )
+    if failed:
+        raise ConstraintsFailedError(
+            f'Policy on "{tool_name}" denied: constraint failed — {failed[0]}', failed
+        )
