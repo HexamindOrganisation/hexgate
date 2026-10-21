@@ -25,6 +25,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Final
 
+from hexgate.utils.fingerprint import fingerprint
+
 Clock = Callable[[], float]
 
 logger = logging.getLogger("hexgate.runtime.agent_usage")
@@ -77,8 +79,14 @@ class UsageScope:
         return cls(UsageScopeKind.USER, user_id)
 
     def __str__(self) -> str:
-        # Every usage log line formats a scope through this.
+        # Every usage log line formats a scope through this. A user key is often an
+        # email, so it prints as a fingerprint, never as itself.
+        if self.kind is UsageScopeKind.USER:
+            return f"{self.kind} #{fingerprint(self.key)}"
         return f"{self.kind} {self.key!r}"
+
+    def __repr__(self) -> str:
+        return f"UsageScope({self})"
 
 
 _SECONDS_PER_MINUTE: Final = 60
