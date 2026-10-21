@@ -13,8 +13,8 @@ from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.security.wasm_engine import WasmPolicy
 
 
-def test_no_usage_exposes_an_empty_agent_usage_root() -> None:
-    assert NO_USAGE.namespaces() == {"agent_usage": {}}
+def test_no_usage_exposes_both_roots_empty() -> None:
+    assert NO_USAGE.namespaces() == {"agent_usage": {}, "user_usage": {}}
 
 
 def test_namespaces_copies_the_callers_mapping() -> None:
@@ -24,11 +24,14 @@ def test_namespaces_copies_the_callers_mapping() -> None:
     namespaces["agent_usage"]["invocations_1h"] = 99
 
     assert source == {"invocations_1h": 3}
-    assert UsageInputs(agent_usage=source).namespaces() == {"agent_usage": source}
+    assert UsageInputs(agent_usage=source).namespaces()["agent_usage"] == source
 
 
-def test_user_usage_is_not_exposed_until_its_root_is_registered() -> None:
-    assert "user_usage" not in UsageInputs(user_usage={"x": 1}).namespaces()
+def test_user_usage_is_exposed_under_its_root() -> None:
+    namespaces = UsageInputs(user_usage={"x": 1}).namespaces()
+
+    assert namespaces["user_usage"] == {"x": 1}
+    assert namespaces["agent_usage"] == {}
 
 
 def test_usage_inputs_is_frozen() -> None:
@@ -53,7 +56,9 @@ def test_wasm_input_carries_exactly_the_usage_roots(
         role="default",
         tool="t",
         args={},
-        usage=UsageInputs(agent_usage={"invocations_1h": 1}),
+        usage=UsageInputs(
+            agent_usage={"invocations_1h": 1}, user_usage={"invocations_1h": 2}
+        ),
     )
 
     (input_obj,) = captured
@@ -66,3 +71,4 @@ def test_wasm_input_carries_exactly_the_usage_roots(
         *NO_USAGE.namespaces(),
     }
     assert input_obj["agent_usage"] == {"invocations_1h": 1}
+    assert input_obj["user_usage"] == {"invocations_1h": 2}

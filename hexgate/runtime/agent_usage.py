@@ -5,8 +5,9 @@ Counts what *this process* did for each scope, in time buckets, so a policy can 
 "invocations in the last hour" without a network call. Recorded from ``RunFacts``, so
 each metric is counted on the same line as its ``run.*`` twin.
 
-Each kind is inert until :meth:`UsageLedgers.enable`: a process whose policy references
-no ``agent_usage.*`` path never creates a ledger. User ledgers are bounded by an LRU
+Each kind is inert until :meth:`UsageLedgers.enable`, called only when the policy
+references its root (``agent_usage.*`` or ``user_usage.*``): a process whose policy
+references neither never creates a ledger. User ledgers are bounded by an LRU
 (``HEXGATE_USAGE_USER_CACHE``).
 """
 
@@ -83,7 +84,7 @@ class UsageScope:
 _SECONDS_PER_MINUTE: Final = 60
 _SECONDS_PER_HOUR: Final = 3_600
 _SECONDS_PER_DAY: Final = 86_400
-# The longest window ``agent_usage.*`` may register. A longer one would silently read
+# The longest window a usage path may register. A longer one would silently read
 # a truncated count, so the registry's windows are pinned against this.
 MAX_WINDOW_SECONDS: Final[float] = 30 * _SECONDS_PER_DAY
 # Three tiers, finest first. Fine buckets serve the snapshot cut-off, minutes old at
@@ -135,6 +136,11 @@ AGENT_USAGE_VOCABULARY: Final = (
     f"<metric>_<window>, metrics: {', '.join(sorted(USAGE_METRICS))}; "
     f"windows: {', '.join(USAGE_WINDOWS)}"
 )
+# user_usage.* reads the same metrics over the same windows, for one end user across
+# every agent of the project. One mapping, so the namespace builders below serve both.
+USER_USAGE_PATHS: Final[Mapping[str, UsagePath]] = AGENT_USAGE_PATHS
+KNOWN_USER_USAGE_PATHS: Final[frozenset[str]] = KNOWN_AGENT_USAGE_PATHS
+USER_USAGE_VOCABULARY: Final = AGENT_USAGE_VOCABULARY
 
 USER_CACHE_ENV: Final = "HEXGATE_USAGE_USER_CACHE"
 # End users whose usage one process keeps. Every ledger preallocates its buckets,
@@ -306,7 +312,7 @@ def ledger_namespace(
     *,
     current_run_age: float | None = None,
 ) -> dict[str, int]:
-    """The ``agent_usage`` mapping for ``paths``, from this process's ledger alone.
+    """A usage namespace for ``paths`` (either root), from this process's ledger alone.
 
     One locked ledger read covering every distinct window. Unknown paths raise
     ``KeyError``: callers pass only registered paths.

@@ -26,15 +26,23 @@ from typing import Any
 
 import yaml
 
-from hexgate.runtime.agent_usage import KNOWN_AGENT_USAGE_PATHS, OnUnavailable
+from hexgate.runtime.agent_usage import (
+    KNOWN_AGENT_USAGE_PATHS,
+    KNOWN_USER_USAGE_PATHS,
+    OnUnavailable,
+)
 from hexgate.security.decision import Verdict
 from hexgate.security.signing import SignatureError, verify_bytes
-from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
+from hexgate.security.usage_inputs import (
+    AGENT_USAGE_ROOT,
+    NO_USAGE,
+    USER_USAGE_ROOT,
+    UsageInputs,
+)
 from hexgate.security.wasm_engine import WasmPolicy
 
 _log = logging.getLogger(__name__)
 
-_AGENT_USAGE_KEY = "agent_usage"
 _USAGE_KEY = "usage"
 _ON_UNAVAILABLE_KEY = "on_unavailable"
 
@@ -310,7 +318,7 @@ class PolicyBundle:
         ``default`` role, matching the pydantic engine. ``attributes`` become
         the ``input.ctx`` document the compiled ``ctx.*`` conditions read,
         ``run`` the ``input.run`` document the ``run.*`` ones read, and
-        ``usage`` the usage roots (``input.agent_usage``)."""
+        ``usage`` the usage roots (``input.agent_usage``, ``input.user_usage``)."""
         from hexgate.security.policy import evaluate_tool_call_wasm
         from hexgate.security.policy_set import DEFAULT_ROLE_NAME
 
@@ -348,17 +356,25 @@ class PolicyBundle:
 
     def agent_usage_paths(self) -> frozenset[str]:
         """Read the referenced ``agent_usage.*`` paths from the signed manifest.
-        Absent (a usage-free policy, or an older bundle) reads empty.
+        Absent (a usage-free policy, or an older bundle) reads empty."""
+        return self._manifest_usage_paths(AGENT_USAGE_ROOT, KNOWN_AGENT_USAGE_PATHS)
 
-        Paths this SDK doesn't know (a bundle built by a newer one) are dropped, so
+    def user_usage_paths(self) -> frozenset[str]:
+        """As :meth:`agent_usage_paths`, for ``user_usage.*``. A bundle built before
+        the root existed has no key, so its user constraints fail closed."""
+        return self._manifest_usage_paths(USER_USAGE_ROOT, KNOWN_USER_USAGE_PATHS)
+
+    def _manifest_usage_paths(self, key: str, known: frozenset[str]) -> frozenset[str]:
+        """Paths this SDK doesn't know (a bundle built by a newer one) are dropped, so
         they read as missing: a plain comparison on one denies, a negated one passes."""
-        listed = frozenset(self.manifest.get(_AGENT_USAGE_KEY, ()))
-        unknown = listed - KNOWN_AGENT_USAGE_PATHS
+        listed = frozenset(self.manifest.get(key, ()))
+        unknown = listed - known
         if unknown:
             _log.warning(
-                "bundle references agent_usage.* path(s) %s this SDK does not know; "
+                "bundle references %s.* path(s) %s this SDK does not know; "
                 "they read as missing, so plain comparisons on them deny and negated ones "
                 "(not ...) pass. Upgrade the SDK.",
+                key,
                 sorted(unknown),
             )
         return listed - unknown
@@ -497,9 +513,10 @@ def build_signed_bundle(
     # None when no role configures a guard, so the key is omitted and a guards-free
     # policy's manifest bytes / source_hash stay identical (no bundle drift).
     guard_stance = resolved.guard_stance()
-    # The agent_usage.* paths the enforcer must supply, so it knows to enable the
-    # usage ledgers. Signed, so stripping it can't switch quotas off.
+    # The usage paths the enforcer must supply, per root, so it knows which ledgers
+    # to enable. Signed, so stripping one can't switch a quota off.
     usage_paths = resolved.agent_usage_paths()
+    user_usage_paths = resolved.user_usage_paths()
     # Signed so a caller can't strip a deny and fail open.
     on_unavailable = resolved.usage_on_unavailable()
 
@@ -523,7 +540,9 @@ def build_signed_bundle(
         manifest["guards"] = guard_stance
     # Omitted when empty for the same reason: a usage-free policy's bytes must not move.
     if usage_paths:
-        manifest[_AGENT_USAGE_KEY] = sorted(usage_paths)
+        manifest[AGENT_USAGE_ROOT] = sorted(usage_paths)
+    if user_usage_paths:
+        manifest[USER_USAGE_ROOT] = sorted(user_usage_paths)
     # Omitted at the default, so a usage-free policy's manifest bytes don't move.
     if on_unavailable is not OnUnavailable.ALLOW:
         manifest[_USAGE_KEY] = {_ON_UNAVAILABLE_KEY: on_unavailable.value}
