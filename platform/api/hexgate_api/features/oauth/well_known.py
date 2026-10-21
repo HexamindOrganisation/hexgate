@@ -31,8 +31,11 @@ async def authorization_server_metadata() -> dict[str, object]:
         "revocation_endpoint": f"{issuer}/v1/oauth/revoke",
         "jwks_uri": f"{issuer}{JWKS_PATH}",
         "response_types_supported": ["code"],
+        # Absent, RFC 8414 means ["authorization_code", "implicit"].
+        "grant_types_supported": ["authorization_code", "refresh_token"],
         # Public clients only: absent, RFC 8414 means client_secret_basic.
         "token_endpoint_auth_methods_supported": ["none"],
+        "revocation_endpoint_auth_methods_supported": ["none"],
         "code_challenge_methods_supported": ["S256"],
         "scopes_supported": sorted(OAUTH_SCOPES),
         "client_id_metadata_document_supported": True,
