@@ -1,4 +1,5 @@
-"""Environment configuration, read once at start-up (prefix ``HEXGATE_MCP_``)."""
+"""Environment configuration, read once at start-up (prefix ``HEXGATE_MCP_``; the issuer falls
+back to the API's ``HEXGATE_PUBLIC_URL``)."""
 
 import os
 from dataclasses import dataclass
@@ -9,16 +10,26 @@ class Settings:
     # Where the server calls the API, and fetches its JWKS: the private network
     # in deploy, so neither request leaves it.
     api_url: str
-    # The API's public URL, the only accepted token `iss`.
+    # The API's public URL, the only accepted token `iss`. It must equal the
+    # API's metadata `issuer` character for character.
     issuer: str
     # The URL clients connect to, the only accepted token `aud`.
     resource_url: str
 
     @classmethod
     def from_env(cls) -> "Settings":
+        issuer = os.environ.get(
+            "HEXGATE_MCP_ISSUER",
+            os.environ.get("HEXGATE_PUBLIC_URL", "http://localhost:8000"),
+        )
+        if issuer.endswith("/"):
+            raise ValueError(
+                f"issuer={issuer!r} ends with '/' — set HEXGATE_MCP_ISSUER "
+                "(or HEXGATE_PUBLIC_URL) without the trailing slash."
+            )
         return cls(
             api_url=os.environ.get("HEXGATE_MCP_API_URL", "http://localhost:8000"),
-            issuer=os.environ.get("HEXGATE_MCP_ISSUER", "http://localhost:8000"),
+            issuer=issuer,
             resource_url=os.environ.get(
                 "HEXGATE_MCP_RESOURCE_URL", "http://localhost:8080/mcp"
             ),
