@@ -618,7 +618,8 @@ from hexgate.security import AgentNotAdmittedError, UsageScopeKind
 try:
     result = await agent.ainvoke(prompt)
 except AgentNotAdmittedError as exc:
-    if UsageScopeKind.USER in exc.quota_scopes:
+    user_unread = exc.decision.usage_states.get(UsageScopeKind.USER) == "unavailable"
+    if UsageScopeKind.USER in exc.quota_scopes and not user_unread:
         return {"status": 429, "message": "You've hit your usage limit. Try again later."}
     logger.error("run refused: %s", exc.decision.reason)  # page whoever owns the agent
     raise
@@ -630,7 +631,8 @@ except AgentNotAdmittedError as exc:
 - **Every failing constraint counts.** Both engines report each one, so a run over
   both caps names both scopes.
 - **An unavailable value counts too.** A cap that fails because its value is missing
-  under `deny` names its scope. Read `decision.usage_states` to tell the two apart.
+  under `deny` names its scope, so the snippet checks `usage_states` first: a platform
+  outage pages ops rather than telling the user they hit a limit.
 - **The model is told nothing** about either.
 
 ### How it counts
