@@ -12,7 +12,6 @@ no ``agent_usage.*`` path never creates a ledger. User ledgers are bounded by an
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import threading
@@ -25,18 +24,11 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Final
 
+from hexgate.utils.fingerprint import fingerprint
+
 Clock = Callable[[], float]
 
 logger = logging.getLogger("hexgate.runtime.agent_usage")
-
-_FINGERPRINT_LENGTH: Final = 12
-_FINGERPRINT_ENCODING: Final = "utf-8"
-
-
-def _fingerprint(key: str) -> str:
-    # surrogatepass: a lone surrogate must print, not raise inside a log call.
-    digest = hashlib.sha256(key.encode(_FINGERPRINT_ENCODING, "surrogatepass"))
-    return digest.hexdigest()[:_FINGERPRINT_LENGTH]
 
 
 class UsageMetric(StrEnum):
@@ -89,7 +81,7 @@ class UsageScope:
         # Every usage log line formats a scope through this. A user key is often an
         # email, so it prints as a fingerprint, never as itself.
         if self.kind is UsageScopeKind.USER:
-            return f"{self.kind} #{_fingerprint(self.key)}"
+            return f"{self.kind} #{fingerprint(self.key)}"
         return f"{self.kind} {self.key!r}"
 
     def __repr__(self) -> str:
