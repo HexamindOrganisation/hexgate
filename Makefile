@@ -74,19 +74,19 @@ coverage-html: ## Coverage with a browsable HTML report under htmlcov/
 
 .PHONY: lint
 lint: ## Static check via ruff
-	$(UV) ruff check hexgate tests evals platform/scripts
+	$(UV) ruff check hexgate tests evals platform/scripts platform/mcp
 
 .PHONY: lint-fix
 lint-fix: ## Apply ruff autofixes
-	$(UV) ruff check --fix hexgate tests evals platform/scripts
+	$(UV) ruff check --fix hexgate tests evals platform/scripts platform/mcp
 
 .PHONY: fmt
-fmt: ## Format with ruff (SDK + evals + platform/api + platform/scripts)
-	$(UV) ruff format hexgate tests evals platform/api platform/scripts
+fmt: ## Format with ruff (SDK + evals + platform/api + platform/scripts + platform/mcp)
+	$(UV) ruff format hexgate tests evals platform/api platform/scripts platform/mcp
 
 .PHONY: fmt-check
 fmt-check: ## Check formatting without writing changes
-	$(UV) ruff format --check hexgate tests evals platform/api platform/scripts
+	$(UV) ruff format --check hexgate tests evals platform/api platform/scripts platform/mcp
 
 .PHONY: check
 check: lint fmt-check test ## Python CI parity: lint + fmt-check + test (no coverage overhead)
