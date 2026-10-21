@@ -47,9 +47,9 @@ and prefer them over this file if they disagree:
    ```bash
    uv run hexgate policy test <file> --role billing --tool refund_order \
        --args '{"amount": 500, "currency": "USD"}' [--attributes '{"department": "finance"}'] \
-       [--agent-usage '{"invocations_1h": 100}']
+       [--agent-usage '{"invocations_1h": 100}'] [--user-usage '{"invocations_1h": 50}']
    ```
-   Test a usage cap at `limit - 1` and at `limit`.
+   Test a usage cap at `limit - 1` and at `limit`, with `--agent-usage` for `agent_usage.*` and `--user-usage` for `user_usage.*` (a path left out reads zero).
    Also use `--roles a,b` to check a multi-role caller, where the most permissive role wins.
    Pass `--engine wasm` on every `policy test` run, since that engine matches production. If it fails because OPA itself is unusable (e.g. `opa not found`, `HEXGATE_OPA_BIN points to…`, `below the tested floor`), drop the flag and say in the report that the production engine went unchecked, and why; any other wasm error is a problem in the policy to fix. Every result must match the table. When one doesn't, fix the policy, not the table, unless the table was wrong.
 6. **Report.** Give the YAML, the decision table with each case's actual CLI result, and any assumptions or residual risks, e.g. "egress on HTTPS is host-level only".
