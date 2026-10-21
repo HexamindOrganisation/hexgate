@@ -8,6 +8,7 @@ semantics the ``agent_usage.*`` namespace and PR 6 build on.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections.abc import Iterable, Mapping
@@ -341,6 +342,25 @@ def test_usage_scope_is_a_value_and_prints_its_kind() -> None:
     assert UsageScope.agent("b") == UsageScope(UsageScopeKind.AGENT, "b")
     assert hash(UsageScope.agent("b")) == hash(UsageScope(UsageScopeKind.AGENT, "b"))
     assert str(UsageScope.agent("b")) == "agent 'b'"
+
+
+def test_a_user_scope_prints_a_fingerprint_not_its_key() -> None:
+    """G10: a user key is often an email, and every usage log line prints a scope."""
+    scope = UsageScope.user("alice@example.com")
+
+    assert re.fullmatch(r"user #[0-9a-f]{12}", str(scope))
+    assert "alice" not in str(scope)
+    assert "alice" not in repr(scope)
+    assert "alice" not in f"{scope!r}"
+
+
+def test_one_user_prints_one_fingerprint() -> None:
+    assert str(UsageScope.user("alice")) == str(UsageScope.user("alice"))
+    assert str(UsageScope.user("alice")) != str(UsageScope.user("bob"))
+
+
+def test_a_lone_surrogate_user_prints() -> None:
+    assert str(UsageScope.user("\ud800")).startswith("user #")
 
 
 def _user_ledgers(capacity: int = 2) -> UsageLedgers:
