@@ -73,6 +73,11 @@ _REJECTED_STATUSES: Final = frozenset({401, 403, _NOT_FOUND})
 # A platform without the user read: older releases' GET-only SPA catch-all
 # answers a POST to an unknown /v1 path with 405, not 404.
 _ROUTE_MISSING_STATUSES: Final = frozenset({_NOT_FOUND, _METHOD_NOT_ALLOWED})
+# Every ID the platform would refuse is caught before sending, so a 422 refuses
+# the request's shape (paths, body fields), which every user shares.
+_KIND_REJECTED_STATUSES: Final = (
+    _REJECTED_STATUSES | _ROUTE_MISSING_STATUSES | {_UNPROCESSABLE}
+)
 REJECTED_RETRY_SECONDS: Final[float] = 300.0
 
 # User log lines carry the fingerprinted scope, the exception class and the
@@ -80,9 +85,6 @@ REJECTED_RETRY_SECONDS: Final[float] = 300.0
 _KIND_PAUSED_MESSAGE: Final = (
     "usage refresh for %s failed (%s, status %s); "
     "pausing every %s refresh for %.0f s, using last-good"
-)
-_SCOPE_REFUSED_MESSAGE: Final = (
-    "usage read for %s refused (status %s); not retrying it for a while"
 )
 _ROUTE_MISSING_MESSAGE: Final = (
     "this platform has no %s usage read; user_usage.* reads local usage only"
@@ -321,10 +323,10 @@ class PlatformUsageSource:
     Each kind has its own thresholds. An agent's failed fetch is not retried within
     ``min_refresh`` unless the path set grew, and a 401, 403 or 404 is not retried
     within ``REJECTED_RETRY_SECONDS`` at all. Users come and go, so their states sit
-    in an LRU, and one user's failure pauses every user's fetch (a 422 rejects that
-    user only). A user ID the platform would refuse is never sent. A scope whose
-    kind has no spec never fetches, so it reads ``UNAVAILABLE``. Log lines print a
-    user scope as a fingerprint, and never a user failure's message.
+    in an LRU, and one user's failure pauses every user's fetch. A user ID the
+    platform would refuse is never sent. A scope whose kind has no spec never
+    fetches, so it reads ``UNAVAILABLE``. Log lines print a user scope as a
+    fingerprint, and never a user failure's message.
     """
 
     def __init__(
@@ -520,7 +522,7 @@ class PlatformUsageSource:
         except Exception as exc:  # noqa: BLE001 — fail-soft: keep last-good
             status = exc.status if isinstance(exc, HexgateError) else None
             if spec.shared_backoff:
-                self._pause_kind(scope, state, spec.settings, started, exc, status)
+                self._pause_kind(scope, spec.settings, started, exc, status)
             else:
                 self._back_off_scope(scope, state, started, exc, status)
             return
@@ -551,7 +553,6 @@ class PlatformUsageSource:
     def _pause_kind(
         self,
         scope: UsageScope,
-        state: _ScopeState,
         settings: UsageRefreshSettings,
         started: float,
         exc: Exception,
@@ -559,15 +560,9 @@ class PlatformUsageSource:
     ) -> None:
         """Back off a kind whose scopes are mostly cold. Logs the exception class
         and status, never its message: that may carry the key."""
-        if status == _UNPROCESSABLE:
-            # The platform refused this key, not the kind.
-            with self._state_lock:
-                state.rejected_until = started + REJECTED_RETRY_SECONDS
-            logger.warning(_SCOPE_REFUSED_MESSAGE, scope, status)
-            return
         seconds = (
             REJECTED_RETRY_SECONDS
-            if status in _REJECTED_STATUSES | _ROUTE_MISSING_STATUSES
+            if status in _KIND_REJECTED_STATUSES
             else settings.min_refresh_seconds
         )
         with self._state_lock:

@@ -967,12 +967,10 @@ def test_reading_a_user_keeps_it_from_eviction() -> None:
     assert _read_user(rig, "b").state is UsageState.UNAVAILABLE
 
 
-def test_eviction_drops_a_users_rejection_and_throttle() -> None:
+def test_eviction_drops_everything_known_about_a_user() -> None:
     """F5: the side state goes with the snapshot."""
     rig = _user_rig()
-    rig.user_fetcher.error = HexgateError("refused", status=422)
     rig.source.refresh(_user("a"), _ONE_PATH)
-    rig.user_fetcher.error = None
     rig.source.refresh(_user("a"), _ONE_PATH)
     assert len(rig.user_fetcher.calls) == 1
 
@@ -1053,8 +1051,8 @@ async def test_a_paused_cold_user_never_leaves_the_loop(
     assert len(rig.user_fetcher.calls) == 1
 
 
-@pytest.mark.parametrize("status", [401, 403])
-def test_a_401_or_403_pauses_every_user_for_the_rejection_window(
+@pytest.mark.parametrize("status", [401, 403, 422])
+def test_a_401_403_or_422_pauses_every_user_for_the_rejection_window(
     status: int,
 ) -> None:
     rig = _user_rig()
@@ -1089,23 +1087,6 @@ def test_a_404_or_405_on_users_reports_a_missing_route_once(
     assert [call[0] for call in rig.user_fetcher.calls] == ["a", "c"]
     assert len(caplog.records) == 1
     assert "no user usage read" in caplog.records[0].getMessage()
-
-
-def test_a_422_rejects_only_that_user() -> None:
-    rig = _user_rig()
-    rig.user_fetcher.error = HexgateError("refused", status=422)
-    rig.source.refresh(_user("a"), _ONE_PATH)
-    rig.user_fetcher.error = None
-
-    rig.source.refresh(_user("b"), _ONE_PATH)
-    rig.clock.now += REJECTED_RETRY_SECONDS - 1
-    rig.source.refresh(_user("a"), _ONE_PATH)
-
-    assert [call[0] for call in rig.user_fetcher.calls] == ["a", "b"]
-
-    rig.clock.now += 1
-    rig.source.refresh(_user("a"), _ONE_PATH)
-    assert [call[0] for call in rig.user_fetcher.calls] == ["a", "b", "a"]
 
 
 def test_a_content_error_pauses_users() -> None:
