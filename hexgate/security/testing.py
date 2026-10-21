@@ -40,8 +40,10 @@ from uuid import uuid4
 from hexgate.runtime.agent_usage import (
     AGENT_USAGE_VOCABULARY,
     KNOWN_AGENT_USAGE_PATHS,
+    KNOWN_USER_USAGE_PATHS,
     TOTAL_TOKENS,
     USAGE_WINDOWS,
+    USER_USAGE_VOCABULARY,
     UsageMetric,
 )
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS, RUN_PATH_TYPES, RunFacts
@@ -105,22 +107,26 @@ def agent_usage_namespace(**paths: int) -> dict[str, int]:
     Supplied values win over both. Raises on an unregistered name or a value that
     is not a non-negative int, for the same reason :func:`run_namespace` does.
     """
-    return _usage_namespace(AGENT_USAGE_ROOT, paths)
+    return _usage_namespace(
+        AGENT_USAGE_ROOT, paths, KNOWN_AGENT_USAGE_PATHS, AGENT_USAGE_VOCABULARY
+    )
 
 
 def user_usage_namespace(**paths: int) -> dict[str, int]:
     """A ``user_usage`` namespace, built as :func:`agent_usage_namespace` is: one end
     user's usage across agents, with every unset path reading zero."""
-    return _usage_namespace(USER_USAGE_ROOT, paths)
+    return _usage_namespace(
+        USER_USAGE_ROOT, paths, KNOWN_USER_USAGE_PATHS, USER_USAGE_VOCABULARY
+    )
 
 
-def _usage_namespace(root: str, paths: Mapping[str, int]) -> dict[str, int]:
-    # Both roots share one vocabulary, so the agent registry validates either.
-    unknown = sorted(set(paths) - KNOWN_AGENT_USAGE_PATHS)
+def _usage_namespace(
+    root: str, paths: Mapping[str, int], known: frozenset[str], vocabulary: str
+) -> dict[str, int]:
+    unknown = sorted(set(paths) - known)
     if unknown:
         raise ValueError(
-            f"unknown {root}.* path(s) {unknown} "
-            f"(this build knows: {AGENT_USAGE_VOCABULARY})"
+            f"unknown {root}.* path(s) {unknown} (this build knows: {vocabulary})"
         )
     for name, value in paths.items():
         if not _matches_run_type(value, int):
@@ -129,7 +135,7 @@ def _usage_namespace(root: str, paths: Mapping[str, int]) -> dict[str, int]:
             )
         if value < _MIN_USAGE_COUNT:
             raise ValueError(f"{root}.{name} is a count, got {value}")
-    namespace = {**dict.fromkeys(KNOWN_AGENT_USAGE_PATHS, 0), **paths}
+    namespace = {**dict.fromkeys(known, 0), **paths}
     for metric in UsageMetric:
         _carry_into_wider_windows(namespace, paths, metric)
     for window in _NARROWEST_FIRST:
