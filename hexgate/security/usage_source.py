@@ -7,7 +7,7 @@ namespace a decision reads. Shared per ``(api_key, base_url)`` like
 :class:`~hexgate.security.bans.PlatformBanSource`, and fail-soft: a platform blip
 degrades to ledger-only values by default, never to an error. User states are held
 in an LRU (``HEXGATE_USAGE_USER_CACHE``) and back off together, and log lines print a
-user as a fingerprint. Inert until the run boundary calls it.
+user as a fingerprint.
 """
 
 from __future__ import annotations
