@@ -27,7 +27,10 @@ dev = [
     "respx>=0.22",
     # Tests generate Ed25519 keys directly; transitive via pyjwt[crypto].
     "cryptography>=43",
-    "ruff>=0.8",
+    # Exactly the ruff the root uv.lock locks: `make lint` and `make fmt-check`
+    # run the root's over platform/mcp, `make mcp-check` runs this one, and
+    # two versions would one day disagree on the same file.
+    "ruff==0.15.12",
 ]
 
 [tool.ruff.lint]
