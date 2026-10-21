@@ -1071,11 +1071,13 @@ def test_a_401_or_403_pauses_every_user_for_the_rejection_window(
     assert len(rig.user_fetcher.calls) == 2
 
 
-def test_a_404_on_users_reports_a_missing_route_once(
-    caplog: pytest.LogCaptureFixture,
+@pytest.mark.parametrize("status", [404, 405])
+def test_a_404_or_405_on_users_reports_a_missing_route_once(
+    status: int, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """405: an older platform's GET-only SPA catch-all answers the POST."""
     rig = _user_rig()
-    rig.user_fetcher.error = HexgateError("not found", status=404)
+    rig.user_fetcher.error = HexgateError("not found", status=status)
 
     with caplog.at_level(logging.WARNING, logger=usage_source.logger.name):
         rig.source.refresh(_user("a"), _ONE_PATH)
@@ -1230,12 +1232,13 @@ def _fail_in_transport(rig: _Rig) -> None:
         (_fail_with_status(503), _ALICE),
         (_fail_with_status(401), _ALICE),
         (_fail_with_status(404), _ALICE),
+        (_fail_with_status(405), _ALICE),
         (_fail_with_status(422), _ALICE),
         (_fail_with_body, _ALICE),
         (_fail_in_transport, _ALICE),
         (lambda _rig: None, _ALICE + "x" * USER_ID_MAX_LENGTH),
     ],
-    ids=["503", "401", "404", "422", "content", "transport", "unreadable"],
+    ids=["503", "401", "404", "405", "422", "content", "transport", "unreadable"],
 )
 def test_no_log_line_carries_a_user_id(
     arrange: Callable[[_Rig], None], key: str, caplog: pytest.LogCaptureFixture

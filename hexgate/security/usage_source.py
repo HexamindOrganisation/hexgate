@@ -66,9 +66,13 @@ _USER_ID_ENCODING: Final = "utf-8"
 
 _VALUES_KEY: Final = "values"
 _NOT_FOUND: Final = 404
+_METHOD_NOT_ALLOWED: Final = 405
 _UNPROCESSABLE: Final = 422
 # Answers a retry won't change soon: unregistered scope, bad or unscoped key.
 _REJECTED_STATUSES: Final = frozenset({401, 403, _NOT_FOUND})
+# A platform without the user read: older releases' GET-only SPA catch-all
+# answers a POST to an unknown /v1 path with 405, not 404.
+_ROUTE_MISSING_STATUSES: Final = frozenset({_NOT_FOUND, _METHOD_NOT_ALLOWED})
 REJECTED_RETRY_SECONDS: Final[float] = 300.0
 
 # User log lines carry the fingerprinted scope, the exception class and the
@@ -563,7 +567,7 @@ class PlatformUsageSource:
             return
         seconds = (
             REJECTED_RETRY_SECONDS
-            if status in _REJECTED_STATUSES
+            if status in _REJECTED_STATUSES | _ROUTE_MISSING_STATUSES
             else settings.min_refresh_seconds
         )
         with self._state_lock:
@@ -571,7 +575,7 @@ class PlatformUsageSource:
             self._paused_until[scope.kind] = max(
                 self._paused_until.get(scope.kind, float("-inf")), started + seconds
             )
-        if status == _NOT_FOUND:
+        if status in _ROUTE_MISSING_STATUSES:
             self._report_once(
                 (scope.kind, _Notice.ROUTE_MISSING), _ROUTE_MISSING_MESSAGE, scope.kind
             )
