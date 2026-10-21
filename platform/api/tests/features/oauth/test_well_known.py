@@ -64,6 +64,7 @@ def test_authorization_server_metadata_happy_path(client: TestClient) -> None:
         "revocation_endpoint": f"{PUBLIC_URL}/v1/oauth/revoke",
         "jwks_uri": f"{PUBLIC_URL}/.well-known/jwks.json",
         "response_types_supported": ["code"],
+        "response_modes_supported": ["query"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "token_endpoint_auth_methods_supported": ["none"],
         "revocation_endpoint_auth_methods_supported": ["none"],
