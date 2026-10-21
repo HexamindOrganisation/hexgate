@@ -9,6 +9,16 @@
             "command": "bash .claude/hooks/format-on-edit.sh"
           }
         ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/require-review.sh --on-simplify",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PreToolUse": [
@@ -20,6 +30,17 @@
             "command": "bash .claude/hooks/require-review.sh",
             "timeout": 30,
             "statusMessage": "Checking review freshness..."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/require-review.sh --on-simplify",
+            "timeout": 10
           }
         ]
       }

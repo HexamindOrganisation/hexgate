@@ -84,8 +84,32 @@ fingerprint() {
   rm -f "$list"
 }
 
+# /simplify runs before /review-grounded, so a review never certifies code whose
+# structure was never looked at. /simplify is a built-in skill with no certify
+# step of its own, so this mode is wired as a hook instead: PostToolUse on Skill
+# (Claude invoking it) and UserPromptSubmit (the user typing it). Both fire when
+# the skill starts, not when it ends — enough for a reminder against forgetting.
+# The marker records the branch, not a fingerprint: the review's own fixes change
+# the tree after /simplify ran, and that must not demand a second /simplify.
+current_branch() { git symbolic-ref --quiet --short HEAD 2>/dev/null || git rev-parse HEAD; }
+
+if [ "${1:-}" = "--on-simplify" ]; then
+  input=$(cat)
+  skill=$(printf '%s' "$input" | jq -r '.tool_input.skill // ""')
+  prompt=$(printf '%s' "$input" | jq -r '.prompt // ""')
+  case "$skill|$prompt" in
+    "simplify|"*|*"|/simplify"|*"|/simplify "*|*"|/simplify	"*) ;;
+    *) exit 0 ;;
+  esac
+  git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+  current_branch > "$git_dir/simplify-marker"
+  exit 0
+fi
+
 if [ "${1:-}" = "--certify" ]; then
-  git rev-parse --git-dir >/dev/null 2>&1 || die "require-review: not a git repository."
+  git_dir=$(git rev-parse --git-dir 2>/dev/null) || die "require-review: not a git repository."
+  [ "$(cat "$git_dir/simplify-marker" 2>/dev/null)" = "$(current_branch)" ] \
+    || die "require-review: /simplify has not run on $(current_branch); run it before /review-grounded, then review and certify again."
   fp=$(fingerprint) || die "require-review: could not fingerprint the tree."
   [ -n "$fp" ] || die "require-review: empty fingerprint; refusing to write a marker that would match anything."
   printf '%s\n' "$fp" > "$(git rev-parse --git-dir)/review-grounded-marker"
@@ -116,5 +140,5 @@ current=$(fingerprint) || die "require-review: could not fingerprint the tree."
 [ "$(cat "$git_dir/review-grounded-marker" 2>/dev/null)" = "$current" ] && exit 0
 
 die "BLOCKED: the content about to ship has not been through /review-grounded (or has changed since)." \
-    "Run /review-grounded over the current diff, fix what it confirms, then certify." \
+    "Run /simplify, then /review-grounded over the current diff, fix what it confirms, then certify." \
     "If this genuinely needs no review, START the command with NO_REVIEW=1."
