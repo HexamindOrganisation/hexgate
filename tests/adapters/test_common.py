@@ -600,3 +600,32 @@ def test_the_paths_a_policy_refresh_adds_are_refreshed_per_scope() -> None:
     prepare_run(binding.refresh, None, context, binding=binding)  # type: ignore[arg-type]
 
     assert source.calls == [(_USAGE_SCOPE, _USAGE_PATHS), (_USER_SCOPE, _USAGE_PATHS)]
+
+
+def _both_added(source: _UsageSource) -> _ScopedBinding:
+    return _ScopedBinding(_context(), (), after=(_usage(source), _user_usage(source)))
+
+
+async def test_aprepare_run_refreshes_the_added_scopes_concurrently() -> None:
+    source = _UsageSource(_barrier(2))
+    binding = _both_added(source)
+
+    async def refresh_policy() -> None:
+        binding.refresh()
+
+    await aprepare_run(refresh_policy(), None, binding._context, binding=binding)  # type: ignore[arg-type]
+
+    assert sorted(source.calls, key=str) == sorted(
+        [(_USAGE_SCOPE, _USAGE_PATHS), (_USER_SCOPE, _USAGE_PATHS)], key=str
+    )
+
+
+def test_prepare_run_refreshes_the_added_scopes_concurrently() -> None:
+    source = _UsageSource(_barrier(2))
+    binding = _both_added(source)
+
+    prepare_run(binding.refresh, None, binding._context, binding=binding)  # type: ignore[arg-type]
+
+    assert sorted(source.calls, key=str) == sorted(
+        [(_USAGE_SCOPE, _USAGE_PATHS), (_USER_SCOPE, _USAGE_PATHS)], key=str
+    )

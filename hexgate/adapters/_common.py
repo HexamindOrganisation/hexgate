@@ -100,14 +100,16 @@ async def aprepare_run(
     stays with the caller, after this returns, so it reads the refreshed policy.
 
     The concurrent usage refreshes ask for the pre-refresh policy's paths (02 §5.5
-    Rule 2); paths the policy refresh adds are refreshed once it returns."""
+    Rule 2); paths the policy refresh adds are refreshed concurrently once it
+    returns."""
     usages = _usage_refreshes_of(binding, context)
     if ban_gate is None and not usages:
         await refresh_policy
     else:
         await _aprefetch_alongside(refresh_policy, ban_gate, context, usages)
-    for added in _usage_added_by_refresh(binding, context, usages):
-        await _arefresh_usage(added)
+    added = _usage_added_by_refresh(binding, context, usages)
+    if added:
+        await asyncio.gather(*(_arefresh_usage(usage) for usage in added))
 
 
 def prepare_run(
@@ -124,8 +126,7 @@ def prepare_run(
         refresh_policy()
     else:
         _prefetch_alongside(refresh_policy, ban_gate, context, usages)
-    for added in _usage_added_by_refresh(binding, context, usages):
-        _refresh_usage(added)
+    _refresh_on_workers(_usage_added_by_refresh(binding, context, usages))
 
 
 async def _aprefetch_alongside(
@@ -174,6 +175,22 @@ def _prefetch_alongside(
         pool.shutdown(wait=False, cancel_futures=True)
     if ban_gate is not None:
         ban_gate.enforce(bans, context)
+
+
+def _refresh_on_workers(usages: tuple[UsageRefresh, ...]) -> None:
+    """One worker per refresh, so no scope waits behind another's."""
+    if not usages:
+        return
+    pool = ThreadPoolExecutor(max_workers=len(usages))
+    try:
+        pending = [
+            pool.submit(contextvars.copy_context().run, _refresh_usage, usage)
+            for usage in usages
+        ]
+        for job in pending:
+            job.result()
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def _usage_refreshes_of(
