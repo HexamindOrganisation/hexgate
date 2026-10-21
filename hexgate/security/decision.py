@@ -351,10 +351,10 @@ class Decision:
     # is absent when the policy references none of its paths. Audit- and app-only,
     # absent from as_error_payload like run.
     usage_states: Mapping[UsageScopeKind, str] = _NO_USAGE_STATES
-    # The usage roots ("agent_usage", "user_usage") the failing constraints
-    # reference; empty unless a usage constraint failed. For the app, to tell a
-    # user over quota from an agent over quota; never for the model.
-    quota_scopes: frozenset[str] = frozenset()
+    # The usage scope kinds whose roots (agent_usage, user_usage) the failing
+    # constraints reference; empty unless a usage constraint failed. For the app, to
+    # tell a user over quota from an agent over quota; never for the model.
+    quota_scopes: frozenset[UsageScopeKind] = frozenset()
 
     @classmethod
     def from_verdict(
@@ -369,7 +369,7 @@ class Decision:
         attributes: dict[str, Any] | None = None,
         run: RunAttribution = DETACHED_RUN,
         usage_states: Mapping[UsageScopeKind, str] = _NO_USAGE_STATES,
-        quota_scopes: frozenset[str] = frozenset(),
+        quota_scopes: frozenset[UsageScopeKind] = frozenset(),
     ) -> "Decision":
         """Lift an engine :class:`Verdict` into a host-facing decision, stamping
         on the context the engine doesn't know."""

@@ -648,7 +648,7 @@ def test_quota_scopes_never_reach_the_model() -> None:
     plain = _deny_decision()
     with_usage = dataclasses.replace(
         plain,
-        quota_scopes=frozenset({"user_usage"}),
+        quota_scopes=frozenset({UsageScopeKind.USER}),
         usage_states={UsageScopeKind.USER: "fresh"},
     )
 
@@ -673,7 +673,10 @@ def test_usage_state_is_the_agent_state() -> None:
 
 def test_from_verdict_carries_the_quota_scopes() -> None:
     decision = Decision.from_verdict(
-        _deny(), agent_name="a", tool_name="t", quota_scopes=frozenset({"user_usage"})
+        _deny(),
+        agent_name="a",
+        tool_name="t",
+        quota_scopes=frozenset({UsageScopeKind.USER}),
     )
 
-    assert decision.quota_scopes == {"user_usage"}
+    assert decision.quota_scopes == {UsageScopeKind.USER}

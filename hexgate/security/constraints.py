@@ -81,12 +81,14 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Final
+from typing import Any
 
+from hexgate.runtime.agent_usage import UsageScopeKind
 from hexgate.security.errors import PolicyDeniedError
 from hexgate.security.usage_inputs import (
     AGENT_USAGE_ROOT,
     NO_USAGE,
+    USAGE_SCOPE_KIND_BY_ROOT,
     USER_USAGE_ROOT,
     UsageInputs,
 )
@@ -600,23 +602,21 @@ def iter_arg_refs_negated(node: Node, negated: bool = False):
         yield from iter_arg_refs_negated(node.inner, not negated)
 
 
-# The cross-run usage roots, the ones a quota denial can name.
-_USAGE_ROOTS: Final = frozenset({AGENT_USAGE_ROOT, USER_USAGE_ROOT})
-
-
-def usage_roots_of(constraints: Iterable[str]) -> frozenset[str]:
-    """The usage roots the given constraint sources reference. A source this SDK
-    can't parse (a bundle built by a newer one) names none."""
-    roots: set[str] = set()
+def usage_scope_kinds_of(constraints: Iterable[str]) -> frozenset[UsageScopeKind]:
+    """The usage scope kinds whose roots the given constraint sources reference. A
+    source this SDK can't parse (a bundle built by a newer one) names none."""
+    kinds: set[UsageScopeKind] = set()
     for source in constraints:
         try:
             node = parse_constraint(source)
         except ConstraintParseError:
             continue
-        roots.update(
-            path[0] for path in iter_arg_refs(node) if path and path[0] in _USAGE_ROOTS
+        kinds.update(
+            USAGE_SCOPE_KIND_BY_ROOT[path[0]]
+            for path in iter_arg_refs(node)
+            if path and path[0] in USAGE_SCOPE_KIND_BY_ROOT
         )
-    return frozenset(roots)
+    return frozenset(kinds)
 
 
 LEFT = "left"

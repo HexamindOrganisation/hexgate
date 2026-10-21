@@ -32,7 +32,7 @@ from hexgate.runtime.agent_usage import (
 from hexgate.runtime.context import get_current_context
 from hexgate.runtime.roles import resolve_role_set
 from hexgate.runtime.run_facts import get_run_facts
-from hexgate.security.constraints import usage_roots_of
+from hexgate.security.constraints import usage_scope_kinds_of
 from hexgate.security.decision import (
     Decision,
     PolicyEngine,
@@ -351,7 +351,7 @@ class PolicyEnforcer:
             # record and the decision must not disagree about the run.
             run=RunAttribution.from_namespace(run_snapshot),
             usage_states=_states_of(agent_reading, user_reading),
-            quota_scopes=usage_roots_of(verdict.failed_constraints),
+            quota_scopes=usage_scope_kinds_of(verdict.failed_constraints),
         )
 
         self.record(

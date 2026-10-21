@@ -40,8 +40,9 @@ R-USAGE-001 with a second scope kind, and adds only what a user key needs:
   refresh; that only ages its snapshot until the next run boundary fetches it.
 - Each decision MUST carry its per-scope states (`Decision.usage_states`;
   `sec_ai.usage_state` for the agent, `sec_ai.user_usage_state` for the user). A denial
-  MUST expose `quota_scopes`, the usage roots its failing constraints reference, on the
-  `Decision` and on `AgentNotAdmittedError`. Neither MAY reach the model's error payload.
+  MUST expose `quota_scopes`, the `UsageScopeKind`s whose roots its failing constraints
+  reference (the same keys as `usage_states`), on the `Decision` and on
+  `AgentNotAdmittedError`. Neither MAY reach the model's error payload.
 - Both engines MUST report every failing constraint (`Verdict.failed_constraints`), so
   `quota_scopes` doesn't depend on which engine decided. It MUST be derived from
   constraint sources, never parsed out of `reason`.

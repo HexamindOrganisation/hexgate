@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import pytest
 
+from hexgate.runtime.agent_usage import UsageScopeKind
 from hexgate.security import PolicyDeniedError
 from hexgate.security.constraints import (
     And,
@@ -39,7 +40,7 @@ from hexgate.security.constraints import (
     evaluate_constraint,
     iter_cmp_operands,
     parse_constraint,
-    usage_roots_of,
+    usage_scope_kinds_of,
 )
 
 
@@ -1044,24 +1045,24 @@ def test_the_message_names_the_first_failure() -> None:
 
 
 @pytest.mark.parametrize(
-    ("sources", "roots"),
+    ("sources", "kinds"),
     [
-        (["agent_usage.invocations_1h < 5"], {"agent_usage"}),
-        (["user_usage.invocations_1h < 5"], {"user_usage"}),
+        (["agent_usage.invocations_1h < 5"], {UsageScopeKind.AGENT}),
+        (["user_usage.invocations_1h < 5"], {UsageScopeKind.USER}),
         (
             ["agent_usage.invocations_1h < 5", "user_usage.total_tokens_24h < 9"],
-            {"agent_usage", "user_usage"},
+            {UsageScopeKind.AGENT, UsageScopeKind.USER},
         ),
-        (['user_usage.invocations_1h < 5 or ctx.plan == "pro"'], {"user_usage"}),
-        (["not (user_usage.invocations_1h >= 5)"], {"user_usage"}),
-        (["count(user_usage.invocations_1h) < 5"], {"user_usage"}),
-        (["every(agent_usage.invocations_1h, . < 5)"], {"agent_usage"}),
-        (["any(user_usage.invocations_1h, . < 5)"], {"user_usage"}),
+        (['user_usage.invocations_1h < 5 or ctx.plan == "pro"'], {UsageScopeKind.USER}),
+        (["not (user_usage.invocations_1h >= 5)"], {UsageScopeKind.USER}),
+        (["count(user_usage.invocations_1h) < 5"], {UsageScopeKind.USER}),
+        (["every(agent_usage.invocations_1h, . < 5)"], {UsageScopeKind.AGENT}),
+        (["any(user_usage.invocations_1h, . < 5)"], {UsageScopeKind.USER}),
         (["args.amount <= 50", "run.tool_calls < 3"], set()),
         (["THIS WOULD NOT PARSE"], set()),
     ],
 )
-def test_usage_roots_of_names_the_referenced_roots(
-    sources: list[str], roots: set[str]
+def test_usage_scope_kinds_of_names_the_referenced_kinds(
+    sources: list[str], kinds: set[UsageScopeKind]
 ) -> None:
-    assert usage_roots_of(sources) == roots
+    assert usage_scope_kinds_of(sources) == kinds

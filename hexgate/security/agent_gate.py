@@ -33,6 +33,7 @@ from hexgate.security.naming import canonical_name
 
 if TYPE_CHECKING:
     from hexgate.approvals import ApprovalHandler
+    from hexgate.runtime.agent_usage import UsageScopeKind
     from hexgate.security.decision import PolicyEngine
     from hexgate.security.enforcer import PolicyEnforcer
     from hexgate.security.models import AgentVia
@@ -188,9 +189,9 @@ class AgentNotAdmittedError(RuntimeError):
     lowered ``agent.run`` key ("tool 'agent.run' is denied…"), which would leak
     that synthetic key here; read it off ``.decision`` instead.
 
-    ``quota_scopes`` names the usage roots the failing constraint references, such
-    as ``{"user_usage"}``, so the caller can tell a user over quota from an agent
-    over quota.
+    ``quota_scopes`` names the usage scope kinds the failing constraint references,
+    such as ``{UsageScopeKind.USER}``, so the caller can tell a user over quota from
+    an agent over quota.
     """
 
     def __init__(self, decision: Decision) -> None:
@@ -201,7 +202,7 @@ class AgentNotAdmittedError(RuntimeError):
         )
 
     @property
-    def quota_scopes(self) -> frozenset[str]:
+    def quota_scopes(self) -> frozenset[UsageScopeKind]:
         return self.decision.quota_scopes
 
 

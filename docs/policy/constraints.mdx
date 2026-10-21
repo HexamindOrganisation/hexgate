@@ -608,28 +608,29 @@ Per-user overshoot, at the moment a user crosses the cap:
 ### Telling the user from the agent
 
 `AgentNotAdmittedError.quota_scopes` (and `Decision.quota_scopes`, for a tool denial)
-names the usage roots the failing constraints reference, so your app can answer a user
-over quota (a 429 to them) differently from an agent over quota (an ops alert):
+names the usage scopes (`UsageScopeKind.AGENT`, `UsageScopeKind.USER`) whose roots the
+failing constraints reference, so your app can answer a user over quota (a 429 to
+them) differently from an agent over quota (an ops alert):
 
 ```python
-from hexgate.security import AgentNotAdmittedError
+from hexgate.security import AgentNotAdmittedError, UsageScopeKind
 
 try:
     result = await agent.ainvoke(prompt)
 except AgentNotAdmittedError as exc:
-    if "user_usage" in exc.quota_scopes:
+    if UsageScopeKind.USER in exc.quota_scopes:
         return {"status": 429, "message": "You've hit your usage limit. Try again later."}
     logger.error("run refused: %s", exc.decision.reason)  # page whoever owns the agent
     raise
 ```
 
-- **It names the roots a failing constraint references, not which side of an `or`
+- **It names the scopes a failing constraint references, not which side of an `or`
   failed.** `user_usage.invocations_1h < 50 or ctx.plan == "pro"` reports
-  `{"user_usage"}`.
+  `{UsageScopeKind.USER}`.
 - **Every failing constraint counts.** Both engines report each one, so a run over
-  both caps names both roots.
+  both caps names both scopes.
 - **An unavailable value counts too.** A cap that fails because its value is missing
-  under `deny` names its root. Read `decision.usage_states` to tell the two apart.
+  under `deny` names its scope. Read `decision.usage_states` to tell the two apart.
 - **The model is told nothing** about either.
 
 ### How it counts

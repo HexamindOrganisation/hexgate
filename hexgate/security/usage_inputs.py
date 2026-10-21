@@ -8,10 +8,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Final
+
+from hexgate.runtime.agent_usage import UsageScopeKind
 
 AGENT_USAGE_ROOT: Final = "agent_usage"
 USER_USAGE_ROOT: Final = "user_usage"
+# The cross-run usage roots, by the scope each one counts.
+USAGE_SCOPE_KIND_BY_ROOT: Final[Mapping[str, UsageScopeKind]] = MappingProxyType(
+    {AGENT_USAGE_ROOT: UsageScopeKind.AGENT, USER_USAGE_ROOT: UsageScopeKind.USER}
+)
 
 
 @dataclass(frozen=True, slots=True)

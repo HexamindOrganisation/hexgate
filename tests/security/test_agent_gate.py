@@ -13,7 +13,7 @@ import logging
 
 import pytest
 
-from hexgate.runtime.agent_usage import UsageLedgers, new_usage_ledger
+from hexgate.runtime.agent_usage import UsageLedgers, UsageScopeKind, new_usage_ledger
 from hexgate.runtime.context import HexgateContext
 from hexgate.security import (
     AgentNotAdmittedError,
@@ -89,12 +89,12 @@ def _admission_capped_by(constraint: str) -> PolicyEnforcer:
     return PolicyEnforcer(policy, agent_name="my-agent", ledgers=ledgers)
 
 
-def test_a_user_cap_denial_names_user_usage() -> None:
+def test_a_user_cap_denial_names_the_user_scope() -> None:
     gate = resolve_agent_gate(_admission_capped_by("user_usage.invocations_1h < 0"))
     with _ROLE.sync_scope(), pytest.raises(AgentNotAdmittedError) as caught:
         gate.check_admission()
 
-    assert caught.value.quota_scopes == {"user_usage"}
+    assert caught.value.quota_scopes == {UsageScopeKind.USER}
     assert str(caught.value) == (
         "admission denied for agent 'my-agent'; this caller may not run it. "
         "The run did not start."
