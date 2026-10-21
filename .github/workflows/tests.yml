@@ -151,6 +151,26 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
+  mcp:
+    name: MCP server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "platform/mcp/uv.lock"
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      # The drift tests in tests/test_api_constants.py read the API's source
+      # from the checkout, so the API's own deps are not needed here.
+      - name: Lint, format check and tests
+        run: make mcp-check
+
   platform-api-postgres:
     # The platform-api job runs the whole suite on SQLite, never exercising
     # asyncpg. This job sets DATABASE_URL and runs the opt-in Postgres tests:
