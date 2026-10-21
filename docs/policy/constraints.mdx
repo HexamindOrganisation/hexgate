@@ -584,10 +584,11 @@ fetch. It is a soft quota, as for agents
 - **A cold user waits once.** A user whose snapshot is missing or over a minute old
   waits for one fetch (2-second timeout). A user who keeps running is refreshed in the
   background every 30 seconds.
-- **One failure pauses every user.** After a failed user fetch, every user stops
-  waiting for 30 seconds and reads the fail mode. A 401, 403, 404, 405 or 422 pauses
-  every user fetch for five minutes (the platform has no user read, or refuses the key
-  or the request).
+- **One failure pauses every user.** After a failed user fetch, no user waits or
+  refreshes for 30 seconds. A user with a snapshot keeps reading it (`stale` past a
+  minute) until it is five minutes old; a user with no snapshot, or an older one,
+  reads the fail mode. A 401, 403, 404, 405 or 422 pauses every user fetch for five minutes (the
+  platform has no user read, or refuses the key or the request).
 - **Unreadable IDs are never sent.** A `user_id` over 256 characters, or not valid
   UTF-8, reads `unavailable`.
 - **Local in the same three cases as agents**: local mode, local policy, or no API
