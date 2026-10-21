@@ -56,9 +56,10 @@ class JwksTokenVerifier:
             )
         except jwt.PyJWTError as exc:
             # The reason only, never the token. A wrong `iss` or `aud` on a
-            # validly signed token means HEXGATE_MCP_ISSUER or _RESOURCE_URL
-            # disagrees with the API, which otherwise shows up as nothing but
-            # a re-login loop; anything else is an expired or forged token.
+            # validly signed token means the issuer (HEXGATE_MCP_ISSUER, else
+            # HEXGATE_PUBLIC_URL) or HEXGATE_MCP_RESOURCE_URL disagrees with
+            # the API, which otherwise shows up as nothing but a re-login
+            # loop; anything else is an expired or forged token.
             config = (jwt.InvalidIssuerError, jwt.InvalidAudienceError)
             level = logging.WARNING if isinstance(exc, config) else logging.INFO
             logger.log(level, "token refused: %s: %s", type(exc).__name__, exc)
