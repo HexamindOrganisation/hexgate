@@ -25,6 +25,7 @@ import shutil
 import pytest
 
 from hexgate.security import WasmPolicy, compile_to_wasm, load_policy_set_from_dict
+from hexgate.security.policy import verdict_from_rego
 from hexgate.security.rego import compile_to_rego
 from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 
@@ -1112,6 +1113,26 @@ def test_both_roots_are_checked_on_both_engines(
         agent_usage={"invocations_1h": agent},
         user_usage={"invocations_1h": user},
     )
+
+
+def test_failed_constraints_parity() -> None:
+    """Both engines name every failing constraint, so ``quota_scopes`` doesn't
+    depend on which engine decided."""
+    tool, args = _ADMISSION
+    usage = UsageInputs(
+        agent_usage={"invocations_1h": 1000}, user_usage={"invocations_1h": 50}
+    )
+    pydantic = load_policy_set_from_dict(_BOTH_ROOTS_POLICY).evaluate(
+        role="default", tool=tool, args=args, usage=usage
+    )
+    rego = WasmPolicy.from_bytes(
+        _wasm_bytes(compile_to_rego(_BOTH_ROOTS_POLICY))
+    ).decide(role="default", tool=tool, args=args, usage=usage)
+    wasm = verdict_from_rego(rego, tool_name=tool, role="default")
+
+    expected = set(_BOTH_ROOTS_POLICY["admission"]["constraints"])
+    assert set(pydantic.failed_constraints) == expected
+    assert set(wasm.failed_constraints) == expected
 
 
 # ---------------------------------------------------------------------------

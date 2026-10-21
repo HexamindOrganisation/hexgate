@@ -17,6 +17,7 @@ from hexgate.agents import factory
 from hexgate.cloud.client import HexgateClient, HexgateConfig
 from hexgate.guards import before_tool
 from hexgate.runtime.agent_usage import USAGE_LEDGERS, UsageScope
+from hexgate.runtime.context import HexgateContext
 from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet
 from hexgate.security import enforcer as enforcer_mod
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME, load_policy_set_from_dict
@@ -226,4 +227,41 @@ async def test_guards_only_agent_has_no_binding_and_runs(
     await run_once(agent, "ainvoke")
 
     assert agent._binding is None
+    assert events == [_GRAPH_RAN]
+
+
+_USER = "alice"
+
+
+def _user_tool_cap() -> PolicySet:
+    return load_policy_set_from_dict(
+        {
+            "tools": {
+                "echo": {
+                    "mode": "allow",
+                    "constraints": [f"user_usage.{_CAPPED_PATH} < 3"],
+                }
+            }
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_user_usage_policy_refreshes_the_context_user_before_the_graph_runs(
+    events: list[object],
+) -> None:
+    agent = _agent().enforce_policy(_user_tool_cap())
+
+    async with HexgateContext(user_id=_USER):
+        await run_once(agent, "ainvoke")
+
+    assert events == [("refresh", UsageScope.user(_USER), {_CAPPED_PATH}), _GRAPH_RAN]
+
+
+@pytest.mark.asyncio
+async def test_an_anonymous_run_does_not_refresh_a_user(events: list[object]) -> None:
+    agent = _agent().enforce_policy(_user_tool_cap())
+
+    await run_once(agent, "ainvoke")
+
     assert events == [_GRAPH_RAN]

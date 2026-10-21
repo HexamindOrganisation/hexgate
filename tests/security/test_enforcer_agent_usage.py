@@ -355,8 +355,7 @@ class _Platform:
         )
 
     def boundary(self, enforcer: PolicyEnforcer) -> None:
-        usage = enforcer.usage_refresh()
-        assert usage is not None
+        (usage,) = enforcer.usage_refreshes(None)
         usage.run()
 
 
@@ -450,25 +449,39 @@ def test_the_fail_mode_is_read_from_the_engine(
 def test_no_usage_refresh_without_a_source() -> None:
     enforcer = PolicyEnforcer(_admission_cap(2), agent_name=_AGENT, ledgers=_ledgers())
 
-    assert enforcer.usage_refresh() is None
+    assert enforcer.usage_refreshes(None) == ()
 
 
 def test_no_usage_refresh_for_a_usage_free_policy() -> None:
-    assert _Platform().enforcer(_usage_free()).usage_refresh() is None
+    assert _Platform().enforcer(_usage_free()).usage_refreshes(None) == ()
 
 
 def test_the_usage_refresh_follows_the_bound_policy() -> None:
     platform = _Platform()
     enforcer = platform.enforcer(_admission_cap(2))
 
-    assert enforcer.usage_refresh() == UsageRefresh(
-        platform.source, _SCOPE, _ADMISSION_PATHS
+    assert enforcer.usage_refreshes(None) == (
+        UsageRefresh(platform.source, _SCOPE, _ADMISSION_PATHS),
     )
 
     enforcer.policy = _tool_cap(2)
 
-    assert enforcer.usage_refresh() == UsageRefresh(
-        platform.source, _SCOPE, frozenset({"tool_calls_5m"})
+    assert enforcer.usage_refreshes(None) == (
+        UsageRefresh(platform.source, _SCOPE, frozenset({"tool_calls_5m"})),
+    )
+
+
+@pytest.mark.parametrize(
+    "context", [None, HexgateContext(user_id=""), HexgateContext(user_id="alice")]
+)
+def test_usage_refreshes_holds_the_agent_refresh(
+    context: HexgateContext | None,
+) -> None:
+    platform = _Platform()
+    enforcer = platform.enforcer(_admission_cap(2))
+
+    assert enforcer.usage_refreshes(context) == (
+        UsageRefresh(platform.source, _SCOPE, _ADMISSION_PATHS),
     )
 
 

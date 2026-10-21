@@ -93,7 +93,7 @@ from hexgate.security.modules import (
 from hexgate.security.naming import canonical_skill_name
 from hexgate.security.network import EGRESS_TOOL_ARGS
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME, PolicySet, PolicySetError
-from hexgate.security.usage_inputs import AGENT_USAGE_ROOT, USER_USAGE_ROOT
+from hexgate.security.usage_inputs import USAGE_SCOPE_KIND_BY_ROOT
 
 if TYPE_CHECKING:  # avoid importing the manifest package eagerly
     from hexgate.manifest.models import AgentManifest
@@ -130,7 +130,6 @@ _NOT_AN_AGENT = "not registered, and not a sub-agent any manifest names"
 _ROOT_PREFIXES = (
     ", ".join(f"{root}." for root in PATH_ROOTS[:-1]) + f" or {PATH_ROOTS[-1]}."
 )
-_USAGE_ROOTS = frozenset({AGENT_USAGE_ROOT, USER_USAGE_ROOT})
 
 
 @dataclass(frozen=True)
@@ -1500,7 +1499,7 @@ def _negated_usage_paths(groups: Iterable[tuple[list[str], bool]]) -> set[str]:
 
 def _usage_path(path: tuple[str, ...]) -> str | None:
     """``path`` dotted, if it reads a cross-run usage value (either root)."""
-    if len(path) < 2 or path[0] not in _USAGE_ROOTS:
+    if len(path) < 2 or path[0] not in USAGE_SCOPE_KIND_BY_ROOT:
         return None
     return ".".join(path)
 

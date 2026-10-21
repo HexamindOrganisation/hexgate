@@ -1,5 +1,5 @@
-"""The enforcer's ``user_usage.*`` wiring: enable per kind, read the context user's
-ledger, and treat an anonymous caller as unavailable.
+"""The enforcer's ``user_usage.*`` wiring: enable per kind, read the context user
+through the usage source, and treat an anonymous caller as unavailable.
 
 Every test injects its own :class:`UsageLedgers`. The process registry is one-way,
 so enabling it here would leak into every later test.
@@ -8,7 +8,10 @@ so enabling it here would leak into every later test.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
+
+import pytest
 
 from hexgate.runtime.agent_usage import (
     UsageLedger,
@@ -23,7 +26,14 @@ from hexgate.security import AGENT_RUN_TOOL, DecisionOutcome, Verdict
 from hexgate.security.enforcer import PolicyEnforcer
 from hexgate.security.policy_set import PolicySet, load_policy_set_from_dict
 from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
-from hexgate.security.usage_source import OnUnavailable, UsageReading, local_reading
+from hexgate.security.usage_source import (
+    OnUnavailable,
+    PlatformUsageSource,
+    UsageReading,
+    UsageState,
+    local_reading,
+)
+from tests.security.test_usage_source import _FakeFetcher, _user_rig
 
 _AGENT = "billing"
 _OTHER_AGENT = "support"
@@ -311,8 +321,8 @@ def test_an_anonymous_caller_fails_closed_under_deny() -> None:
     assert not ledgers._user_ledgers
 
 
-def test_named_users_read_locally_even_with_a_source() -> None:
-    policy = load_policy_set_from_dict(
+def _both_admission_caps(*, on_unavailable: OnUnavailable | None = None) -> PolicySet:
+    return load_policy_set_from_dict(
         {
             "admission": {
                 "mode": "allow",
@@ -321,13 +331,16 @@ def test_named_users_read_locally_even_with_a_source() -> None:
                     f"user_usage.{_INVOCATIONS} < 2",
                 ],
             },
-            **_usage_block(OnUnavailable.DENY),
+            **_usage_block(on_unavailable),
         }
     )
+
+
+def test_named_users_read_through_the_source() -> None:
     ledgers = _ledgers()
     source = _RecordingSource()
     enforcer = PolicyEnforcer(
-        policy,
+        _both_admission_caps(on_unavailable=OnUnavailable.DENY),
         agent_name=_AGENT,
         ledgers=ledgers,
         usage_source=source,  # type: ignore[arg-type]
@@ -336,10 +349,10 @@ def test_named_users_read_locally_even_with_a_source() -> None:
     with _context(_ALICE).sync_scope():
         assert _admit(enforcer, ledgers)
 
-    assert source.scopes == [UsageScope.agent(_AGENT)]
+    assert source.scopes == [UsageScope.agent(_AGENT), UsageScope.user(_ALICE)]
 
 
-def test_a_user_only_policy_has_no_usage_refresh() -> None:
+def test_a_user_only_policy_has_no_agent_refresh() -> None:
     enforcer = PolicyEnforcer(
         _user_admission_cap(2),
         agent_name=_AGENT,
@@ -347,7 +360,23 @@ def test_a_user_only_policy_has_no_usage_refresh() -> None:
         usage_source=_RecordingSource(),  # type: ignore[arg-type]
     )
 
-    assert enforcer.usage_refresh() is None
+    assert enforcer.usage_refreshes(None) == ()
+
+
+def test_a_user_only_policy_refreshes_the_context_user() -> None:
+    source = _RecordingSource()
+    enforcer = PolicyEnforcer(
+        _user_admission_cap(2),
+        agent_name=_AGENT,
+        ledgers=_ledgers(),
+        usage_source=source,  # type: ignore[arg-type]
+    )
+
+    (refresh,) = enforcer.usage_refreshes(_context(_ALICE))
+
+    assert refresh.source is source
+    assert refresh.scope == UsageScope.user(_ALICE)
+    assert refresh.paths == frozenset({_INVOCATIONS})
 
 
 def test_a_user_only_decision_has_no_usage_state() -> None:
@@ -359,6 +388,19 @@ def test_a_user_only_decision_has_no_usage_state() -> None:
         decision = enforcer.decide(AGENT_RUN_TOOL, {"agent": _AGENT})
 
     assert decision.usage_state is None
+    assert decision.usage_states == {UsageScopeKind.USER: "local"}
+
+
+def test_a_decision_s_usage_states_are_read_only() -> None:
+    enforcer = PolicyEnforcer(
+        _user_admission_cap(2), agent_name=_AGENT, ledgers=_ledgers()
+    )
+
+    with _context(_ALICE).sync_scope():
+        decision = enforcer.decide(AGENT_RUN_TOOL, {"agent": _AGENT})
+
+    with pytest.raises(TypeError):
+        decision.usage_states[UsageScopeKind.AGENT] = "fresh"  # type: ignore[index]
 
 
 def test_every_role_reads_one_user_namespace() -> None:
@@ -384,3 +426,188 @@ def test_an_engine_without_user_usage_paths_gets_no_user_namespace() -> None:
 
     assert engine.inputs[0].user_usage is None
     assert not ledgers.is_enabled(UsageScopeKind.USER)
+
+
+# --- usage_refreshes ----------------------------------------------------------
+
+
+def _refreshing(policy: PolicySet) -> PolicyEnforcer:
+    return PolicyEnforcer(
+        policy,
+        agent_name=_AGENT,
+        ledgers=_ledgers(),
+        usage_source=_RecordingSource(),  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.parametrize("context", [None, _context("")], ids=["none", "anonymous"])
+def test_an_anonymous_run_has_no_user_refresh(context: HexgateContext | None) -> None:
+    assert _refreshing(_user_admission_cap(2)).usage_refreshes(context) == ()
+
+
+def test_no_source_has_no_refreshes() -> None:
+    enforcer = PolicyEnforcer(
+        _both_admission_caps(), agent_name=_AGENT, ledgers=_ledgers()
+    )
+
+    assert enforcer.usage_refreshes(_context(_ALICE)) == ()
+
+
+def test_a_policy_with_both_roots_refreshes_the_agent_then_the_user() -> None:
+    refreshes = _refreshing(_both_admission_caps()).usage_refreshes(_context(_ALICE))
+
+    assert [refresh.scope for refresh in refreshes] == [
+        UsageScope.agent(_AGENT),
+        UsageScope.user(_ALICE),
+    ]
+
+
+def test_each_refresh_sees_one_policys_paths() -> None:
+    enforcer = _refreshing(_agent_admission_cap(2))
+    before = enforcer.usage_refreshes(_context(_ALICE))
+
+    enforcer.policy = _user_admission_cap(2)
+    after = enforcer.usage_refreshes(_context(_ALICE))
+
+    assert [refresh.scope for refresh in before] == [UsageScope.agent(_AGENT)]
+    assert [refresh.scope for refresh in after] == [UsageScope.user(_ALICE)]
+
+
+# --- the cross-process read ---------------------------------------------------
+
+
+@dataclass
+class _Platform:
+    source: PlatformUsageSource
+    users: _FakeFetcher
+
+
+def _cross_process(
+    policy: PolicySet, values: Mapping[str, int]
+) -> tuple[PolicyEnforcer, UsageLedgers, _Platform]:
+    """A source keeping users as ``get_usage_source`` does, on the ledgers' clock."""
+    rig = _user_rig()
+    rig.user_fetcher.values = dict(values)
+    ledgers = UsageLedgers(lambda: new_usage_ledger(clock=rig.clock))
+    enforcer = PolicyEnforcer(
+        policy, agent_name=_AGENT, ledgers=ledgers, usage_source=rig.source
+    )
+    return enforcer, ledgers, _Platform(rig.source, rig.user_fetcher)
+
+
+def _refresh(enforcer: PolicyEnforcer, context: HexgateContext) -> None:
+    for refresh in enforcer.usage_refreshes(context):
+        refresh.run()
+
+
+def _capped_admission_and_tool(limit: int) -> PolicySet:
+    constraint = f"user_usage.{_INVOCATIONS} < {limit}"
+    return load_policy_set_from_dict(
+        {
+            "admission": {"mode": "allow", "constraints": [constraint]},
+            "tools": {"refund": {"mode": "allow", "constraints": [constraint]}},
+        }
+    )
+
+
+def test_a_users_platform_count_is_added_to_the_local_one() -> None:
+    enforcer, ledgers, _ = _cross_process(_user_admission_cap(50), {_INVOCATIONS: 49})
+
+    with _context(_ALICE).sync_scope() as context:
+        _refresh(enforcer, context)
+        admitted = [_admit(enforcer, ledgers) for _ in range(2)]
+
+    assert admitted == [True, False]
+
+
+def test_two_users_read_their_own_snapshots() -> None:
+    enforcer, ledgers, platform = _cross_process(
+        _user_admission_cap(50), {_INVOCATIONS: 50}
+    )
+
+    with _context(_ALICE).sync_scope() as context:
+        _refresh(enforcer, context)
+    platform.users.values = {_INVOCATIONS: 0}
+    with _context(_BOB).sync_scope() as context:
+        _refresh(enforcer, context)
+
+    with _context(_ALICE).sync_scope():
+        alice = _admit(enforcer, ledgers)
+    with _context(_BOB).sync_scope():
+        bob = _admit(enforcer, ledgers)
+
+    assert [key for key, _, _ in platform.users.calls] == [_ALICE, _BOB]
+    assert not alice
+    assert bob
+
+
+@pytest.mark.parametrize(
+    ("on_unavailable", "allowed"),
+    [(OnUnavailable.ALLOW, True), (OnUnavailable.DENY, False)],
+)
+def test_an_unavailable_user_follows_the_fail_mode(
+    on_unavailable: OnUnavailable, allowed: bool
+) -> None:
+    enforcer, _, platform = _cross_process(
+        _user_admission_cap(50, on_unavailable=on_unavailable), {}
+    )
+    platform.users.error = RuntimeError("platform down")
+
+    with _context(_ALICE).sync_scope() as context:
+        _refresh(enforcer, context)
+        decision = enforcer.decide(AGENT_RUN_TOOL, {"agent": _AGENT})
+
+    assert decision.allowed is allowed
+    assert decision.usage_states == {UsageScopeKind.USER: UsageState.UNAVAILABLE}
+
+
+def test_an_anonymous_caller_reads_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    enforcer, _, platform = _cross_process(_user_admission_cap(50), {})
+
+    def no_user_scope(user_id: str) -> UsageScope:
+        raise AssertionError("an anonymous caller built a user scope")
+
+    monkeypatch.setattr(UsageScope, "user", staticmethod(no_user_scope))
+    with _context("").sync_scope() as context:
+        _refresh(enforcer, context)
+        decision = enforcer.decide(AGENT_RUN_TOOL, {"agent": _AGENT})
+
+    assert decision.allowed
+    assert decision.usage_states == {UsageScopeKind.USER: UsageState.UNAVAILABLE}
+    assert platform.users.calls == []
+
+
+def test_a_user_id_the_platform_refuses_is_never_fetched() -> None:
+    enforcer, _, platform = _cross_process(_user_admission_cap(50), {})
+
+    with _context("x" * 300).sync_scope() as context:
+        _refresh(enforcer, context)
+        decision = enforcer.decide(AGENT_RUN_TOOL, {"agent": _AGENT})
+
+    assert platform.users.calls == []
+    assert decision.usage_states == {UsageScopeKind.USER: UsageState.UNAVAILABLE}
+
+
+def test_the_current_run_is_left_out_of_the_users_platform_read() -> None:
+    enforcer, ledgers, _ = _cross_process(
+        _capped_admission_and_tool(50), {_INVOCATIONS: 49}
+    )
+
+    with _context(_ALICE).sync_scope() as context:
+        _refresh(enforcer, context)
+        assert enforcer.decide(AGENT_RUN_TOOL, {"agent": _AGENT}).allowed
+        with run_scope(_AGENT, ledgers=ledgers):
+            assert enforcer.decide("refund", {}).allowed
+
+
+def test_an_agent_only_policy_never_reads_a_user() -> None:
+    enforcer, ledgers, platform = _cross_process(_agent_admission_cap(50), {})
+
+    with _context(_ALICE).sync_scope() as context:
+        _refresh(enforcer, context)
+        _admit(enforcer, ledgers)
+
+    assert platform.users.calls == []
+    assert len(platform.source._tables[UsageScopeKind.USER]) == 0

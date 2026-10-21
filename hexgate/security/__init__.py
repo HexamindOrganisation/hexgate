@@ -1,5 +1,6 @@
 """Security helpers for policies and enforcement."""
 
+from hexgate.runtime.agent_usage import UsageScopeKind
 from hexgate.security.agent_gate import (
     AgentGate,
     AgentNotAdmittedError,
@@ -286,6 +287,7 @@ __all__ = [
     "PolicyEngine",
     "NO_USAGE",
     "UsageInputs",
+    "UsageScopeKind",
     "Verdict",
     "authorize_tool_call",
     "authorize_tool_call_wasm",
