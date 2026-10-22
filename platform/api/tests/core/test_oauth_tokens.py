@@ -122,16 +122,28 @@ def test_when_a_csv_string_is_passed_then_mint_refuses(field) -> None:
         _mint(**{field: "p1,p2"})
 
 
-@pytest.mark.parametrize("projects", [None, []])
-def test_when_projects_claim_absent_or_empty_then_verify_yields_no_projects(
-    oauth_keystore: FileKeyStore, projects
+@pytest.mark.parametrize(
+    "claims",
+    [
+        {"projects": None},
+        {"projects": []},
+        {"projects": "p1"},
+        {"projects": 3},
+        {"projects": ["p1", 3]},
+        {"scope": ["policy:read"]},
+    ],
+    ids=["absent", "empty", "str", "int", "non-str-id", "list-scope"],
+)
+def test_when_a_claim_has_the_wrong_shape_then_refused(
+    oauth_keystore: FileKeyStore, claims: dict
 ) -> None:
-    """Absent or empty means no project, never every project."""
-    claims = _claims(projects=projects)
-    if projects is None:
+    """No project never means every project, and a bad shape is a refusal, not a 500."""
+    claims = _claims(**claims)
+    if claims["projects"] is None:
         del claims["projects"]
     token = _jws(_oauth_header(oauth_keystore), claims, oauth_keystore.oauth_sign)
-    assert _verify(token).projects == frozenset()
+    with pytest.raises(InvalidAccessTokenError):
+        _verify(token)
 
 
 @pytest.mark.parametrize("claim", ["client_id", "scope"])

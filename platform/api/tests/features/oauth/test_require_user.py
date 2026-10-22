@@ -8,17 +8,23 @@ Tokens are hand-minted: nothing in the API mints one yet.
 from __future__ import annotations
 
 import json
+import logging
 import time
 
 import jwt
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 from jwt.utils import base64url_encode
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from hexgate_api.constants import DEFAULT_PROJECT_ID, DEFAULT_USER_ID, OAUTH_SCOPE_KEY
+from hexgate_api.constants import (
+    DEFAULT_PROJECT_ID,
+    DEFAULT_USER_ID,
+    OAUTH_NO_PROJECT,
+    OAUTH_SCOPE_KEY,
+)
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.core.db import get_session
 from hexgate_api.core.keystore import FileKeyStore
@@ -99,6 +105,7 @@ def test_when_token_is_valid_then_a_route_with_no_scope_refuses_it(
     r = _get(client, _mint())
     assert r.status_code == 403
     assert r.json()["detail"] == "token scope does not cover this route"
+    assert r.headers["WWW-Authenticate"] == 'Bearer error="insufficient_scope"'
 
 
 @pytest.mark.parametrize(
@@ -129,6 +136,7 @@ def test_when_token_does_not_verify_then_401(client: TestClient, overrides) -> N
     r = _get(client, _mint(**overrides))
     assert r.status_code == 401
     assert r.json()["detail"] == "missing or invalid authentication"
+    assert r.headers["WWW-Authenticate"] == 'Bearer error="invalid_token"'
 
 
 def test_when_signed_by_the_sdk_key_then_401(
@@ -157,6 +165,7 @@ async def test_when_user_is_inactive_then_401(
         await session.commit()
     r = _get(client, _mint())
     assert r.status_code == 401
+    assert r.headers["WWW-Authenticate"] == 'Bearer error="invalid_token"'
 
 
 def test_when_user_does_not_exist_then_401(client: TestClient) -> None:
@@ -172,6 +181,16 @@ def test_when_token_is_invalid_then_the_dev_header_does_not_rescue_it(
     assert r.status_code == 401
 
 
+def test_when_token_does_not_decode_then_only_the_error_type_is_logged(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """PyJWT's message can quote the undecodable header; the type says enough."""
+    with caplog.at_level(logging.INFO, logger="hexgate_api.deps.identity"):
+        _get(client, "not-a-jwt")
+    assert "oauth token refused: DecodeError" in caplog.text
+    assert "segments" not in caplog.text
+
+
 def test_when_scheme_is_lowercase_then_the_token_is_still_verified(
     client: TestClient,
 ) -> None:
@@ -181,6 +200,28 @@ def test_when_scheme_is_lowercase_then_the_token_is_still_verified(
         headers={"Authorization": "bearer not-a-jwt", "X-Dev-User": DEFAULT_USER_ID},
     )
     assert r.status_code == 401
+
+
+def _marked_client(session_factory, path: str, extra: dict) -> TestClient:
+    """A hand-marked route in its own app: no real route declares a scope yet."""
+    marked = FastAPI()
+
+    @marked.get(path, openapi_extra=extra)
+    async def endpoint(request: Request, user: User = Depends(require_user)) -> dict:
+        oauth = request.state.oauth
+        return {"user": user.id, "jti": oauth.jti if oauth else None}
+
+    async def override_session():
+        async with session_factory() as session:
+            yield session
+
+    marked.dependency_overrides[get_session] = override_session
+    return TestClient(marked)
+
+
+def _call(client: TestClient, path: str, token: str):
+    url = path.replace("{project_id}", DEFAULT_PROJECT_ID)
+    return client.get(url, headers={"Authorization": f"Bearer {token}"})
 
 
 @pytest.mark.parametrize(
@@ -196,20 +237,65 @@ def test_when_scheme_is_lowercase_then_the_token_is_still_verified(
 def test_when_route_declares_scopes_then_the_token_must_hold_all(
     session_factory, oauth_keystore, mark, status: int
 ) -> None:
-    """A hand-marked route in its own app: no real route declares a scope yet."""
-    marked = FastAPI()
-
-    @marked.get("/p/{project_id}", openapi_extra={OAUTH_SCOPE_KEY: mark})
-    async def endpoint(project_id: str, user: User = Depends(require_user)) -> str:
-        return user.id
-
-    async def override_session():
-        async with session_factory() as session:
-            yield session
-
-    marked.dependency_overrides[get_session] = override_session
-    token = _mint(scopes=["policy:read", "audit:read"])
-    r = TestClient(marked).get(
-        f"/p/{DEFAULT_PROJECT_ID}", headers={"Authorization": f"Bearer {token}"}
-    )
+    path = "/p/{project_id}"
+    client = _marked_client(session_factory, path, {OAUTH_SCOPE_KEY: mark})
+    r = _call(client, path, _mint(scopes=["policy:read", "audit:read"]))
     assert r.status_code == status, r.text
+
+
+@pytest.mark.parametrize(
+    ("path", "tagged", "projects", "status"),
+    [
+        ("/p/{project_id}", False, [DEFAULT_PROJECT_ID], 200),
+        ("/p/{project_id}", False, ["other"], 403),
+        ("/np", True, ["other"], 200),
+        ("/np/{project_id}", True, ["other"], 403),
+        ("/x", False, [DEFAULT_PROJECT_ID], 403),
+    ],
+    ids=[
+        "project-named",
+        "project-not-named",
+        "tagged-no-project",
+        "tag-does-not-skip-a-project-id",
+        "untagged-no-project",
+    ],
+)
+def test_when_route_is_scoped_then_the_token_must_name_its_project(
+    session_factory, oauth_keystore, path, tagged, projects, status: int
+) -> None:
+    """The tag only excuses a route with no ``project_id``; one with it is always checked."""
+    extra = {OAUTH_SCOPE_KEY: "policy:read"} | (
+        {OAUTH_NO_PROJECT: True} if tagged else {}
+    )
+    client = _marked_client(session_factory, path, extra)
+    r = _call(client, path, _mint(projects=projects))
+    assert r.status_code == status, r.text
+    if status == 403:
+        assert r.json()["detail"] == "token does not cover this project"
+
+
+def test_when_token_is_accepted_then_it_is_logged_and_on_request_state(
+    session_factory, oauth_keystore, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = "/p/{project_id}"
+    client = _marked_client(session_factory, path, {OAUTH_SCOPE_KEY: "policy:read"})
+    token = _mint()
+    jti = jwt.decode(token, options={"verify_signature": False})["jti"]
+    with caplog.at_level(logging.INFO, logger="hexgate_api.deps.identity"):
+        r = _call(client, path, token)
+    assert r.json()["jti"] == jti
+    assert (
+        f"oauth token accepted: sub={DEFAULT_USER_ID} "
+        f"client_id=https://client.example/meta.json jti={jti}"
+    ) in caplog.text
+
+
+def test_when_caller_is_not_an_oauth_client_then_request_state_oauth_is_none(
+    session_factory, oauth_keystore
+) -> None:
+    path = "/p/{project_id}"
+    client = _marked_client(session_factory, path, {OAUTH_SCOPE_KEY: "policy:read"})
+    url = path.replace("{project_id}", DEFAULT_PROJECT_ID)
+    r = client.get(url, headers={"X-Dev-User": DEFAULT_USER_ID})
+    assert r.status_code == 200, r.text
+    assert r.json()["jti"] is None

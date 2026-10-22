@@ -43,8 +43,7 @@ class AccessTokenClaims:
     sub: str
     client_id: str
     scopes: frozenset[str]
-    # The projects this grant covers. Empty means the token reaches no
-    # project — never every project.
+    # The projects this grant covers; never empty (verify refuses that).
     projects: frozenset[str]
     jti: str
     exp: int
@@ -87,8 +86,9 @@ def mint_access_token(
 
 
 def verify_access_token(token: str, *, issuer: str, audience: str) -> AccessTokenClaims:
-    """Return the claims of ``token`` (typ, kid, EdDSA signature, iss, aud, exp
-    checked), or raise ``InvalidAccessTokenError``."""
+    """Return the claims of ``token`` (typ, kid, EdDSA signature, iss, aud, exp,
+    a string scope, a non-empty list of projects checked), or raise
+    ``InvalidAccessTokenError``."""
     from hexgate_api.core.keystore import keystore
 
     try:
@@ -110,11 +110,22 @@ def verify_access_token(token: str, *, issuer: str, audience: str) -> AccessToke
         )
     except jwt.PyJWTError as exc:
         raise InvalidAccessTokenError(str(exc)) from exc
+    scope, projects = claims["scope"], claims.get("projects")
+    if not isinstance(scope, str):
+        raise InvalidAccessTokenError("scope is not a string")
+    # Empty or absent refuses the token, as the MCP verifier does: a grant
+    # naming no project can do nothing, and must never read as every project.
+    if not (
+        isinstance(projects, list)
+        and projects
+        and all(isinstance(p, str) for p in projects)
+    ):
+        raise InvalidAccessTokenError("projects is not a non-empty list of ids")
     return AccessTokenClaims(
         sub=claims["sub"],
         client_id=claims["client_id"],
-        scopes=frozenset(claims["scope"].split()),
-        projects=frozenset(claims.get("projects") or ()),
+        scopes=frozenset(scope.split()),
+        projects=frozenset(projects),
         jti=claims["jti"],
         exp=claims["exp"],
     )

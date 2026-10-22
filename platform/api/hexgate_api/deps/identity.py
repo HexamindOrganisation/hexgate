@@ -9,6 +9,8 @@ OAuth access token (``Authorization: Bearer``, MCP clients), then from an
 import logging
 import os
 
+import jwt
+
 from fastapi import Depends, Header, HTTPException, Request
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -67,6 +69,9 @@ async def require_user(
     only if it declares the token's scope, and only for a project the token
     names (see :func:`_oauth_user`).
     """
+    # The accepted token's claims, or None: set on every path, so a handler
+    # can tell an AI-client call from a dashboard one without a getattr.
+    request.state.oauth = None
     if cookie_user is not None:
         return cookie_user
 
@@ -103,19 +108,26 @@ async def _oauth_user(bearer: str, request: Request, session: AsyncSession) -> U
     claims = _verify_bearer(bearer)
     user = await session.get(User, claims.sub)
     if user is None or not user.is_active:
-        raise HTTPException(status_code=401, detail="missing or invalid authentication")
+        raise _invalid_token()
     # FastAPI puts the matched route in the scope before dependencies run.
     extra = request.scope["route"].openapi_extra or {}
     if not _scopes_cover(extra.get(OAUTH_SCOPE_KEY), claims.scopes):
         raise HTTPException(
-            status_code=403, detail="token scope does not cover this route"
+            status_code=403,
+            detail="token scope does not cover this route",
+            headers={"WWW-Authenticate": 'Bearer error="insufficient_scope"'},
         )
-    if not extra.get(OAUTH_NO_PROJECT):
-        project_id = request.path_params.get("project_id")
-        if project_id is None or project_id not in claims.projects:
-            raise HTTPException(
-                status_code=403, detail="token does not cover this project"
-            )
+    project_id = request.path_params.get("project_id")
+    no_project = bool(extra.get(OAUTH_NO_PROJECT))
+    if not _project_covered(project_id, no_project, claims.projects):
+        raise HTTPException(status_code=403, detail="token does not cover this project")
+    _log.info(
+        "oauth token accepted: sub=%s client_id=%s jti=%s",
+        claims.sub,
+        claims.client_id,
+        claims.jti,
+    )
+    request.state.oauth = claims
     return user
 
 
@@ -128,21 +140,37 @@ def _scopes_cover(needed: str | list[str] | None, granted: frozenset[str]) -> bo
     return bool(required) and required <= granted
 
 
+def _project_covered(
+    project_id: str | None, no_project: bool, granted: frozenset[str]
+) -> bool:
+    """Whether the token names the route's project.
+
+    A route with a ``project_id`` is always checked, tagged or not; the
+    ``OAUTH_NO_PROJECT`` tag only excuses a route that has none.
+    """
+    if project_id is None:
+        return no_project
+    return project_id in granted
+
+
 def _verify_bearer(bearer: str) -> AccessTokenClaims:
     settings = get_settings()
     try:
-        claims = verify_access_token(
+        return verify_access_token(
             bearer, issuer=settings.public_url, audience=settings.mcp_resource_url
         )
     except InvalidAccessTokenError as exc:
-        # The reason only, never the token.
-        _log.info("oauth token refused: %s", exc)
-        raise HTTPException(
-            status_code=401, detail="missing or invalid authentication"
-        ) from None
-    if not claims.projects:
-        # Refused like the MCP server does: a grant naming no project can do
-        # nothing, so it is not a token at all, even on a route with no project.
-        _log.info("oauth token refused: no projects claim")
-        raise HTTPException(status_code=401, detail="missing or invalid authentication")
-    return claims
+        # The reason only, never the token. A header that won't decode gets
+        # its type alone, as in the MCP verifier: the message can quote it.
+        cause = exc.__cause__
+        reason = type(cause).__name__ if isinstance(cause, jwt.DecodeError) else exc
+        _log.info("oauth token refused: %s", reason)
+        raise _invalid_token() from None
+
+
+def _invalid_token() -> HTTPException:
+    return HTTPException(
+        status_code=401,
+        detail="missing or invalid authentication",
+        headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
+    )
