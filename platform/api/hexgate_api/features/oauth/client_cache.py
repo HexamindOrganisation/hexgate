@@ -85,11 +85,12 @@ class ClientMetadata(OAuthClientInformationFull):
 
         The platform's registry decides, not the document's own ``scope``
         field, which most clients (Claude Code's among them) leave out. With
-        no ``scope`` this returns None, as the SDK does.
+        no ``scope`` this returns None, as the SDK does. A repeated scope is
+        kept once, in the order first asked.
         """
         if requested_scope is None:
             return None
-        scopes = requested_scope.split(" ")
+        scopes = list(dict.fromkeys(requested_scope.split(" ")))
         for scope in scopes:
             if scope not in OAUTH_SCOPES:
                 raise InvalidScopeError(f"Unknown scope {scope!r}")
@@ -153,7 +154,7 @@ class ClientMetadataCache:
                 self._failures.put(client_id, str(exc), FAILURE_TTL_SECONDS)
                 raise
             logger.warning(
-                "serving stale OAuth client metadata for %s: refetch failed (%s)",
+                "serving stale OAuth client metadata for %r: refetch failed (%s)",
                 client_id,
                 type(exc.__cause__ or exc).__name__,
             )

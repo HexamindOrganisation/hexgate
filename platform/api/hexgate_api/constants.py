@@ -51,3 +51,5 @@ OAUTH_SCOPES = frozenset(
 # tagged as having none -- the two org routes a client uses to find one.
 OAUTH_SCOPE_KEY = "x-oauth-scope"
 OAUTH_NO_PROJECT = "x-oauth-no-project"
+# Where the authorization server's endpoints are mounted, and advertised.
+OAUTH_PREFIX = "/v1/oauth"
