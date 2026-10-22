@@ -1,16 +1,9 @@
 import { Link, useParams } from "react-router-dom";
-import { CheckCircle2, MailX } from "lucide-react";
+import { MailX } from "lucide-react";
 
+import { AuthLink, AuthShell } from "@/components/auth/AuthShell";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { useUser, useVerifyEmail } from "@/lib/auth";
-import { AuthCardLayout } from "./SignIn";
 
 /**
  * Landing page for the verify-email link. Auto-consumes the token on
@@ -37,24 +30,12 @@ export function VerifyEmailPage() {
 
   if (!token) {
     return (
-      <AuthCardLayout>
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle className="text-center">
-              Invalid verification link
-            </CardTitle>
-            <CardDescription className="text-center">
-              This link is missing its token. Sign in and request a fresh
-              verification email from your account.
-            </CardDescription>
-          </CardHeader>
-          <CardFooter>
-            <Button asChild variant="ghost" className="w-full">
-              <Link to="/sign-in">Sign in</Link>
-            </Button>
-          </CardFooter>
-        </Card>
-      </AuthCardLayout>
+      <AuthShell
+        tone="error"
+        title="Invalid verification link"
+        description="This link is missing its token. Sign in and request a fresh verification email from your account."
+        footer={<AuthLink to="/sign-in">Sign in</AuthLink>}
+      />
     );
   }
 
@@ -62,63 +43,39 @@ export function VerifyEmailPage() {
   // ``isLoading`` is the "no data yet, not errored" state.
   if (verify.isLoading) {
     return (
-      <AuthCardLayout>
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle className="text-center">Verifying…</CardTitle>
-            <CardDescription className="text-center">
-              Hang tight — one moment.
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </AuthCardLayout>
+      <AuthShell
+        tone="muted"
+        spin
+        title="Verifying…"
+        description="Hang tight — one moment."
+      />
     );
   }
 
   if (verify.isSuccess) {
     return (
-      <AuthCardLayout>
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <div className="mb-2 flex justify-center">
-              <CheckCircle2 className="h-8 w-8 text-emerald-400" />
-            </div>
-            <CardTitle className="text-center">Email verified</CardTitle>
-            <CardDescription className="text-center">
-              You're all set.
-            </CardDescription>
-          </CardHeader>
-          <CardFooter>
-            <Button asChild className="w-full">
-              <Link to={user ? "/" : "/sign-in"}>
-                {user ? "Continue to dashboard" : "Sign in"}
-              </Link>
-            </Button>
-          </CardFooter>
-        </Card>
-      </AuthCardLayout>
+      <AuthShell
+        tone="success"
+        title="Email verified"
+        description="You're all set."
+        card={false}
+      >
+        <Button asChild className="w-full">
+          <Link to={user ? "/" : "/sign-in"}>
+            {user ? "Continue to dashboard" : "Sign in"}
+          </Link>
+        </Button>
+      </AuthShell>
     );
   }
 
   return (
-    <AuthCardLayout>
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <div className="mb-2 flex justify-center">
-            <MailX className="h-8 w-8 text-destructive" />
-          </div>
-          <CardTitle className="text-center">Verification failed</CardTitle>
-          <CardDescription className="text-center">
-            This verification link is expired or invalid. Sign in and request a
-            fresh one from the banner at the top of the dashboard.
-          </CardDescription>
-        </CardHeader>
-        <CardFooter>
-          <Button asChild variant="ghost" className="w-full">
-            <Link to="/sign-in">Back to sign in</Link>
-          </Button>
-        </CardFooter>
-      </Card>
-    </AuthCardLayout>
+    <AuthShell
+      tone="error"
+      icon={MailX}
+      title="Verification failed"
+      description="This verification link is expired or invalid. Sign in and request a fresh one from the banner at the top of the dashboard."
+      footer={<AuthLink to="/sign-in">Back to sign in</AuthLink>}
+    />
   );
 }
