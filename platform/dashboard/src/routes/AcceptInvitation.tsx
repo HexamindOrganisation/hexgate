@@ -1,18 +1,9 @@
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { Loader2, ShieldCheck, XCircle } from "lucide-react";
 
-import { AuthCardLayout } from "@/routes/SignIn";
+import { AuthShell } from "@/components/auth/AuthShell";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { ApiError } from "@/lib/api";
 import { useActive } from "@/lib/active";
 import { useLogout, useUser } from "@/lib/auth";
@@ -44,19 +35,11 @@ export function AcceptInvitationPage() {
   // we'd flash "sign in to accept" for a moment while /users/me is
   // still in flight on a signed-in tab.
   if (!inviteId || preview.isLoading || userLoading) {
-    return (
-      <AuthCardLayout>
-        <LoadingCard />
-      </AuthCardLayout>
-    );
+    return <AuthShell tone="muted" spin title="Loading invitation…" />;
   }
 
   if (preview.error) {
-    return (
-      <AuthCardLayout>
-        <PreviewErrorCard error={preview.error} />
-      </AuthCardLayout>
-    );
+    return <PreviewError error={preview.error} />;
   }
 
   // ``preview.data`` is defined here — error and loading are both ruled
@@ -65,11 +48,7 @@ export function AcceptInvitationPage() {
   const inv = preview.data!;
 
   if (!user) {
-    return (
-      <AuthCardLayout>
-        <SignedOutCard invitation={inv} inviteId={inviteId} />
-      </AuthCardLayout>
-    );
+    return <SignedOut invitation={inv} inviteId={inviteId} />;
   }
 
   // Case-insensitive — the backend matches lowercased emails on
@@ -79,36 +58,17 @@ export function AcceptInvitationPage() {
   const emailMatches = user.email.toLowerCase() === inv.email.toLowerCase();
 
   if (!emailMatches) {
-    return (
-      <AuthCardLayout>
-        <EmailMismatchCard invitation={inv} signedInAs={user.email} />
-      </AuthCardLayout>
-    );
+    return <EmailMismatch invitation={inv} signedInAs={user.email} />;
   }
 
-  return (
-    <AuthCardLayout>
-      <AcceptCard invitation={inv} inviteId={inviteId} />
-    </AuthCardLayout>
-  );
+  return <AcceptCard invitation={inv} inviteId={inviteId} />;
 }
 
 // ---------------------------------------------------------------------------
-// Card variants — one per state-machine branch
+// One per state-machine branch
 // ---------------------------------------------------------------------------
 
-function LoadingCard() {
-  return (
-    <Card className="w-full max-w-md">
-      <CardContent className="flex items-center gap-3 py-10 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        Loading invitation…
-      </CardContent>
-    </Card>
-  );
-}
-
-function PreviewErrorCard({ error }: { error: ApiError }) {
+function PreviewError({ error }: { error: ApiError }) {
   // 404 → "this link is broken or the invite was withdrawn"
   // 410 → "expired or already used"
   // Other → generic "couldn't load" — covers transient network blips
@@ -128,24 +88,15 @@ function PreviewErrorCard({ error }: { error: ApiError }) {
   }
 
   return (
-    <Card className="w-full max-w-md">
-      <CardHeader className="space-y-1">
-        <div className="mb-2 flex justify-center">
-          <XCircle className="h-8 w-8 text-destructive" />
-        </div>
-        <CardTitle className="text-center">{title}</CardTitle>
-        <CardDescription className="text-center">{body}</CardDescription>
-      </CardHeader>
-      <CardFooter className="justify-center">
-        <Button variant="outline" asChild>
-          <a href="/">Go to dashboard</a>
-        </Button>
-      </CardFooter>
-    </Card>
+    <AuthShell tone="error" title={title} description={body} card={false}>
+      <Button variant="outline" asChild className="w-full">
+        <a href="/">Go to dashboard</a>
+      </Button>
+    </AuthShell>
   );
 }
 
-function SignedOutCard({
+function SignedOut({
   invitation,
   inviteId,
 }: {
@@ -169,15 +120,10 @@ function SignedOutCard({
   }
 
   return (
-    <Card className="w-full max-w-md">
-      <CardHeader className="space-y-1">
-        <div className="mb-2 flex justify-center">
-          <ShieldCheck className="h-8 w-8 text-primary" />
-        </div>
-        <CardTitle className="text-center">
-          You're invited to {invitation.org_name}
-        </CardTitle>
-        <CardDescription className="text-center">
+    <AuthShell
+      title={`You're invited to ${invitation.org_name}`}
+      description={
+        <>
           <span className="font-medium text-foreground">
             {invitation.invited_by_email}
           </span>{" "}
@@ -186,32 +132,33 @@ function SignedOutCard({
             {invitation.email}
           </span>{" "}
           to join as <span className="capitalize">{invitation.role}</span>.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
+        </>
+      }
+    >
+      <div className="space-y-4">
         <Alert>
           <AlertDescription>
             Sign in as <span className="font-medium">{invitation.email}</span>{" "}
             to accept this invitation.
           </AlertDescription>
         </Alert>
-      </CardContent>
-      <CardFooter className="flex-col gap-2">
-        <Button className="w-full" onClick={goSignIn}>
-          Sign in to accept
-        </Button>
-        <Button variant="ghost" className="w-full" onClick={goSignUp}>
-          Create an account
-        </Button>
+        <div className="space-y-2">
+          <Button className="w-full" onClick={goSignIn}>
+            Sign in to accept
+          </Button>
+          <Button variant="outline" className="w-full" onClick={goSignUp}>
+            Create an account
+          </Button>
+        </div>
         {/* Preserve the inviteId in the markup so e2e tests can read it
             for debugging; harmless otherwise. */}
         <span className="sr-only">Invitation {inviteId}</span>
-      </CardFooter>
-    </Card>
+      </div>
+    </AuthShell>
   );
 }
 
-function EmailMismatchCard({
+function EmailMismatch({
   invitation,
   signedInAs,
 }: {
@@ -234,24 +181,21 @@ function EmailMismatchCard({
   }
 
   return (
-    <Card className="w-full max-w-md">
-      <CardHeader className="space-y-1">
-        <div className="mb-2 flex justify-center">
-          <XCircle className="h-8 w-8 text-destructive" />
-        </div>
-        <CardTitle className="text-center">
-          This invite isn't for this account
-        </CardTitle>
-        <CardDescription className="text-center">
+    <AuthShell
+      tone="error"
+      title="This invite isn't for this account"
+      description={
+        <>
           The invitation is for{" "}
           <span className="font-medium text-foreground">
             {invitation.email}
           </span>
           , but you're signed in as{" "}
           <span className="font-medium text-foreground">{signedInAs}</span>.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
+        </>
+      }
+    >
+      <div className="space-y-4">
         <Alert variant="destructive">
           <AlertDescription>
             Sign out and sign back in with{" "}
@@ -259,8 +203,6 @@ function EmailMismatchCard({
             or ask the inviter to re-send to your current address.
           </AlertDescription>
         </Alert>
-      </CardContent>
-      <CardFooter>
         <Button
           className="w-full"
           onClick={switchAccount}
@@ -268,8 +210,8 @@ function EmailMismatchCard({
         >
           {logout.isPending ? "Signing out…" : "Sign out & switch account"}
         </Button>
-      </CardFooter>
-    </Card>
+      </div>
+    </AuthShell>
   );
 }
 
@@ -317,23 +259,19 @@ function AcceptCard({
   const errorText = accept.error ? translateError(accept.error) : null;
 
   return (
-    <Card className="w-full max-w-md">
-      <CardHeader className="space-y-1">
-        <div className="mb-2 flex justify-center">
-          <ShieldCheck className="h-8 w-8 text-primary" />
-        </div>
-        <CardTitle className="text-center">
-          Join {invitation.org_name}?
-        </CardTitle>
-        <CardDescription className="text-center">
+    <AuthShell
+      title={`Join ${invitation.org_name}?`}
+      description={
+        <>
           <span className="font-medium text-foreground">
             {invitation.invited_by_email}
           </span>{" "}
           invited you to join as{" "}
           <span className="capitalize text-foreground">{invitation.role}</span>.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
+        </>
+      }
+    >
+      <div className="space-y-4">
         {errorText && (
           <Alert variant="destructive">
             <AlertDescription>{errorText}</AlertDescription>
@@ -352,24 +290,24 @@ function AcceptCard({
           <dt className="text-muted-foreground">Email</dt>
           <dd className="col-span-2 font-mono text-xs">{invitation.email}</dd>
         </dl>
-      </CardContent>
-      <CardFooter className="flex-col gap-2">
-        <Button
-          className="w-full"
-          onClick={onAccept}
-          disabled={accept.isPending}
-        >
-          {accept.isPending ? "Joining…" : "Accept invitation"}
-        </Button>
-        <Button
-          variant="ghost"
-          className="w-full"
-          onClick={() => navigate("/", { replace: true })}
-          disabled={accept.isPending}
-        >
-          Not now
-        </Button>
-      </CardFooter>
-    </Card>
+        <div className="space-y-2">
+          <Button
+            className="w-full"
+            onClick={onAccept}
+            disabled={accept.isPending}
+          >
+            {accept.isPending ? "Joining…" : "Accept invitation"}
+          </Button>
+          <Button
+            variant="ghost"
+            className="w-full"
+            onClick={() => navigate("/", { replace: true })}
+            disabled={accept.isPending}
+          >
+            Not now
+          </Button>
+        </div>
+      </div>
+    </AuthShell>
   );
 }
