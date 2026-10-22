@@ -1,7 +1,9 @@
 """Verifies the platform API's OAuth access tokens against its JWKS.
 
-This check is for a clean 401 and the client's re-login. The API verifies the
-same token on every call it receives, and that check is the security boundary.
+This check is for a clean 401 and the client's re-login. The API is to verify
+the same token on every call it receives, as a token minted for itself too
+(spec §I), and that check is the security boundary; it lands with plan PR 9
+(#403), and until then the API answers the bearer with 401.
 """
 
 import logging

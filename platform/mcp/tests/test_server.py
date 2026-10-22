@@ -70,6 +70,14 @@ def test_when_get_on_mcp_then_405_rather_than_an_idle_stream(key):
     assert response.headers["allow"] == "POST"
 
 
+def test_when_get_on_mcp_has_no_token_then_401_names_resource_metadata():
+    with mcp_client() as c:
+        response = c.get("/mcp", headers={"Accept": "text/event-stream"})
+
+    assert response.status_code == 401
+    assert f'resource_metadata="{METADATA_URL}"' in response.headers["www-authenticate"]
+
+
 def test_protected_resource_metadata_happy_path():
     with mcp_client() as c:
         response = c.get("/.well-known/oauth-protected-resource/mcp")
