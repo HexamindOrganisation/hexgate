@@ -3,6 +3,7 @@ import json
 import pytest
 import respx
 
+from hexgate_mcp.tools.policy import NOT_IN_FORCE
 from tests.conftest import API_URL, JWKS_URL, OTHER_PROJECT, PROJECT, call_tool, jwks
 
 BASE = f"/v1/projects/{PROJECT}"
@@ -10,6 +11,17 @@ STAMP = {"content_hash": "h", "updated_at": "2026-10-22T00:00:00Z"}
 ENTRY = {"name": "policy.yaml", "content": "version: 1\n", **STAMP}
 CAP = {"name": "caps/refunds.yaml", "content": "tools: {}\n", **STAMP}
 MODULE = {"tier": "capability", "path": "refunds", "content": "x: 1\n", **STAMP}
+DRAFT = {"name": "caps/refunds.yaml", "content": "tools: {a: allow}\n"}
+ENTRY_DRAFT = {"name": "policy.yaml", "content": "version: 1\n"}
+NEW_FILE_DRAFT = {"name": "caps/billing.yaml", "content": "tools: {}\n"}
+DRY_RUN = {"role": "support", "tool": "refund"}
+FULL_DRY_RUN = {
+    **DRY_RUN,
+    "agent": "billing",
+    "args": {"amount": 500},
+    "attributes": {"tier": "gold"},
+    "draft": DRAFT,
+}
 # What the API answers on each route these tools call.
 ANSWERS = {
     ("GET", "/policy-files"): [ENTRY, CAP],
@@ -24,7 +36,17 @@ ANSWERS = {
         "roles": ["support"],
     },
     ("GET", "/policy-roles"): {"roles": {"support": {"*": ["refunds"]}}},
+    ("GET", "/policy/check"): {"ok": True, "lints": []},
+    ("POST", "/policy/preview"): {"resolved": {}, "lints": []},
+    ("POST", "/policy/test"): {"outcome": "allow"},
 }
+# The tools that read the resolved policy, so refuse a project with no store.
+RESOLVED = [
+    ("policy_resolve", {}, "/policy/resolve"),
+    ("policy_graph", {}, "/policy/graph"),
+    ("policy_check", {}, "/policy/check"),
+    ("policy_dry_run", DRY_RUN, "/policy/test"),
+]
 # One call of every tool here, each with the arguments it needs.
 CALLS = [
     ("policy_list_files", {}),
@@ -32,6 +54,8 @@ CALLS = [
     ("policy_resolve", {}),
     ("policy_graph", {}),
     ("policy_list_roles", {}),
+    ("policy_check", {}),
+    ("policy_dry_run", DRY_RUN),
 ]
 
 
@@ -58,9 +82,11 @@ def api_requests() -> list:
 
 
 def sent(request) -> tuple:
-    """A request as (method, path, query)."""
+    """A request as (method, path, query or JSON body)."""
     path = request.url.path.removeprefix(BASE)
-    return (request.method, path, dict(request.url.params))
+    if request.method == "GET":
+        return ("GET", path, dict(request.url.params))
+    return (request.method, path, json.loads(request.content))
 
 
 def call(token: str, name: str, /, **arguments) -> dict:
@@ -84,7 +110,12 @@ def error(result: dict) -> str:
                     {"name": "policy.yaml", **STAMP},
                     {"name": "caps/refunds.yaml", **STAMP},
                 ],
-                "modules": [{"tier": "capability", "path": "refunds", **STAMP}],
+                # Beside policy.yaml the module store is kept but not read.
+                "modules": {
+                    "in_force": False,
+                    "note": NOT_IN_FORCE,
+                    "modules": [{"tier": "capability", "path": "refunds", **STAMP}],
+                },
             },
             id="list_files-drops-content",
         ),
@@ -149,9 +180,57 @@ def error(result: dict) -> str:
         pytest.param(
             "policy_list_roles",
             {},
-            [("GET", "/policy-roles", {})],
-            ANSWERS["GET", "/policy-roles"],
+            [("GET", "/policy-roles", {}), ("GET", "/policy-files", {})],
+            {
+                "in_force": False,
+                "note": NOT_IN_FORCE,
+                **ANSWERS["GET", "/policy-roles"],
+            },
             id="list_roles",
+        ),
+        pytest.param(
+            "policy_check",
+            {},
+            [("GET", "/policy-files", {}), ("GET", "/policy/check", {})],
+            {"ok": True, "lints": []},
+            id="check-saved",
+        ),
+        pytest.param(
+            "policy_check",
+            {"draft": DRAFT},
+            [("GET", "/policy-files", {}), ("POST", "/policy/preview", DRAFT)],
+            {"resolved": {}, "lints": []},
+            id="check-draft",
+        ),
+        pytest.param(
+            "policy_check",
+            {"draft": ENTRY_DRAFT},
+            # The entry file starts a compose store: no lookup needed.
+            [("POST", "/policy/preview", ENTRY_DRAFT)],
+            {"resolved": {}, "lints": []},
+            id="check-entry-draft",
+        ),
+        pytest.param(
+            "policy_dry_run",
+            DRY_RUN,
+            # Unset fields left out, so the API applies its own defaults.
+            [("GET", "/policy-files", {}), ("POST", "/policy/test", DRY_RUN)],
+            {"outcome": "allow"},
+            id="dry_run-defaults",
+        ),
+        pytest.param(
+            "policy_dry_run",
+            FULL_DRY_RUN,
+            [("GET", "/policy-files", {}), ("POST", "/policy/test", FULL_DRY_RUN)],
+            {"outcome": "allow"},
+            id="dry_run-every-argument",
+        ),
+        pytest.param(
+            "policy_dry_run",
+            {**DRY_RUN, "draft": ENTRY_DRAFT},
+            [("POST", "/policy/test", {**DRY_RUN, "draft": ENTRY_DRAFT})],
+            {"outcome": "allow"},
+            id="dry_run-entry-draft",
         ),
     ],
 )
@@ -180,6 +259,16 @@ def test_when_no_file_matches_then_policy_read_file_refuses(token, arguments, me
     mock_api()
 
     assert message in error(call(token, "policy_read_file", **arguments))
+
+
+def test_when_project_has_no_entry_file_then_modules_and_roles_are_in_force(token):
+    mock_api(**{"/policy-files": [CAP]})
+
+    files = json.loads(call(token, "policy_list_files")["content"][0]["text"])
+    roles = json.loads(call(token, "policy_list_roles")["content"][0]["text"])
+
+    assert files["modules"] == [{"tier": "capability", "path": "refunds", **STAMP}]
+    assert roles == ANSWERS["GET", "/policy-roles"]
 
 
 def test_when_name_and_tier_are_swapped_then_policy_read_file_refuses(token):
@@ -214,21 +303,47 @@ def test_when_role_is_unknown_then_policy_graph_refuses(token):
     assert message.endswith("role 'Support' not defined (known: ['support'])")
 
 
-@pytest.mark.parametrize("name", ["policy_resolve", "policy_graph"])
-def test_when_project_has_no_policy_store_then_resolved_views_refuse(token, name):
+@pytest.mark.parametrize(("name", "arguments", "_"), RESOLVED)
+def test_when_project_has_no_policy_store_then_resolved_views_refuse(
+    token, name, arguments, _
+):
     mock_api(**{"/policy-files": [CAP], "/policy-roles": {"roles": {}}})
 
-    assert "each agent enforces its own policy" in error(call(token, name))
+    assert "each agent enforces its own policy" in error(call(token, name, **arguments))
     assert [r.url.path for r in api_requests()][-1] == f"{BASE}/policy-roles"
 
 
-@pytest.mark.parametrize("name", ["policy_resolve", "policy_graph"])
-def test_when_project_has_role_bindings_only_then_resolved_views_answer(token, name):
+@pytest.mark.parametrize(("name", "arguments", "path"), RESOLVED)
+def test_when_project_has_role_bindings_only_then_resolved_views_answer(
+    token, name, arguments, path
+):
     mock_api(**{"/policy-files": []})
 
-    assert not call(token, name)["isError"]
-    path = {"policy_resolve": "/policy/resolve", "policy_graph": "/policy/graph"}
-    assert sent(api_requests()[-1])[1] == path[name]
+    assert not call(token, name, **arguments)["isError"]
+    assert sent(api_requests()[-1])[1] == path
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        ("policy_check", {"draft": DRAFT}),
+        ("policy_dry_run", {**DRY_RUN, "draft": DRAFT}),
+    ],
+)
+@pytest.mark.parametrize("roles", [{"support": {"*": ["refunds"]}}, {}])
+def test_when_project_has_no_entry_file_then_a_draft_is_refused(
+    token, name, arguments, roles
+):
+    # Without an entry file the preview could only answer link-error, and the
+    # test route would evaluate the saved policy, ignoring the draft; with no
+    # role bindings either, the draft is still what the refusal names.
+    mock_api(**{"/policy-files": [CAP], "/policy-roles": {"roles": roles}})
+
+    message = error(call(token, name, **arguments))
+
+    assert "a draft file cannot apply" in message
+    assert "would switch every agent onto the file store" in message
+    assert {r.method for r in api_requests()} == {"GET"}
 
 
 def test_when_api_refuses_then_the_tool_error_carries_its_detail(token):
@@ -268,11 +383,32 @@ def test_when_project_is_not_granted_then_refused_before_any_request(
     assert api_requests() == []
 
 
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [("policy_list_files", {}), ("policy_check", {"draft": ENTRY_DRAFT})],
+)
 @respx.mock
-def test_when_project_id_holds_a_slash_then_it_is_sent_percent_encoded(key):
+def test_when_project_id_holds_a_slash_then_it_is_sent_percent_encoded(
+    key, name, arguments
+):
     respx.get(JWKS_URL).respond(json=jwks(key))
     api = respx.route(host="api.internal").respond(json=[])
 
-    call_tool(key.mint(projects=["a/b"]), "policy_list_files", {"project_id": "a/b"})
+    call_tool(key.mint(projects=["a/b"]), name, {"project_id": "a/b", **arguments})
 
     assert api.calls.last.request.url.raw_path.startswith(b"/v1/projects/a%2Fb/")
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        ("policy_check", {"draft": NEW_FILE_DRAFT}),
+        ("policy_dry_run", {**DRY_RUN, "draft": NEW_FILE_DRAFT}),
+    ],
+)
+def test_when_draft_is_a_file_not_stored_then_it_is_refused(token, name, arguments):
+    # Nothing imports a new file yet, so the API would answer for the saved policy.
+    mock_api()
+
+    assert "save it first" in error(call(token, name, **arguments))
+    assert {r.method for r in api_requests()} == {"GET"}

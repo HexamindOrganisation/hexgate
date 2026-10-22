@@ -123,4 +123,6 @@ def test_when_tools_are_listed_then_every_one_is_marked_read_only(key):
         "policy_resolve": read_only,
         "policy_graph": read_only,
         "policy_list_roles": read_only,
+        "policy_check": read_only,
+        "policy_dry_run": read_only,
     }
