@@ -114,12 +114,13 @@ def test_when_tools_are_listed_then_every_one_is_marked_read_only(key):
 
     tools = rpc(key.mint(), "tools/list", {})["tools"]
 
-    assert {t["name"]: t["annotations"]["readOnlyHint"] for t in tools} == {
-        "projects_list": True,
-        "policy_reference": True,
-        "policy_list_files": True,
-        "policy_read_file": True,
-        "policy_resolve": True,
-        "policy_graph": True,
-        "policy_list_roles": True,
+    read_only = {"readOnlyHint": True, "openWorldHint": False}
+    assert {t["name"]: t["annotations"] for t in tools} == {
+        "projects_list": read_only,
+        "policy_reference": read_only,
+        "policy_list_files": read_only,
+        "policy_read_file": read_only,
+        "policy_resolve": read_only,
+        "policy_graph": read_only,
+        "policy_list_roles": read_only,
     }

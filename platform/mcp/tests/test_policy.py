@@ -166,6 +166,15 @@ def test_when_no_file_matches_then_policy_read_file_refuses(token, arguments, me
     assert message in error(call(token, "policy_read_file", **arguments))
 
 
+def test_when_name_and_tier_are_swapped_then_policy_read_file_refuses(token):
+    mock_api()
+
+    result = call(token, "policy_read_file", name="capability", tier="refunds")
+
+    assert "tier" in error(result)
+    assert api_requests() == []
+
+
 def test_when_role_is_unknown_then_policy_graph_refuses(token):
     mock_api()
 
@@ -226,3 +235,13 @@ def test_when_project_is_not_granted_then_refused_before_any_request(
 
     assert OTHER_PROJECT in error(result)
     assert api_requests() == []
+
+
+@respx.mock
+def test_when_project_id_holds_a_slash_then_it_is_sent_percent_encoded(key):
+    respx.get(JWKS_URL).respond(json=jwks(key))
+    api = respx.route(host="api.internal").respond(json=[])
+
+    call_tool(key.mint(projects=["a/b"]), "policy_list_files", {"project_id": "a/b"})
+
+    assert api.calls.last.request.url.raw_path.startswith(b"/v1/projects/a%2Fb/")
