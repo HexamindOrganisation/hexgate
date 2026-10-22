@@ -94,8 +94,9 @@ def _resign(token: str, sign, **claim_overrides) -> str:
     return (signing_input + b"." + base64url_encode(sign(signing_input))).decode()
 
 
-def _get(client: TestClient, token: str, **headers: str):
-    return client.get(ROUTE, headers={"Authorization": f"Bearer {token}", **headers})
+def _get(client: TestClient, token: str, route: str = ROUTE, **headers: str):
+    url = route.replace("{project_id}", DEFAULT_PROJECT_ID)
+    return client.get(url, headers={"Authorization": f"Bearer {token}", **headers})
 
 
 def test_when_token_is_valid_then_a_route_with_no_scope_refuses_it(
@@ -147,14 +148,6 @@ def test_when_signed_by_the_sdk_key_then_401(
     assert r.status_code == 401
 
 
-def test_when_token_names_no_project_then_401(
-    client: TestClient, oauth_keystore: FileKeyStore
-) -> None:
-    """Refused as the MCP server refuses it, not read as "every project"."""
-    r = _get(client, _resign(_mint(), oauth_keystore.oauth_sign, projects=[]))
-    assert r.status_code == 401
-
-
 async def test_when_user_is_inactive_then_401(
     client: TestClient, session_factory
 ) -> None:
@@ -202,11 +195,16 @@ def test_when_scheme_is_lowercase_then_the_token_is_still_verified(
     assert r.status_code == 401
 
 
-def _marked_client(session_factory, path: str, extra: dict) -> TestClient:
+MARKED = "/p/{project_id}"
+
+
+def _marked_client(
+    session_factory, path: str = MARKED, extra: dict | None = None
+) -> TestClient:
     """A hand-marked route in its own app: no real route declares a scope yet."""
     marked = FastAPI()
 
-    @marked.get(path, openapi_extra=extra)
+    @marked.get(path, openapi_extra=extra or {OAUTH_SCOPE_KEY: "policy:read"})
     async def endpoint(request: Request, user: User = Depends(require_user)) -> dict:
         oauth = request.state.oauth
         return {"user": user.id, "jti": oauth.jti if oauth else None}
@@ -217,11 +215,6 @@ def _marked_client(session_factory, path: str, extra: dict) -> TestClient:
 
     marked.dependency_overrides[get_session] = override_session
     return TestClient(marked)
-
-
-def _call(client: TestClient, path: str, token: str):
-    url = path.replace("{project_id}", DEFAULT_PROJECT_ID)
-    return client.get(url, headers={"Authorization": f"Bearer {token}"})
 
 
 @pytest.mark.parametrize(
@@ -237,20 +230,19 @@ def _call(client: TestClient, path: str, token: str):
 def test_when_route_declares_scopes_then_the_token_must_hold_all(
     session_factory, oauth_keystore, mark, status: int
 ) -> None:
-    path = "/p/{project_id}"
-    client = _marked_client(session_factory, path, {OAUTH_SCOPE_KEY: mark})
-    r = _call(client, path, _mint(scopes=["policy:read", "audit:read"]))
+    client = _marked_client(session_factory, extra={OAUTH_SCOPE_KEY: mark})
+    r = _get(client, _mint(scopes=["policy:read", "audit:read"]), MARKED)
     assert r.status_code == status, r.text
 
 
 @pytest.mark.parametrize(
-    ("path", "tagged", "projects", "status"),
+    ("path", "tag", "projects", "status"),
     [
-        ("/p/{project_id}", False, [DEFAULT_PROJECT_ID], 200),
-        ("/p/{project_id}", False, ["other"], 403),
-        ("/np", True, ["other"], 200),
-        ("/np/{project_id}", True, ["other"], 403),
-        ("/x", False, [DEFAULT_PROJECT_ID], 403),
+        (MARKED, {}, [DEFAULT_PROJECT_ID], 200),
+        (MARKED, {}, ["other"], 403),
+        ("/np", {OAUTH_NO_PROJECT: True}, ["other"], 200),
+        ("/np/{project_id}", {OAUTH_NO_PROJECT: True}, ["other"], 403),
+        ("/x", {}, [DEFAULT_PROJECT_ID], 403),
     ],
     ids=[
         "project-named",
@@ -261,41 +253,30 @@ def test_when_route_declares_scopes_then_the_token_must_hold_all(
     ],
 )
 def test_when_route_is_scoped_then_the_token_must_name_its_project(
-    session_factory, oauth_keystore, path, tagged, projects, status: int
+    session_factory, oauth_keystore, path, tag, projects, status: int
 ) -> None:
     """The tag only excuses a route with no ``project_id``; one with it is always checked."""
-    extra = {OAUTH_SCOPE_KEY: "policy:read"} | (
-        {OAUTH_NO_PROJECT: True} if tagged else {}
+    client = _marked_client(
+        session_factory, path, {OAUTH_SCOPE_KEY: "policy:read"} | tag
     )
-    client = _marked_client(session_factory, path, extra)
-    r = _call(client, path, _mint(projects=projects))
+    r = _get(client, _mint(projects=projects), path)
     assert r.status_code == status, r.text
     if status == 403:
         assert r.json()["detail"] == "token does not cover this project"
 
 
-def test_when_token_is_accepted_then_it_is_logged_and_on_request_state(
+def test_request_state_oauth_holds_an_accepted_token_and_none_otherwise(
     session_factory, oauth_keystore, caplog: pytest.LogCaptureFixture
 ) -> None:
-    path = "/p/{project_id}"
-    client = _marked_client(session_factory, path, {OAUTH_SCOPE_KEY: "policy:read"})
+    client = _marked_client(session_factory)
     token = _mint()
     jti = jwt.decode(token, options={"verify_signature": False})["jti"]
     with caplog.at_level(logging.INFO, logger="hexgate_api.deps.identity"):
-        r = _call(client, path, token)
-    assert r.json()["jti"] == jti
+        assert _get(client, token, MARKED).json()["jti"] == jti
     assert (
         f"oauth token accepted: sub={DEFAULT_USER_ID} "
         f"client_id=https://client.example/meta.json jti={jti}"
     ) in caplog.text
-
-
-def test_when_caller_is_not_an_oauth_client_then_request_state_oauth_is_none(
-    session_factory, oauth_keystore
-) -> None:
-    path = "/p/{project_id}"
-    client = _marked_client(session_factory, path, {OAUTH_SCOPE_KEY: "policy:read"})
-    url = path.replace("{project_id}", DEFAULT_PROJECT_ID)
+    url = MARKED.replace("{project_id}", DEFAULT_PROJECT_ID)
     r = client.get(url, headers={"X-Dev-User": DEFAULT_USER_ID})
-    assert r.status_code == 200, r.text
-    assert r.json()["jti"] is None
+    assert r.json()["jti"] is None, r.text

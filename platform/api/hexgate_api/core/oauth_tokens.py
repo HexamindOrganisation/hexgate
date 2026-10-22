@@ -40,12 +40,15 @@ class InvalidAccessTokenError(Exception):
 
 
 class AccessTokenClaims(BaseModel):
-    """The verified claims of an access token. Validating a decoded payload
-    against it refuses any claim of the wrong type, so a bad shape is a 401,
-    never a 500 or a set of characters."""
+    """The verified claims of an access token, the whole set. Validating a
+    decoded payload against it refuses any claim of the wrong type, so a bad
+    shape is a 401, never a 500 or a set of characters. PyJWT has already
+    checked the values of iss, aud, exp and iat."""
 
     model_config = ConfigDict(frozen=True)
 
+    iss: str
+    aud: str | list[str]  # RFC 7519 allows a list
     sub: str
     client_id: str
     # The `scope` claim, a space-separated string.
@@ -54,6 +57,7 @@ class AccessTokenClaims(BaseModel):
     # grant naming no project can do nothing, and must never read as every one.
     projects: Annotated[frozenset[str], Field(min_length=1)]
     jti: str
+    iat: StrictInt
     exp: StrictInt  # "123" is refused, not coerced
 
     @field_validator("scopes", mode="before")
@@ -101,20 +105,17 @@ def mint_access_token(
 
 
 def verify_access_token(token: str, *, issuer: str, audience: str) -> AccessTokenClaims:
-    """Return the claims of ``token`` (typ, kid, EdDSA signature, iss, aud, exp,
-    a string scope, a non-empty list of projects checked), or raise
-    ``InvalidAccessTokenError``."""
+    """Return the claims of ``token`` (typ, kid, EdDSA signature, iss, aud, exp
+    checked, and every claim's type), or raise ``InvalidAccessTokenError``."""
     from hexgate_api.core.keystore import keystore
 
+    public_key = Ed25519PublicKey.from_public_bytes(keystore.oauth_public_key_bytes())
     try:
         header = jwt.get_unverified_header(token)
         if header.get("typ") != ACCESS_TOKEN_TYPE:
             raise InvalidAccessTokenError("not an access token (typ)")
         if header.get("kid") != keystore.oauth_fingerprint():
             raise InvalidAccessTokenError("access token signed by an unknown key")
-        public_key = Ed25519PublicKey.from_public_bytes(
-            keystore.oauth_public_key_bytes()
-        )
         claims = jwt.decode(
             token,
             public_key,
@@ -123,6 +124,9 @@ def verify_access_token(token: str, *, issuer: str, audience: str) -> AccessToke
             audience=audience,
             options={"require": ["iss", "sub", "aud", "exp", "iat", "jti"]},
         )
+    except jwt.DecodeError as exc:
+        # The type only: the message can quote the undecodable input.
+        raise InvalidAccessTokenError(type(exc).__name__) from exc
     # TypeError: PyJWT calls int() on exp/iat and lets it escape for, say, an
     # object, which would otherwise be a 500.
     except (jwt.PyJWTError, TypeError) as exc:

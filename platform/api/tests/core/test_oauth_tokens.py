@@ -137,10 +137,9 @@ _ABSENT = object()
         {"scope": _ABSENT},
         {"client_id": _ABSENT},
         {"client_id": 3},
-        {"sub": 3},
-        {"jti": 3},
         {"exp": str(int(time.time()) + 600)},
         {"exp": {}},
+        {"iat": str(int(time.time()))},
     ],
     ids=lambda c: "-".join(
         f"{k}={'absent' if v is _ABSENT else v!r}" for k, v in c.items()

@@ -9,8 +9,6 @@ OAuth access token (``Authorization: Bearer``, MCP clients), then from an
 import logging
 import os
 
-import jwt
-
 from fastapi import Depends, Header, HTTPException, Request
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -160,11 +158,8 @@ def _verify_bearer(bearer: str) -> AccessTokenClaims:
             bearer, issuer=settings.public_url, audience=settings.mcp_resource_url
         )
     except InvalidAccessTokenError as exc:
-        # The reason only, never the token. A header that won't decode gets
-        # its type alone, as in the MCP verifier: the message can quote it.
-        cause = exc.__cause__
-        reason = type(cause).__name__ if isinstance(cause, jwt.DecodeError) else exc
-        _log.info("oauth token refused: %s", reason)
+        # The reason only, never the token.
+        _log.info("oauth token refused: %s", exc)
         raise _invalid_token() from None
 
 
