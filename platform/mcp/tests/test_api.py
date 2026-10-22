@@ -115,3 +115,12 @@ async def test_when_api_fails_then_logged_and_tool_error_hides_its_url(
     assert str(exc.value) == "the Hexgate API failed to answer; try again shortly"
     assert caplog.messages == [f"API call failed: GET /orgs: {cause}"]
     assert caplog.records[0].levelname == "WARNING"
+
+
+@respx.mock
+async def test_when_a_param_is_none_then_it_is_left_out():
+    route = respx.get(ORGS_URL).respond(json=[])
+
+    await api().get("/orgs", "t", {"role": None, "agent": "*"})
+
+    assert dict(route.calls.last.request.url.params) == {"agent": "*"}

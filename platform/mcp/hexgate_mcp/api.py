@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 DETAIL_CAP_CHARS = 300
 
 # The refusals a caller can act on: log in again, ask for a scope or project,
-# fix the request. Anything else is the API failing (see `get`).
+# fix the request. Anything else is the API failing (see `_send`).
 TOOL_ERRORS = {
     401: "not authenticated",
     403: "forbidden",
@@ -38,7 +38,10 @@ class ApiClient:
         self._http = http
 
     async def get(self, path: str, token: str, params: dict | None = None) -> Any:
-        return await self._send("GET", path, token, params=params)
+        # httpx sends a None value as an empty string; an unset optional
+        # parameter is left out instead, so the API applies its own default.
+        query = {k: v for k, v in (params or {}).items() if v is not None}
+        return await self._send("GET", path, token, params=query)
 
     async def post(self, path: str, token: str, body: dict) -> Any:
         return await self._send("POST", path, token, json=body)

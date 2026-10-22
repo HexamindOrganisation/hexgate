@@ -3,7 +3,15 @@ import respx
 from starlette.testclient import TestClient
 
 from hexgate_mcp.scopes import OAUTH_SCOPES
-from tests.conftest import JWKS_URL, RESOURCE, SETTINGS, jwks, mcp_client, post_mcp
+from tests.conftest import (
+    JWKS_URL,
+    RESOURCE,
+    SETTINGS,
+    jwks,
+    mcp_client,
+    post_mcp,
+    rpc,
+)
 
 METADATA_URL = "https://app.hexgate.test/.well-known/oauth-protected-resource/mcp"
 INITIALIZE = {
@@ -96,3 +104,22 @@ def test_health_happy_path():
         response = c.get("/health")
 
     assert response.json() == {"status": "ok", "service": "hexgate-mcp"}
+
+
+@respx.mock
+def test_when_tools_are_listed_then_every_one_is_marked_read_only(key):
+    # Nothing registered by default writes: clients may call any of them
+    # without asking the user first.
+    respx.get(JWKS_URL).respond(json=jwks(key))
+
+    tools = rpc(key.mint(), "tools/list", {})["tools"]
+
+    assert {t["name"]: t["annotations"]["readOnlyHint"] for t in tools} == {
+        "projects_list": True,
+        "policy_reference": True,
+        "policy_list_files": True,
+        "policy_read_file": True,
+        "policy_resolve": True,
+        "policy_graph": True,
+        "policy_list_roles": True,
+    }

@@ -1,11 +1,12 @@
-"""What every tool shares: the caller's token, checked for the tool's scope, and
-the cap on what a result sends back to the model."""
+"""What every tool shares: the caller's token, checked for the tool's scope, the
+cap on what a result sends back to the model, and the read-only annotation."""
 
 import json
 from typing import Any
 
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.fastmcp.exceptions import ToolError
+from mcp.types import ToolAnnotations
 
 from hexgate_mcp.auth import HexgateAccessToken
 
@@ -15,6 +16,9 @@ from hexgate_mcp.auth import HexgateAccessToken
 RESULT_CAP_BYTES = 256 * 1024
 TRUNCATED_MARKER = '\n{"truncated": true}'
 TRUNCATED_LIST_OPEN = '{"truncated": true, "items": ['
+
+# For a tool that changes nothing: clients may call it without asking first.
+READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 
 
 def caller(*scopes: str, project_id: str | None = None) -> HexgateAccessToken:
