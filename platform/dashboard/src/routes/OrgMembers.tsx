@@ -172,7 +172,7 @@ export function OrgMembersPage() {
       />
 
       {/* ----- Members table ----- */}
-      <section className="rounded-lg border border-border bg-card">
+      <section className="rounded-xl border border-border bg-card">
         <div className="border-b border-border px-4 py-3">
           <h2 className="text-sm font-semibold">
             Members ({membersQuery.data?.length ?? 0})
@@ -198,12 +198,19 @@ export function OrgMembersPage() {
                 return (
                   <TableRow key={member.user_id}>
                     <TableCell>
-                      <span className="font-mono text-xs">{member.email}</span>
-                      {isSelf && (
-                        <span className="ml-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-                          you
+                      <div className="flex items-center gap-2.5">
+                        <span className="grid size-7 shrink-0 place-items-center rounded-full bg-primary/15 text-[11px] font-semibold uppercase text-primary">
+                          {member.email[0] ?? "·"}
                         </span>
-                      )}
+                        <span className="font-mono text-xs">
+                          {member.email}
+                        </span>
+                        {isSelf && (
+                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                            you
+                          </span>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       {canManage ? (
@@ -248,7 +255,7 @@ export function OrgMembersPage() {
 
       {/* ----- Pending invitations table (admin/owner only) ----- */}
       {canManage && (
-        <section className="rounded-lg border border-border bg-card">
+        <section className="rounded-xl border border-border bg-card">
           <div className="border-b border-border px-4 py-3">
             <h2 className="text-sm font-semibold">
               Pending invitations ({invitationsQuery.data?.length ?? 0})
