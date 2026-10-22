@@ -1,6 +1,7 @@
 """Ed25519 keys generated per test, a minter for tokens shaped like the API's,
 and a client for the app over its MCP transport."""
 
+import json
 import time
 import uuid
 from typing import Any
@@ -77,3 +78,21 @@ def post_mcp(c: TestClient, body: dict[str, Any], token: str | None) -> httpx.Re
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
     return c.post("/mcp", json=body, headers=headers)
+
+
+def call_tool(name: str, arguments: dict[str, Any], token: str) -> dict[str, Any]:
+    """The JSON-RPC result of one tools/call over the app's MCP transport."""
+    call = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": name, "arguments": arguments},
+    }
+    with mcp_client() as c:
+        response = post_mcp(c, call, token)
+    data = next(
+        line.removeprefix("data: ")
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    )
+    return json.loads(data)["result"]

@@ -36,6 +36,9 @@ class ApiClient:
     async def post(self, path: str, token: str, body: dict) -> Any:
         return await self._send("POST", path, token, json=body)
 
+    async def put(self, path: str, token: str, body: dict) -> Any:
+        return await self._send("PUT", path, token, json=body)
+
     async def _send(self, method: str, path: str, token: str, **kwargs: Any) -> Any:
         try:
             response = await self._http.request(

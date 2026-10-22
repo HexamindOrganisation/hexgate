@@ -1,6 +1,7 @@
 import json
 
 import pytest
+import respx
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.fastmcp.exceptions import ToolError
@@ -12,7 +13,9 @@ from hexgate_mcp.tools import (
     caller,
     result_text,
 )
-from tests.conftest import PROJECT
+from tests.conftest import JWKS_URL, PROJECT, call_tool, jwks
+
+OTHER_PROJECT = "00000000-0000-0000-0000-000000000004"
 
 
 @pytest.fixture
@@ -51,6 +54,33 @@ def test_when_no_token_then_refused():
 def test_when_tool_names_no_scope_then_it_raises(signed_in):
     with pytest.raises(ValueError, match="must name the scope"):
         caller(project_id=PROJECT)
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "scope"),
+    [
+        ("policy_save", {"name": "policy.yaml", "content": ""}, "policy:write"),
+        ("audit_decisions", {}, "audit:read"),
+        ("agents_list", {}, "agents:read"),
+    ],
+)
+@pytest.mark.parametrize("grant", ["scope", "project"])
+@respx.mock
+def test_when_grant_does_not_cover_the_call_then_refused_before_any_request(
+    key, tool, arguments, scope, grant
+):
+    respx.get(JWKS_URL).respond(json=jwks(key))
+    api = respx.route(host="api.internal", path__startswith="/v1/")
+    if grant == "scope":
+        token, project_id, error = key.mint(scope="projects:read"), PROJECT, scope
+    else:
+        token, project_id, error = key.mint(scope=scope), OTHER_PROJECT, OTHER_PROJECT
+
+    result = call_tool(tool, arguments | {"project_id": project_id}, token)
+
+    assert result["isError"]
+    assert repr(error) in result["content"][0]["text"]
+    assert not api.called
 
 
 def test_result_text_happy_path():

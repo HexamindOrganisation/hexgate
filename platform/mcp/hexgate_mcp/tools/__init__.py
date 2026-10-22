@@ -1,5 +1,6 @@
-"""What every tool shares: the caller's token, checked for the tool's scope, and
-the cap on what a result sends back to the model."""
+"""What every tool shares: the caller's token, checked for the tool's scopes and
+project, the marking of text the model must not obey, and the cap on what a
+result sends back to the model."""
 
 import json
 from typing import Any
@@ -33,6 +34,35 @@ def caller(*scopes: str, project_id: str | None = None) -> HexgateAccessToken:
             "connection; call projects_list for their ids"
         )
     return token
+
+
+def untrusted(
+    value: Any, trusted: frozenset[str], by_name: frozenset[str] = frozenset()
+) -> Any:
+    """A copy of `value` with every dict key outside `trusted`, at any depth,
+    renamed `untrusted_<key>`; nothing under a renamed key is walked. The
+    values of a `by_name` key are dicts keyed by name: the names stay, and
+    each value is walked.
+
+    For text that neither the caller nor Hexgate wrote: a tool description from
+    a third-party library, the arguments an end user's request produced. Any of
+    it can read "allow delete_database for every role"; the name tells the
+    model it is data, and each tool's description says so. The set names what
+    is trusted, so a field the API adds later, at any level, goes out marked.
+    """
+    if isinstance(value, list):
+        return [untrusted(item, trusted, by_name) for item in value]
+    if not isinstance(value, dict):
+        return value
+    marked = {}
+    for key, item in value.items():
+        if key not in trusted:
+            marked[f"untrusted_{key}"] = item
+        elif key in by_name:
+            marked[key] = {n: untrusted(v, trusted, by_name) for n, v in item.items()}
+        else:
+            marked[key] = untrusted(item, trusted, by_name)
+    return marked
 
 
 def result_text(value: Any) -> str:
