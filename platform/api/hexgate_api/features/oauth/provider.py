@@ -20,7 +20,9 @@ from mcp.server.auth.provider import (
     OAuthAuthorizationServerProvider,
     RefreshToken,
 )
-from mcp.server.auth.routes import create_auth_routes
+from mcp.server.auth.handlers.token import TokenHandler
+from mcp.server.auth.middleware.client_auth import ClientAuthenticator
+from mcp.server.auth.routes import AUTHORIZATION_PATH, TOKEN_PATH, create_auth_routes
 from mcp.server.auth.settings import ClientRegistrationOptions
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from pydantic import AnyHttpUrl
@@ -33,8 +35,6 @@ from hexgate_api.settings import get_settings
 
 OAUTH_PREFIX = "/v1/oauth"
 CONSENT_PATH = "/oauth/consent"
-_SDK_METADATA_PATH = "/.well-known/oauth-authorization-server"
-_SDK_AUTHORIZE_PATH = "/authorize"
 
 
 class HexgateOAuthProvider(
@@ -110,11 +110,13 @@ class HexgateOAuthProvider(
 
 
 def oauth_routes() -> list[Route]:
-    """The SDK's authorize and token routes under ``/v1/oauth``, over one provider.
+    """The SDK's authorize and token handlers under ``/v1/oauth``, over one provider.
 
     Not its metadata route: ``well_known.py`` serves that document, with an
     ``issuer`` that equals the tokens' ``iss``. The authorize route takes GET
-    only, so the consent POST can have that path.
+    only (no HEAD), so the consent POST can have that path. The token route
+    is the SDK's handler without its allow-any-origin CORS wrapper, so the
+    app's ``CORSMiddleware`` alone decides which origins may call it.
     """
     settings = get_settings()
     clients = ClientMetadataCache(
@@ -125,17 +127,23 @@ def oauth_routes() -> list[Route]:
         resource_url=settings.mcp_resource_url,
         consent_url=f"{settings.dashboard_url.rstrip('/')}{CONSENT_PATH}",
     )
-    routes = create_auth_routes(
-        provider,
-        issuer_url=AnyHttpUrl(settings.public_url),
-        client_registration_options=ClientRegistrationOptions(enabled=False),
-    )
-    return [
-        Route(
-            f"{OAUTH_PREFIX}{route.path}",
-            route.endpoint,
-            methods=["GET"] if route.path == _SDK_AUTHORIZE_PATH else route.methods,
+    (authorize,) = [
+        route
+        for route in create_auth_routes(
+            provider,
+            issuer_url=AnyHttpUrl(settings.public_url),
+            client_registration_options=ClientRegistrationOptions(enabled=False),
         )
-        for route in routes
-        if route.path != _SDK_METADATA_PATH
+        if route.path == AUTHORIZATION_PATH
     ]
+    authorize_route = Route(
+        f"{OAUTH_PREFIX}{AUTHORIZATION_PATH}", authorize.endpoint, methods=["GET"]
+    )
+    # Starlette adds HEAD to every GET route; the SDK's handler would read it as a form POST.
+    authorize_route.methods.discard("HEAD")
+    token_route = Route(
+        f"{OAUTH_PREFIX}{TOKEN_PATH}",
+        TokenHandler(provider, ClientAuthenticator(provider)).handle,
+        methods=["POST"],
+    )
+    return [authorize_route, token_route]

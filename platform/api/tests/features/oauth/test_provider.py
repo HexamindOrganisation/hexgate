@@ -41,6 +41,7 @@ def settings(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("HEXGATE_PUBLIC_URL", PUBLIC_URL)
     monkeypatch.setenv("HEXGATE_MCP_RESOURCE_URL", RESOURCE_URL)
     monkeypatch.setenv("HEXGATE_DASHBOARD_URL", DASHBOARD_URL)
+    monkeypatch.setenv("HEXGATE_CORS_ORIGINS", "http://localhost:5173")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -236,6 +237,36 @@ async def test_when_sdk_routes_mounted_then_metadata_is_ours(
     resp = client.get("/.well-known/oauth-authorization-server")
     assert resp.status_code == 200
     assert resp.json() == await authorization_server_metadata()
+
+
+def test_when_authorize_head_then_405(client: TestClient, fetches: list[bool]) -> None:
+    resp = client.head("/v1/oauth/authorize", params={"client_id": CLIENT_ID})
+    assert resp.status_code == 405
+    assert fetches == []
+
+
+@pytest.mark.parametrize(
+    ("origin", "allowed"),
+    [
+        ("https://evil.example", None),
+        ("http://localhost:5173", "http://localhost:5173"),
+    ],
+)
+def test_when_token_posted_cross_origin_then_app_cors_decides(
+    client: TestClient, origin: str, allowed: str | None
+) -> None:
+    # The SDK's own wrapper would answer any origin with "*".
+    resp = client.post(
+        "/v1/oauth/token",
+        data={
+            "client_id": CLIENT_ID,
+            "grant_type": "refresh_token",
+            "refresh_token": "r",
+        },
+        headers={"Origin": origin},
+    )
+    assert resp.status_code == 400
+    assert resp.headers.get("access-control-allow-origin") == allowed
 
 
 def test_when_state_empty_then_consent_query_keeps_it(client: TestClient) -> None:
