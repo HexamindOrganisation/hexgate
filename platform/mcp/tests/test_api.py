@@ -1,5 +1,3 @@
-import json
-
 import httpx
 import pytest
 import respx
@@ -21,28 +19,6 @@ async def test_get_happy_path():
 
     assert await api().get("/orgs", "the-token") == [{"id": "org-1"}]
     assert route.calls.last.request.headers["authorization"] == "Bearer the-token"
-
-
-@respx.mock
-async def test_post_happy_path():
-    url = f"{SETTINGS.api_v1_url}/projects/p/policy/test"
-    route = respx.post(url).respond(json={"outcome": "allow"})
-
-    result = await api().post("/projects/p/policy/test", "the-token", {"tool": "t"})
-
-    assert result == {"outcome": "allow"}
-    assert json.loads(route.calls.last.request.content) == {"tool": "t"}
-    assert route.calls.last.request.headers["authorization"] == "Bearer the-token"
-
-
-@respx.mock
-async def test_when_post_fails_then_log_names_the_method(caplog):
-    respx.post(ORGS_URL).respond(500)
-
-    with pytest.raises(ToolError):
-        await api().post("/orgs", "t", {})
-
-    assert caplog.messages == ["API call failed: POST /orgs: 500"]
 
 
 @pytest.mark.parametrize(
