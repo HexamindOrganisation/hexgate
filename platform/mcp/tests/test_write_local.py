@@ -184,12 +184,12 @@ async def test_when_rename_fails_then_policy_write_local_keeps_the_old_file(
 
 
 async def test_when_target_is_a_directory_then_policy_write_local_refuses(root):
-    (root / "team").mkdir()
+    (root / "team.yaml").mkdir()
 
-    with pytest.raises(ToolError, match="could not write 'team'"):
-        await write(root, "team")
+    with pytest.raises(ToolError, match="could not write 'team.yaml'"):
+        await write(root, "team.yaml")
 
-    assert os.listdir(root / "team") == []
+    assert os.listdir(root / "team.yaml") == []
 
 
 def list_tools(settings, key) -> str:
@@ -216,3 +216,54 @@ def test_when_local_policy_dir_is_set_then_policy_write_local_is_listed(key, roo
 
     assert '"policy_write_local"' in text
     assert '"destructiveHint":true' in text
+
+
+async def test_when_root_sits_in_a_dot_directory_then_policy_write_local_writes(
+    tmp_path,
+):
+    # Only the path below the root is checked: ~/.config/hexgate is a fine root.
+    root = tmp_path / ".config" / "policies"
+    root.mkdir(parents=True)
+
+    await write(root, "agent.yaml")
+
+    assert (root / "agent.yaml").read_text() == POLICY
+
+
+async def test_when_suffix_is_yml_then_policy_write_local_writes(root):
+    await write(root, "agent.yml")
+
+    assert (root / "agent.yml").read_text() == POLICY
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "Makefile",
+        "agent.yaml.bak",
+        "agent.json",
+        ".git/hooks/pre-commit",
+        ".hexgate.yaml",
+        ".config/agent.yaml",
+        "team/.hidden/agent.yaml",
+    ],
+)
+async def test_when_path_is_not_a_policy_file_then_policy_write_local_refuses(
+    root, path
+):
+    with pytest.raises(ToolError, match="not a policy file"):
+        await write(root, path)
+
+    assert os.listdir(root) == []
+
+
+async def test_when_a_symlink_inside_leads_to_a_dot_path_then_policy_write_local_refuses(
+    root,
+):
+    (root / ".git").mkdir()
+    (root / "alias.yaml").symlink_to(root / ".git" / "config.yaml")
+
+    with pytest.raises(ToolError, match="not a policy file"):
+        await write(root, "alias.yaml")
+
+    assert os.listdir(root / ".git") == []

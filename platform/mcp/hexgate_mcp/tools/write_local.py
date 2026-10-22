@@ -13,15 +13,24 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
+POLICY_SUFFIXES = {".yaml", ".yml"}
+
 
 def confine(root: Path, path: str) -> Path:
     """The real path `path` names under `root`, a resolved directory. Resolving
     first follows every `..` and symlink, so one check refuses an absolute
     path, a `..` anywhere in it and a link out alike. The directory itself is
-    refused too: it is not a file to write."""
+    refused too: it is not a file to write. Inside it, only a policy file
+    outside any dot-directory: the directory may be a repo root, and
+    `.git/hooks/pre-commit` or a `Makefile` would run code."""
     target = (root / path).resolve()
     if target == root or not target.is_relative_to(root):
         raise ToolError(f"{path!r} is not a file inside the local policy directory")
+    parts = target.relative_to(root).parts
+    if target.suffix not in POLICY_SUFFIXES or any(p.startswith(".") for p in parts):
+        raise ToolError(
+            f"{path!r} is not a policy file: only .yaml or .yml, outside dot-directories"
+        )
     return target
 
 
@@ -69,8 +78,9 @@ def register(mcp: FastMCP, root: Path) -> None:
     )
     def policy_write_local(path: str, content: str) -> str:
         """Write a policy file into the local policy directory on this machine,
-        replacing any file already there. `path` is relative to that directory;
-        missing subdirectories are created. Nothing is sent to the platform."""
+        replacing any file already there. `path` is relative to that directory,
+        ends in .yaml or .yml and has no part starting with a dot; missing
+        subdirectories are created. Nothing is sent to the platform."""
         target = confine(root, path)
         try:
             write_atomic(target, content, new_mode)
