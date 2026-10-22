@@ -19,7 +19,7 @@ from hexgate_mcp.auth import JwksTokenVerifier
 from hexgate_mcp.jwks import JwksCache
 from hexgate_mcp.scopes import OAUTH_SCOPES
 from hexgate_mcp.settings import Settings
-from hexgate_mcp.tools import policy, projects, reference
+from hexgate_mcp.tools import policy, projects, reference, write_local
 
 
 async def health(_: Request) -> JSONResponse:
@@ -62,6 +62,8 @@ def build_app(settings: Settings, http: httpx.AsyncClient) -> Starlette:
     api = ApiClient(settings.api_v1_url, http)
     projects.register(mcp, api)
     policy.register(mcp, api)
+    if settings.local_policy_dir is not None:
+        write_local.register(mcp, settings.local_policy_dir)
     app = mcp.streamable_http_app()
     _serve_resource_metadata(app, auth, settings.issuer)
     _refuse_get_stream(app, auth, mcp.settings.streamable_http_path)

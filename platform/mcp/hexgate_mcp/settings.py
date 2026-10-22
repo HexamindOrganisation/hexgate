@@ -4,6 +4,7 @@ API's ``HEXGATE_PUBLIC_URL``). The API's ``.env`` is never read here."""
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,9 @@ class Settings:
     issuer: str
     # The URL clients connect to, the only accepted token `aud`.
     resource_url: str
+    # Where policy_write_local writes; None (the deploy value) leaves the
+    # tool unregistered.
+    local_policy_dir: Path | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -27,12 +31,21 @@ class Settings:
                 f"public_url={issuer!r} ends with '/' — set "
                 "HEXGATE_PUBLIC_URL without the trailing slash."
             )
+        local_policy_dir = None
+        if raw_dir := os.environ.get("HEXGATE_MCP_LOCAL_POLICY_DIR"):
+            local_policy_dir = Path(raw_dir)
+            if not local_policy_dir.is_dir():
+                raise ValueError(
+                    f"local_policy_dir={raw_dir!r} is not a directory — "
+                    "create it, or unset HEXGATE_MCP_LOCAL_POLICY_DIR."
+                )
         return cls(
             api_url=os.environ.get("HEXGATE_MCP_API_URL", "http://localhost:8000"),
             issuer=issuer,
             resource_url=os.environ.get(
                 "HEXGATE_MCP_RESOURCE_URL", "http://localhost:8080/mcp"
             ),
+            local_policy_dir=local_policy_dir,
         )
 
     @property
