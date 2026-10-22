@@ -43,6 +43,9 @@ class ApiClient:
         query = {k: v for k, v in (params or {}).items() if v is not None}
         return await self._send("GET", path, token, params=query)
 
+    async def post(self, path: str, token: str, body: dict) -> Any:
+        return await self._send("POST", path, token, json=body)
+
     async def _send(self, method: str, path: str, token: str, **kwargs: Any) -> Any:
         try:
             response = await self._http.request(
