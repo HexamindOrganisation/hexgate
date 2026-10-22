@@ -160,6 +160,10 @@ def test_when_expired_then_refused() -> None:
         _verify(_mint(now=int(time.time()) - ACCESS_TOKEN_TTL_SECONDS - 5))
 
 
+def test_when_audience_is_a_list_naming_ours_then_accepted() -> None:
+    assert _verify(_mint(audience=["https://other.example/mcp", AUDIENCE]))
+
+
 def test_when_audience_differs_then_refused() -> None:
     with pytest.raises(InvalidAccessTokenError):
         _verify(_mint(audience="https://other.example/mcp"))

@@ -76,7 +76,7 @@ def _mint(**overrides) -> str:
         "scopes": ["policy:read"],
         "projects": [DEFAULT_PROJECT_ID],
         "issuer": settings.public_url,
-        "audience": settings.mcp_resource_url,
+        "audience": [settings.mcp_resource_url, settings.public_url],
     } | overrides
     return mint_access_token(**kwargs)
 
@@ -129,9 +129,10 @@ def test_when_header_is_not_an_oauth_bearer_then_require_user_ignores_it(
     [
         {"now": int(time.time()) - ACCESS_TOKEN_TTL_SECONDS - 1},
         {"audience": "https://other.example/mcp"},
+        {"audience": get_settings().mcp_resource_url},
         {"issuer": "https://other.example"},
     ],
-    ids=["expired", "wrong-aud", "wrong-iss"],
+    ids=["expired", "wrong-aud", "mcp-only-aud", "wrong-iss"],
 )
 def test_when_token_does_not_verify_then_401(client: TestClient, overrides) -> None:
     r = _get(client, _mint(**overrides))

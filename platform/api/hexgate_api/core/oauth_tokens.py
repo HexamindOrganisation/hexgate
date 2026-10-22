@@ -75,7 +75,7 @@ def mint_access_token(
     scopes: Iterable[str],
     projects: Iterable[str],
     issuer: str,
-    audience: str,
+    audience: str | list[str],
     now: int | None = None,
 ) -> str:
     """Return a signed access token valid for ``ACCESS_TOKEN_TTL_SECONDS``.
@@ -83,6 +83,8 @@ def mint_access_token(
     A token naming no project (``[]``, or ``[""]`` from ``"".split(",")``)
     means the caller lost the grant's projects, so it is refused rather than
     minted dead; so is a bare csv string, which would iterate as characters.
+    ``audience`` may list several resources: a token the MCP server forwards
+    to the API names both.
     """
     if isinstance(projects, str) or isinstance(scopes, str):
         raise TypeError("pass projects and scopes as lists, not a csv string")

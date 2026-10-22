@@ -154,8 +154,11 @@ def _project_covered(
 def _verify_bearer(bearer: str) -> AccessTokenClaims:
     settings = get_settings()
     try:
+        # The API's own URL, not the MCP resource's: the MCP server forwards the
+        # token, so it is minted for both, and a token for the MCP server alone
+        # must not pass through to the API.
         return verify_access_token(
-            bearer, issuer=settings.public_url, audience=settings.mcp_resource_url
+            bearer, issuer=settings.public_url, audience=settings.public_url
         )
     except InvalidAccessTokenError as exc:
         # The reason only, never the token.

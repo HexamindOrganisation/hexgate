@@ -34,9 +34,10 @@ class Settings(BaseSettings):
     enricher_max_poll_records: int = 500
     enricher_insert_max_backoff_s: float = 30.0
 
-    # OAuth for MCP clients. public_url is the token `iss` and the base of every
-    # URL in the authorization-server metadata. mcp_resource_url is the only
-    # accepted `aud`; in dev the MCP server listens on :8080 with no proxy in
+    # OAuth for MCP clients. public_url is the token `iss`, the base of every
+    # URL in the authorization-server metadata, and the `aud` the API accepts.
+    # A token's `aud` lists mcp_resource_url too, since the MCP server forwards
+    # it to the API; in dev the MCP server listens on :8080 with no proxy in
     # front, so it is not public_url + "/mcp".
     public_url: str = "http://localhost:8000"
     mcp_resource_url: str = "http://localhost:8080/mcp"
