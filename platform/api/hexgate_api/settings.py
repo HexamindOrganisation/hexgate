@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     # front, so it is not public_url + "/mcp".
     public_url: str = "http://localhost:8000"
     mcp_resource_url: str = "http://localhost:8080/mcp"
+    # The dashboard's origin, where /authorize sends a login for consent. In
+    # dev it is the Vite server, not public_url.
+    dashboard_url: str = "http://localhost:5173"
+    # Also accept http client ids on a loopback host. Dev and tests only.
+    oauth_allow_insecure_client_ids: bool = False
 
     @model_validator(mode="after")
     def _refuse_public_url_trailing_slash(self) -> "Settings":

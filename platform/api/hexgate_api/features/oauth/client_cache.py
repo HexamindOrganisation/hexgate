@@ -66,10 +66,13 @@ class ClientMetadata(OAuthClientInformationFull):
 
         Both sides are pydantic URLs, so they compare in normalised form (host
         lowercased, default port dropped), which is the URL the login is
-        redirected to. With no ``redirect_uri``, the SDK's own rule applies.
+        redirected to. A ``redirect_uri`` is required, even when the document
+        lists only one: the SDK would stand that one in and then redirect an
+        error there, which RFC 6749 §4.1.2.1 forbids for a target the request
+        did not supply.
         """
         if redirect_uri is None:
-            return super().validate_redirect_uri(redirect_uri)
+            raise InvalidRedirectUriError("redirect_uri is required")
         for registered in self.redirect_uris or ():
             if _redirect_matches(redirect_uri, registered):
                 return redirect_uri
