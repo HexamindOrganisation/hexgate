@@ -27,6 +27,11 @@ ACCESS_TOKEN_ALGORITHM = "EdDSA"
 ACCESS_TOKEN_TYPE = "at+jwt"
 
 
+# client_id and scope are indexed below, so a token lacking one is refused
+# here rather than raising KeyError.
+_REQUIRED_CLAIMS = ["iss", "sub", "aud", "exp", "iat", "jti", "client_id", "scope"]
+
+
 class InvalidAccessTokenError(Exception):
     """The bearer is not an access token this API issued for this audience."""
 
@@ -101,7 +106,7 @@ def verify_access_token(token: str, *, issuer: str, audience: str) -> AccessToke
             algorithms=[ACCESS_TOKEN_ALGORITHM],
             issuer=issuer,
             audience=audience,
-            options={"require": ["iss", "sub", "aud", "exp", "iat", "jti"]},
+            options={"require": _REQUIRED_CLAIMS},
         )
     except jwt.PyJWTError as exc:
         raise InvalidAccessTokenError(str(exc)) from exc

@@ -134,6 +134,18 @@ def test_when_projects_claim_absent_or_empty_then_verify_yields_no_projects(
     assert _verify(token).projects == frozenset()
 
 
+@pytest.mark.parametrize("claim", ["client_id", "scope"])
+def test_when_a_read_claim_is_absent_then_refused(
+    oauth_keystore: FileKeyStore, claim: str
+) -> None:
+    """Verify reads both, so a token lacking one is refused, not a KeyError."""
+    claims = _claims()
+    del claims[claim]
+    token = _jws(_oauth_header(oauth_keystore), claims, oauth_keystore.oauth_sign)
+    with pytest.raises(InvalidAccessTokenError):
+        _verify(token)
+
+
 def test_when_expired_then_refused() -> None:
     with pytest.raises(InvalidAccessTokenError):
         _verify(_mint(now=int(time.time()) - ACCESS_TOKEN_TTL_SECONDS - 5))
