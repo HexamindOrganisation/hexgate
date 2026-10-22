@@ -48,6 +48,11 @@ def test_when_no_token_then_refused():
         caller("policy:read")
 
 
+def test_when_tool_names_no_scope_then_it_raises(signed_in):
+    with pytest.raises(ValueError, match="must name the scope"):
+        caller(project_id=PROJECT)
+
+
 def test_result_text_happy_path():
     assert json.loads(result_text({"a": [1, 2]})) == {"a": [1, 2]}
 

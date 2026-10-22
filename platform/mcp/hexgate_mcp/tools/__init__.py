@@ -19,6 +19,8 @@ def caller(*scopes: str, project_id: str | None = None) -> HexgateAccessToken:
     """The caller's token, once it carries every one of `scopes` and, when the
     tool names a project, that project. Refused here for a clear error before
     any request; the API refuses the same token on its own."""
+    if not scopes:
+        raise ValueError("a tool must name the scope it needs")
     token = get_access_token()
     if not isinstance(token, HexgateAccessToken):
         raise ToolError("not authenticated")
