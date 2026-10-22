@@ -4,23 +4,14 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowLeft } from "lucide-react";
-
-import { Users } from "lucide-react";
+import { AlertTriangle, ArrowLeft, LogOut, Users } from "lucide-react";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PageHeader } from "@/components/ui/page-header";
 import { ApiError } from "@/lib/api";
 import { useActive } from "@/lib/active";
 import { useUser } from "@/lib/auth";
@@ -98,18 +89,7 @@ export function OrgSettingsPage() {
     // friendlier message without an API round-trip.
     return (
       <div className="mx-auto max-w-3xl space-y-4 p-6">
-        <Button asChild variant="ghost" size="sm">
-          <a
-            href="/orgs"
-            onClick={(e) => {
-              e.preventDefault();
-              navigate("/orgs");
-            }}
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            Back to organizations
-          </a>
-        </Button>
+        <BackToOrgs onClick={() => navigate("/orgs")} />
         <Alert variant="destructive">
           <AlertDescription>
             Organization not found, or you no longer have access to it.
@@ -162,127 +142,128 @@ export function OrgSettingsPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => navigate("/orgs")}
-        className="-ml-2"
-      >
-        <ArrowLeft className="h-3.5 w-3.5" />
-        Back to organizations
-      </Button>
+      <BackToOrgs onClick={() => navigate("/orgs")} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Organization settings</CardTitle>
-          <CardDescription>
+      <PageHeader
+        title="Organization settings"
+        description={
+          <>
             <span className="font-medium text-foreground">{org.name}</span>
-            <span className="text-muted-foreground"> · </span>
+            <span> · </span>
             <span className="font-mono">{org.slug}</span>
-            <span className="text-muted-foreground"> · your role: </span>
+            <span> · your role: </span>
             <span className="capitalize text-foreground">{org.role}</span>
-          </CardDescription>
-        </CardHeader>
+          </>
+        }
+      />
 
-        <form onSubmit={form.handleSubmit(onSubmit)} id="org-settings-form">
-          <CardContent className="space-y-4">
-            {!canEdit && (
-              <Alert>
-                <AlertDescription>
-                  View-only — only admins and owners can edit this
-                  organization's name or slug.
-                </AlertDescription>
-              </Alert>
-            )}
-
-            <div className="space-y-2">
-              <Label htmlFor="org-name">Name</Label>
-              <Input
-                id="org-name"
-                disabled={!canEdit}
-                autoComplete="off"
-                {...form.register("name")}
-              />
-              {form.formState.errors.name && (
-                <p className="text-xs text-destructive">
-                  {form.formState.errors.name.message}
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="org-slug">Slug</Label>
-              <Input
-                id="org-slug"
-                disabled={!canEdit}
-                autoComplete="off"
-                {...form.register("slug")}
-              />
-              <p className="text-xs text-muted-foreground">
-                Used in URLs. Changing this breaks existing bookmarks.
-              </p>
-              {form.formState.errors.slug && (
-                <p className="text-xs text-destructive">
-                  {form.formState.errors.slug.message}
-                </p>
-              )}
-            </div>
-          </CardContent>
-
-          {canEdit && (
-            <CardFooter className="justify-end">
-              <Button
-                type="submit"
-                disabled={updateOrg.isPending || !form.formState.isDirty}
-              >
-                {updateOrg.isPending ? "Saving…" : "Save changes"}
-              </Button>
-            </CardFooter>
+      <form
+        onSubmit={form.handleSubmit(onSubmit)}
+        id="org-settings-form"
+        className="rounded-xl border border-border bg-card"
+      >
+        <div className="space-y-4 p-5">
+          {!canEdit && (
+            <Alert>
+              <AlertDescription>
+                View-only — only admins and owners can edit this organization's
+                name or slug.
+              </AlertDescription>
+            </Alert>
           )}
-        </form>
-      </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Members</CardTitle>
-          <CardDescription>
+          <div className="space-y-2">
+            <Label htmlFor="org-name">Name</Label>
+            <Input
+              id="org-name"
+              disabled={!canEdit}
+              autoComplete="off"
+              {...form.register("name")}
+            />
+            {form.formState.errors.name && (
+              <p className="text-xs text-deny">
+                {form.formState.errors.name.message}
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="org-slug">Slug</Label>
+            <Input
+              id="org-slug"
+              disabled={!canEdit}
+              autoComplete="off"
+              {...form.register("slug")}
+            />
+            <p className="text-xs text-muted-foreground">
+              Used in URLs. Changing this breaks existing bookmarks.
+            </p>
+            {form.formState.errors.slug && (
+              <p className="text-xs text-deny">
+                {form.formState.errors.slug.message}
+              </p>
+            )}
+          </div>
+        </div>
+
+        {canEdit && (
+          <div className="flex justify-end border-t border-border px-5 py-3">
+            <Button
+              type="submit"
+              disabled={updateOrg.isPending || !form.formState.isDirty}
+            >
+              {updateOrg.isPending ? "Saving…" : "Save changes"}
+            </Button>
+          </div>
+        )}
+      </form>
+
+      <section className="flex items-center gap-4 rounded-xl border border-border bg-card p-5">
+        <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
+          <Users className="size-4" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-medium">Members</h2>
+          <p className="text-xs text-muted-foreground">
             See who has access, invite teammates, change roles, or remove
             members.
-          </CardDescription>
-        </CardHeader>
-        <CardFooter>
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          className="ml-auto shrink-0"
+          onClick={() => navigate(`/orgs/${org.id}/members`)}
+        >
+          Manage members
+        </Button>
+      </section>
+
+      <section className="rounded-xl border border-deny/40 bg-card">
+        <div className="flex items-start gap-4 p-5">
+          <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-deny/10 text-deny">
+            <AlertTriangle className="size-4" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-sm font-medium">Danger zone</h2>
+            <p className="text-xs text-muted-foreground">
+              Leaving revokes every API key you own in this organization and
+              removes your access to its projects. You can't undo this —
+              re-joining requires an invite, and revoked keys can't be restored.
+            </p>
+          </div>
+        </div>
+        <div className="flex justify-end border-t border-deny/30 px-5 py-3">
           <Button
             variant="outline"
-            onClick={() => navigate(`/orgs/${org.id}/members`)}
-          >
-            <Users className="h-4 w-4" />
-            Manage members
-          </Button>
-        </CardFooter>
-      </Card>
-
-      <Card className="border-destructive/40">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <AlertTriangle className="h-4 w-4 text-destructive" />
-            Danger zone
-          </CardTitle>
-          <CardDescription>
-            Leaving revokes every API key you own in this organization and
-            removes your access to its projects. You can't undo this —
-            re-joining requires an invite, and revoked keys can't be restored.
-          </CardDescription>
-        </CardHeader>
-        <CardFooter className="justify-end">
-          <Button
-            variant="destructive"
+            className="gap-1.5 border-deny/40 text-deny hover:bg-deny/10 hover:text-deny"
             onClick={() => setConfirmLeaveOpen(true)}
             disabled={leaveOrg.isPending}
           >
+            <LogOut className="size-4" />
             Leave organization
           </Button>
-        </CardFooter>
-      </Card>
+        </div>
+      </section>
 
       <ConfirmDialog
         open={confirmLeaveOpen}
@@ -295,5 +276,14 @@ export function OrgSettingsPage() {
         onConfirm={onLeave}
       />
     </div>
+  );
+}
+
+function BackToOrgs({ onClick }: { onClick: () => void }) {
+  return (
+    <Button variant="ghost" size="sm" onClick={onClick} className="-ml-2">
+      <ArrowLeft className="size-3.5" />
+      Back to organizations
+    </Button>
   );
 }

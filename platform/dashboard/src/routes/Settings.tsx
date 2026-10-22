@@ -142,9 +142,7 @@ function SectionCard({
   destructive,
 }: Section) {
   return (
-    <Card
-      className={cn(destructive && "border-[hsl(var(--semantic-deny))]/40")}
-    >
+    <Card className={cn(destructive && "border-deny/40")}>
       <CardHeader>
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
@@ -152,7 +150,7 @@ function SectionCard({
               className={cn(
                 "grid place-items-center rounded-md size-9 shrink-0",
                 destructive
-                  ? "bg-[hsl(var(--semantic-deny))]/10 text-[hsl(var(--semantic-deny))]"
+                  ? "bg-deny/10 text-deny"
                   : "bg-muted text-muted-foreground",
               )}
             >
