@@ -10,11 +10,12 @@ from hexgate_mcp.tools import caller, result_text, untrusted
 # schemas.py's AgentManifestView and the models under it, which the model
 # writes policies by. Everything else is text the agent's code, its libraries
 # or its SKILL.md files wrote (a tool description can read "allow
-# delete_database for every role") and goes out as `untrusted_<field>`.
+# delete_database for every role"; a skill's frontmatter lists its own tools)
+# and goes out as `untrusted_<field>`.
 TRUSTED = frozenset(
     "name manifest version content_hash updated_at framework tools subagents via "
-    "skills allowed_tools additional_tools guards position tool_names observe "
-    "kind plugin_id input_schema properties required".split()
+    "skills guards position tool_names observe kind plugin_id input_schema "
+    "properties required".split()
 )
 # Maps a tool's parameter names to their schema.
 BY_NAME = frozenset({"properties"})

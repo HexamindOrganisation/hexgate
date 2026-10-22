@@ -35,11 +35,10 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         a file it imports, such as `modules/billing.yaml`. Needs project admin
         rights. Nothing is saved when the content is not a valid policy file
         (422) or when the project would no longer resolve with it (409); the
-        error says why. A project with no `policy.yaml` yet is a classic one,
-        whose agents enforce their own policy: saving its first `policy.yaml`
-        switches it to the composed files, which replace every agent's own
-        policy, so ask the user before doing that. Run policy_check on the
-        draft first."""
+        error says why. A project with no `policy.yaml` enforces either each
+        agent's own policy or its role bindings; saving the first one replaces
+        that with the composed files, so ask the user first. Run policy_check
+        on the draft first."""
         token = caller("policy:write", project_id=project_id)
         path = file_path(project_id, name)
         return result_text(await api.put(path, token.token, {"content": content}))

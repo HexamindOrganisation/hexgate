@@ -40,9 +40,9 @@ def untrusted(
     value: Any, trusted: frozenset[str], by_name: frozenset[str] = frozenset()
 ) -> Any:
     """A copy of `value` with every dict key outside `trusted`, at any depth,
-    renamed `untrusted_<key>`; nothing under a renamed key is walked. The
-    values of a `by_name` key are dicts keyed by name: the names stay, and
-    each value is walked.
+    renamed `untrusted_<key>`; nothing under a renamed key is walked. A
+    `by_name` key holds a dict keyed by name: the names stay, and each value
+    is walked.
 
     For text that neither the caller nor Hexgate wrote: a tool description from
     a third-party library, the arguments an end user's request produced. Any of
@@ -58,7 +58,7 @@ def untrusted(
     for key, item in value.items():
         if key not in trusted:
             marked[f"untrusted_{key}"] = item
-        elif key in by_name:
+        elif key in by_name and isinstance(item, dict):
             marked[key] = {n: untrusted(v, trusted, by_name) for n, v in item.items()}
         else:
             marked[key] = untrusted(item, trusted, by_name)

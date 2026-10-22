@@ -70,4 +70,4 @@ async def test_description_warns_that_a_first_policy_yaml_switches_the_project()
     policy_save.register(mcp, ApiClient(API_URL, httpx.AsyncClient()))
     [tool] = await mcp.list_tools()
 
-    assert "replace every agent's own" in " ".join(tool.description.split())
+    assert "replaces that with the composed files" in " ".join(tool.description.split())

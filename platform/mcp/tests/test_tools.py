@@ -12,6 +12,7 @@ from hexgate_mcp.tools import (
     TRUNCATED_MARKER,
     caller,
     result_text,
+    untrusted,
 )
 from tests.conftest import JWKS_URL, PROJECT, call_tool, jwks
 
@@ -56,6 +57,17 @@ def test_when_tool_names_no_scope_then_it_raises(signed_in):
         caller(project_id=PROJECT)
 
 
+@pytest.mark.parametrize("project_id", [PROJECT[:-1], ""])
+def test_when_project_only_resembles_a_granted_one_then_refused(signed_in, project_id):
+    with pytest.raises(ToolError, match="is not one of the projects"):
+        caller("policy:read", project_id=project_id)
+
+
+def test_when_both_scope_and_project_are_missing_then_the_scope_is_named(signed_in):
+    with pytest.raises(ToolError, match="'agents:read' scope"):
+        caller("agents:read", project_id=OTHER_PROJECT)
+
+
 @pytest.mark.parametrize(
     ("tool", "arguments", "scope"),
     [
@@ -81,6 +93,13 @@ def test_when_grant_does_not_cover_the_call_then_refused_before_any_request(
     assert result["isError"]
     assert repr(error) in result["content"][0]["text"]
     assert not api.called
+
+
+def test_when_a_by_name_value_is_not_a_dict_then_it_is_walked_normally():
+    names = frozenset({"properties"})
+    value = {"properties": [{"title": "t"}]}
+
+    assert untrusted(value, names, names) == {"properties": [{"untrusted_title": "t"}]}
 
 
 def test_result_text_happy_path():
