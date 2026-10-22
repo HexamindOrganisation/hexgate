@@ -199,7 +199,7 @@ def test_when_a_directory_is_swapped_for_a_link_then_the_write_refuses(root, tmp
     (root / "team").symlink_to(outside)
 
     with pytest.raises(ToolError, match="changed while writing"):
-        write_local.write_atomic(target, b"x", 0o644)
+        write_local.write_atomic(root, target, b"x", 0o644)
 
     assert os.listdir(outside) == []
 
@@ -247,3 +247,52 @@ def test_when_local_policy_dir_is_set_then_policy_write_local_is_listed(key, roo
     tools = {t["name"]: t for t in json.loads(data)["result"]["tools"]}
 
     assert tools["policy_write_local"]["annotations"]["destructiveHint"] is True
+
+
+def test_when_root_is_gone_then_policy_write_local_does_not_recreate_it(root):
+    shutil.rmtree(root)
+
+    with pytest.raises(ToolError, match="no longer exists"):
+        write_local.write_atomic(root, root / "team" / "x.yaml", b"x", 0o644)
+
+    assert not root.exists()
+
+
+async def test_when_a_nested_write_fails_then_no_new_directory_is_left(
+    root, monkeypatch
+):
+    (root / "org").mkdir()
+    full = Mock(side_effect=OSError(28, "No space left on device"))
+    monkeypatch.setattr(write_local.os, "replace", full)
+
+    with pytest.raises(ToolError, match="No space left"):
+        await write(root, "org/team/sub/agent.yaml")
+
+    assert os.listdir(root) == ["org"] and os.listdir(root / "org") == []
+
+
+def test_when_writes_race_into_a_new_directory_then_both_land(root):
+    for run in range(20):
+        barrier = threading.Barrier(2)
+        targets = [root / f"r{run}" / "team" / f"{name}.yaml" for name in "ab"]
+
+        def write_one(target):
+            barrier.wait()
+            write_local.write_atomic(root, target, b"x", 0o644)
+
+        threads = [threading.Thread(target=write_one, args=(t,)) for t in targets]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+
+        assert all(t.read_bytes() == b"x" for t in targets)
+
+
+def test_when_root_vanishes_after_the_check_then_it_is_not_recreated(root, monkeypatch):
+    shutil.rmtree(root)
+    # The developer deletes the folder between the check and the mkdir.
+    monkeypatch.setattr(write_local.Path, "is_dir", lambda self: True)
+
+    with pytest.raises(FileNotFoundError):
+        write_local.write_atomic(root, root / "team" / "x.yaml", b"x", 0o644)
+
+    assert not root.exists()
