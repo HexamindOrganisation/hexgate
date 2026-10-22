@@ -122,37 +122,35 @@ def test_when_a_csv_string_is_passed_then_mint_refuses(field) -> None:
         _mint(**{field: "p1,p2"})
 
 
+_ABSENT = object()
+
+
 @pytest.mark.parametrize(
     "claims",
     [
-        {"projects": None},
+        {"projects": _ABSENT},
         {"projects": []},
         {"projects": "p1"},
         {"projects": 3},
         {"projects": ["p1", 3]},
         {"scope": ["policy:read"]},
+        {"scope": _ABSENT},
+        {"client_id": _ABSENT},
+        {"client_id": 3},
+        {"sub": 3},
+        {"jti": 3},
+        {"exp": str(int(time.time()) + 600)},
+        {"exp": {}},
     ],
-    ids=["absent", "empty", "str", "int", "non-str-id", "list-scope"],
+    ids=lambda c: "-".join(
+        f"{k}={'absent' if v is _ABSENT else v!r}" for k, v in c.items()
+    ),
 )
-def test_when_a_claim_has_the_wrong_shape_then_refused(
+def test_when_a_claim_is_absent_or_has_the_wrong_type_then_refused(
     oauth_keystore: FileKeyStore, claims: dict
 ) -> None:
-    """No project never means every project, and a bad shape is a refusal, not a 500."""
-    claims = _claims(**claims)
-    if claims["projects"] is None:
-        del claims["projects"]
-    token = _jws(_oauth_header(oauth_keystore), claims, oauth_keystore.oauth_sign)
-    with pytest.raises(InvalidAccessTokenError):
-        _verify(token)
-
-
-@pytest.mark.parametrize("claim", ["client_id", "scope"])
-def test_when_a_read_claim_is_absent_then_refused(
-    oauth_keystore: FileKeyStore, claim: str
-) -> None:
-    """Verify reads both, so a token lacking one is refused, not a KeyError."""
-    claims = _claims()
-    del claims[claim]
+    """Never coerced, never a 500, and no project never means every project."""
+    claims = {k: v for k, v in _claims(**claims).items() if v is not _ABSENT}
     token = _jws(_oauth_header(oauth_keystore), claims, oauth_keystore.oauth_sign)
     with pytest.raises(InvalidAccessTokenError):
         _verify(token)

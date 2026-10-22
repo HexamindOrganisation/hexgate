@@ -10,11 +10,19 @@ import json
 import secrets
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass
+from typing import Annotated
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from jwt.utils import base64url_encode
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    ValidationError,
+    field_validator,
+)
 
 ACCESS_TOKEN_TTL_SECONDS = 600
 # The JWS ``alg`` every access token carries. The OAuth JWKS
@@ -27,26 +35,33 @@ ACCESS_TOKEN_ALGORITHM = "EdDSA"
 ACCESS_TOKEN_TYPE = "at+jwt"
 
 
-# client_id and scope are indexed below, so a token lacking one is refused
-# here rather than raising KeyError.
-_REQUIRED_CLAIMS = ["iss", "sub", "aud", "exp", "iat", "jti", "client_id", "scope"]
-
-
 class InvalidAccessTokenError(Exception):
     """The bearer is not an access token this API issued for this audience."""
 
 
-@dataclass(frozen=True)
-class AccessTokenClaims:
-    """The verified claims of an access token."""
+class AccessTokenClaims(BaseModel):
+    """The verified claims of an access token. Validating a decoded payload
+    against it refuses any claim of the wrong type, so a bad shape is a 401,
+    never a 500 or a set of characters."""
+
+    model_config = ConfigDict(frozen=True)
 
     sub: str
     client_id: str
-    scopes: frozenset[str]
-    # The projects this grant covers; never empty (verify refuses that).
-    projects: frozenset[str]
+    # The `scope` claim, a space-separated string.
+    scopes: frozenset[str] = Field(validation_alias="scope")
+    # The projects this grant covers. Never empty, as in the MCP verifier: a
+    # grant naming no project can do nothing, and must never read as every one.
+    projects: Annotated[frozenset[str], Field(min_length=1)]
     jti: str
-    exp: int
+    exp: StrictInt  # "123" is refused, not coerced
+
+    @field_validator("scopes", mode="before")
+    @classmethod
+    def _split_scope(cls, scope: object) -> list[str]:
+        if not isinstance(scope, str):
+            raise ValueError("scope is not a string")
+        return scope.split()
 
 
 def mint_access_token(
@@ -106,29 +121,18 @@ def verify_access_token(token: str, *, issuer: str, audience: str) -> AccessToke
             algorithms=[ACCESS_TOKEN_ALGORITHM],
             issuer=issuer,
             audience=audience,
-            options={"require": _REQUIRED_CLAIMS},
+            options={"require": ["iss", "sub", "aud", "exp", "iat", "jti"]},
         )
-    except jwt.PyJWTError as exc:
+    # TypeError: PyJWT calls int() on exp/iat and lets it escape for, say, an
+    # object, which would otherwise be a 500.
+    except (jwt.PyJWTError, TypeError) as exc:
         raise InvalidAccessTokenError(str(exc)) from exc
-    scope, projects = claims["scope"], claims.get("projects")
-    if not isinstance(scope, str):
-        raise InvalidAccessTokenError("scope is not a string")
-    # Empty or absent refuses the token, as the MCP verifier does: a grant
-    # naming no project can do nothing, and must never read as every project.
-    if not (
-        isinstance(projects, list)
-        and projects
-        and all(isinstance(p, str) for p in projects)
-    ):
-        raise InvalidAccessTokenError("projects is not a non-empty list of ids")
-    return AccessTokenClaims(
-        sub=claims["sub"],
-        client_id=claims["client_id"],
-        scopes=frozenset(scope.split()),
-        projects=frozenset(projects),
-        jti=claims["jti"],
-        exp=claims["exp"],
-    )
+    try:
+        return AccessTokenClaims.model_validate(claims)
+    except ValidationError as exc:
+        raise InvalidAccessTokenError(
+            f"claims: {exc.errors(include_input=False)}"
+        ) from exc
 
 
 def _sign_compact(claims: dict) -> str:
