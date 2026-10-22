@@ -15,14 +15,21 @@ RESULT_CAP_BYTES = 256 * 1024
 TRUNCATED_MARKER = '\n{"truncated": true}'
 
 
-def caller(scope: str) -> HexgateAccessToken:
-    """The caller's token, once it carries `scope`. Refused here for a clear
-    error before any request; the API refuses the same token on its own."""
+def caller(*scopes: str, project_id: str | None = None) -> HexgateAccessToken:
+    """The caller's token, once it carries every one of `scopes` and, when the
+    tool names a project, that project. Refused here for a clear error before
+    any request; the API refuses the same token on its own."""
     token = get_access_token()
     if not isinstance(token, HexgateAccessToken):
         raise ToolError("not authenticated")
-    if scope not in token.scopes:
-        raise ToolError(f"this connection was not granted the {scope!r} scope")
+    for scope in scopes:
+        if scope not in token.scopes:
+            raise ToolError(f"this connection was not granted the {scope!r} scope")
+    if project_id is not None and project_id not in token.projects:
+        raise ToolError(
+            f"project {project_id!r} is not one of the projects granted to this "
+            "connection; call projects_list for their ids"
+        )
     return token
 
 
