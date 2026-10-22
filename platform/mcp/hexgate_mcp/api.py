@@ -37,21 +37,29 @@ class ApiClient:
         self._base_url = base_url
         self._http = http
 
-    async def get(self, path: str, token: str) -> Any:
+    async def get(self, path: str, token: str, params: dict | None = None) -> Any:
+        return await self._send("GET", path, token, params=params)
+
+    async def post(self, path: str, token: str, body: dict) -> Any:
+        return await self._send("POST", path, token, json=body)
+
+    async def _send(self, method: str, path: str, token: str, **kwargs: Any) -> Any:
         try:
-            response = await self._http.get(
+            response = await self._http.request(
+                method,
                 f"{self._base_url}{path}",
                 headers={"Authorization": f"Bearer {token}"},
+                **kwargs,
             )
         except httpx.HTTPError as exc:
-            raise _api_failed(path, type(exc).__name__) from exc
+            raise _api_failed(method, path, type(exc).__name__) from exc
         _raise_refusal(response)
         if not response.is_success:
-            raise _api_failed(path, str(response.status_code))
+            raise _api_failed(method, path, str(response.status_code))
         try:
             return response.json()
         except ValueError as exc:
-            raise _api_failed(path, "response is not JSON") from exc
+            raise _api_failed(method, path, "response is not JSON") from exc
 
 
 class ApiRefusal(ToolError):
@@ -71,11 +79,11 @@ def _raise_refusal(response: httpx.Response) -> None:
         )
 
 
-def _api_failed(path: str, cause: str) -> ToolError:
+def _api_failed(method: str, path: str, cause: str) -> ToolError:
     """Logged here, since FastMCP turns a tool's exception into an error result
     without a log line. The model gets no internal URL: httpx's own messages
     name the private-network API host."""
-    logger.warning("API call failed: GET %s: %s", path, cause)
+    logger.warning("API call failed: %s %s: %s", method, path, cause)
     return ToolError("the Hexgate API failed to answer; try again shortly")
 
 
