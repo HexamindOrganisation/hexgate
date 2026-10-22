@@ -116,5 +116,5 @@ def _serve_resource_metadata(app: Starlette, auth: AuthSettings, issuer: str) ->
     ]
 
 
-def create_app() -> Starlette:
-    return build_app(Settings.from_env(), httpx.AsyncClient(timeout=5.0))
+def create_app(settings: Settings) -> Starlette:
+    return build_app(settings, httpx.AsyncClient(timeout=5.0))

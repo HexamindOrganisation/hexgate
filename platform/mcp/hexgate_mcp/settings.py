@@ -35,29 +35,19 @@ class Settings:
                 f"public_url={issuer!r} ends with '/' — set "
                 "HEXGATE_PUBLIC_URL without the trailing slash."
             )
-        local_policy_dir = None
-        if raw_dir := os.environ.get("HEXGATE_MCP_LOCAL_POLICY_DIR"):
-            local_policy_dir = Path(raw_dir)
-            if not local_policy_dir.is_dir():
-                raise ValueError(
-                    f"local_policy_dir={raw_dir!r} is not a directory — "
-                    "create it, or unset HEXGATE_MCP_LOCAL_POLICY_DIR."
-                )
-            # A stray variable in a deploy env would let every token write
-            # into the container, its own code included.
-            if urlparse(issuer).hostname not in LOCAL_HOSTS:
-                raise ValueError(
-                    "HEXGATE_MCP_LOCAL_POLICY_DIR is for local development only — "
-                    f"unset it, or point HEXGATE_PUBLIC_URL (now {issuer!r}) at localhost."
-                )
         return cls(
             api_url=os.environ.get("HEXGATE_MCP_API_URL", "http://localhost:8000"),
             issuer=issuer,
             resource_url=os.environ.get(
                 "HEXGATE_MCP_RESOURCE_URL", "http://localhost:8080/mcp"
             ),
-            local_policy_dir=local_policy_dir,
+            local_policy_dir=read_local_policy_dir(issuer),
         )
+
+    @property
+    def bind_host(self) -> str:
+        """Loopback only while the server can write to this machine's disk."""
+        return "0.0.0.0" if self.local_policy_dir is None else "127.0.0.1"
 
     @property
     def api_v1_url(self) -> str:
@@ -66,3 +56,31 @@ class Settings:
     @property
     def jwks_url(self) -> str:
         return f"{self.api_url.rstrip('/')}/.well-known/jwks.json"
+
+
+def read_local_policy_dir(issuer: str) -> Path | None:
+    """HEXGATE_MCP_LOCAL_POLICY_DIR, once it is a policies folder on a local
+    server: never a repo root, `/` or the home directory, where the tool's
+    name rules alone would be all that kept a model from the rest."""
+    raw_dir = os.environ.get("HEXGATE_MCP_LOCAL_POLICY_DIR")
+    if not raw_dir:
+        return None
+    path = Path(raw_dir)
+    if not path.is_dir():
+        raise ValueError(
+            f"local_policy_dir={raw_dir!r} is not a directory — "
+            "create it, or unset HEXGATE_MCP_LOCAL_POLICY_DIR."
+        )
+    if path.resolve() in {Path("/"), Path.home().resolve()} or (path / ".git").exists():
+        raise ValueError(
+            f"local_policy_dir={raw_dir!r} is /, the home directory or a repo "
+            "root — point HEXGATE_MCP_LOCAL_POLICY_DIR at a policies folder."
+        )
+    # A stray variable in a deploy env would let every token write into the
+    # container.
+    if urlparse(issuer).hostname not in LOCAL_HOSTS:
+        raise ValueError(
+            "HEXGATE_MCP_LOCAL_POLICY_DIR is for local development only — "
+            f"unset it, or point HEXGATE_PUBLIC_URL (now {issuer!r}) at localhost."
+        )
+    return path

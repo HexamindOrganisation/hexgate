@@ -1,3 +1,6 @@
+import runpy
+from unittest.mock import Mock
+
 import pytest
 
 from hexgate_mcp.settings import Settings
@@ -26,49 +29,71 @@ def test_when_public_url_ends_with_slash_then_start_up_refuses(monkeypatch):
         Settings.from_env()
 
 
-def test_when_local_policy_dir_is_unset_then_it_is_none():
-    assert Settings.from_env().local_policy_dir is None
+def test_when_local_policy_dir_is_unset_then_the_tool_is_off():
+    settings = Settings.from_env()
+
+    assert settings.local_policy_dir is None
+    assert settings.bind_host == "0.0.0.0"
 
 
-def test_when_local_policy_dir_is_set_then_settings_carry_it(monkeypatch, tmp_path):
-    monkeypatch.setenv("HEXGATE_MCP_LOCAL_POLICY_DIR", str(tmp_path))
-
-    assert Settings.from_env().local_policy_dir == tmp_path
-
-
-def test_when_local_policy_dir_is_missing_then_start_up_refuses(monkeypatch, tmp_path):
-    monkeypatch.setenv("HEXGATE_MCP_LOCAL_POLICY_DIR", str(tmp_path / "missing"))
-
-    with pytest.raises(ValueError, match="not a directory"):
-        Settings.from_env()
-
-
-def test_when_local_policy_dir_is_a_file_then_start_up_refuses(monkeypatch, tmp_path):
-    (tmp_path / "policies").write_text("")
-    monkeypatch.setenv("HEXGATE_MCP_LOCAL_POLICY_DIR", str(tmp_path / "policies"))
-
-    with pytest.raises(ValueError, match="not a directory"):
-        Settings.from_env()
-
-
-@pytest.mark.parametrize("issuer", ["http://localhost:8000", "http://127.0.0.1:8000"])
-def test_when_issuer_is_local_then_local_policy_dir_is_allowed(
-    monkeypatch, tmp_path, issuer
-):
-    monkeypatch.setenv("HEXGATE_PUBLIC_URL", issuer)
-    monkeypatch.setenv("HEXGATE_MCP_LOCAL_POLICY_DIR", str(tmp_path))
-
-    assert Settings.from_env().local_policy_dir == tmp_path
+@pytest.fixture
+def dirs(tmp_path, monkeypatch):
+    (tmp_path / "repo" / ".git").mkdir(parents=True)
+    (tmp_path / "worktree").mkdir()
+    (tmp_path / "worktree" / ".git").write_text("gitdir: ../repo/.git")
+    (tmp_path / "home").mkdir()
+    (tmp_path / "policies").mkdir()
+    (tmp_path / "file").write_text("")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    return tmp_path
 
 
 @pytest.mark.parametrize(
-    "issuer", ["https://app.hexgate.test", "http://localhost.hexgate.test"]
+    "issuer", [None, "http://localhost:8000", "http://127.0.0.1:8000"]
 )
-def test_when_issuer_is_not_local_then_local_policy_dir_refuses_start_up(
-    monkeypatch, tmp_path, issuer
-):
-    monkeypatch.setenv("HEXGATE_PUBLIC_URL", issuer)
-    monkeypatch.setenv("HEXGATE_MCP_LOCAL_POLICY_DIR", str(tmp_path))
+def test_when_dir_is_set_then_bind_host_is_loopback(monkeypatch, dirs, issuer):
+    if issuer:
+        monkeypatch.setenv("HEXGATE_PUBLIC_URL", issuer)
+    monkeypatch.setenv("HEXGATE_MCP_LOCAL_POLICY_DIR", str(dirs / "policies"))
 
-    with pytest.raises(ValueError, match="local development only"):
+    settings = Settings.from_env()
+
+    assert settings.local_policy_dir == dirs / "policies"
+    assert settings.bind_host == "127.0.0.1"
+
+
+NOT_LOCAL = "local development only"
+# (directory under tmp_path, or an absolute one; issuer; error)
+START_UP_REFUSALS = {
+    "missing": ("missing", None, "not a directory"),
+    "a file": ("file", None, "not a directory"),
+    "remote issuer": ("policies", "https://app.hexgate.test", NOT_LOCAL),
+    "lookalike host": ("policies", "http://localhost.hexgate.test", NOT_LOCAL),
+    "repo root": ("repo", None, "policies folder"),
+    "worktree root": ("worktree", None, "policies folder"),
+    "filesystem root": ("/", None, "policies folder"),
+    "home": ("home", None, "policies folder"),
+}
+
+
+@pytest.mark.parametrize(
+    "directory, issuer, error", START_UP_REFUSALS.values(), ids=START_UP_REFUSALS
+)
+def test_when_local_policy_dir_is_unsafe_then_start_up_refuses(
+    monkeypatch, dirs, directory, issuer, error
+):
+    if issuer:
+        monkeypatch.setenv("HEXGATE_PUBLIC_URL", issuer)
+    monkeypatch.setenv("HEXGATE_MCP_LOCAL_POLICY_DIR", str(dirs / directory))
+
+    with pytest.raises(ValueError, match=error):
         Settings.from_env()
+
+
+def test_when_dir_is_set_then_main_binds_loopback(monkeypatch, tmp_path):
+    monkeypatch.setenv("HEXGATE_MCP_LOCAL_POLICY_DIR", str(tmp_path))
+    monkeypatch.setattr("uvicorn.run", run := Mock())
+
+    runpy.run_module("hexgate_mcp", run_name="__main__")
+
+    assert run.call_args.kwargs["host"] == "127.0.0.1"
