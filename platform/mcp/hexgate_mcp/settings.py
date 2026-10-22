@@ -5,6 +5,10 @@ API's ``HEXGATE_PUBLIC_URL``). The API's ``.env`` is never read here."""
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
+
+# The only HEXGATE_PUBLIC_URL hosts under which policy_write_local may run.
+LOCAL_HOSTS = {"localhost", "127.0.0.1"}
 
 
 @dataclass(frozen=True)
@@ -38,6 +42,13 @@ class Settings:
                 raise ValueError(
                     f"local_policy_dir={raw_dir!r} is not a directory — "
                     "create it, or unset HEXGATE_MCP_LOCAL_POLICY_DIR."
+                )
+            # A stray variable in a deploy env would let every token write
+            # into the container, its own code included.
+            if urlparse(issuer).hostname not in LOCAL_HOSTS:
+                raise ValueError(
+                    "HEXGATE_MCP_LOCAL_POLICY_DIR is for local development only — "
+                    f"unset it, or point HEXGATE_PUBLIC_URL (now {issuer!r}) at localhost."
                 )
         return cls(
             api_url=os.environ.get("HEXGATE_MCP_API_URL", "http://localhost:8000"),

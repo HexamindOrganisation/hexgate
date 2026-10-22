@@ -5,6 +5,7 @@ in deploy, so a hosted client never sees the tool. No API call, so no scope.
 """
 
 import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -24,10 +25,20 @@ def confine(root: Path, path: str) -> Path:
     return target
 
 
-def write_atomic(target: Path, content: str) -> None:
+def new_file_mode() -> int:
+    """0644 under the process umask: owner-writable, readable by others unless
+    the umask says otherwise. Read once at start-up: the umask can only be read
+    by setting it."""
+    umask = os.umask(0)
+    os.umask(umask)
+    return 0o644 & ~umask
+
+
+def write_atomic(target: Path, content: str, new_mode: int) -> None:
     """Write through a temp file renamed over `target`, so a reader sees the
     old file or the new one, never half of it. The temp file sits in the same
-    directory: a rename is atomic only within one file system."""
+    directory: a rename is atomic only within one file system. It takes the
+    replaced file's mode, or `new_mode`, rather than mkstemp's 0600."""
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, temp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
     try:
@@ -35,6 +46,11 @@ def write_atomic(target: Path, content: str) -> None:
             f.write(content)
             f.flush()
             os.fsync(f.fileno())
+        try:
+            mode = stat.S_IMODE(target.stat().st_mode)
+        except FileNotFoundError:
+            mode = new_mode
+        os.chmod(temp, mode)
         os.replace(temp, target)
     except BaseException:
         os.unlink(temp)
@@ -43,6 +59,7 @@ def write_atomic(target: Path, content: str) -> None:
 
 def register(mcp: FastMCP, root: Path) -> None:
     root = root.resolve()
+    new_mode = new_file_mode()
 
     @mcp.tool(
         annotations=ToolAnnotations(destructiveHint=True, openWorldHint=False),
@@ -56,7 +73,7 @@ def register(mcp: FastMCP, root: Path) -> None:
         missing subdirectories are created. Nothing is sent to the platform."""
         target = confine(root, path)
         try:
-            write_atomic(target, content)
+            write_atomic(target, content, new_mode)
         except OSError as e:
             raise ToolError(f"could not write {path!r}: {e.strerror}") from e
         return f"wrote {target.relative_to(root)} ({len(content.encode())} bytes)"

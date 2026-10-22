@@ -1,5 +1,6 @@
 import dataclasses
 import os
+import stat
 
 import pytest
 import respx
@@ -44,6 +45,29 @@ async def test_when_file_exists_then_policy_write_local_replaces_it(root):
     assert (root / "agent.yaml").read_text() == POLICY
     # Only the file: the temp file was renamed onto it, not left beside it.
     assert os.listdir(root) == ["agent.yaml"]
+
+
+async def test_when_file_exists_then_policy_write_local_keeps_its_mode(root):
+    (root / "agent.yaml").write_text("old")
+    (root / "agent.yaml").chmod(0o640)
+
+    await write(root, "agent.yaml")
+
+    assert stat.S_IMODE((root / "agent.yaml").stat().st_mode) == 0o640
+
+
+# 002 pins the 0644 base (0666 would give 0664); 027 pins the umask itself.
+@pytest.mark.parametrize("umask, mode", [(0o002, 0o644), (0o027, 0o640)])
+async def test_when_file_is_new_then_policy_write_local_applies_the_umask(
+    root, umask, mode
+):
+    previous = os.umask(umask)
+    try:
+        await write(root, "agent.yaml")
+    finally:
+        os.umask(previous)
+
+    assert stat.S_IMODE((root / "agent.yaml").stat().st_mode) == mode
 
 
 async def test_when_subdirectory_is_missing_then_policy_write_local_creates_it(root):
