@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = "==3.13.*"
 
 [[package]]
@@ -840,7 +840,7 @@ wheels = [
 
 [[package]]
 name = "hexgate"
-version = "0.3.3"
+version = "0.3.4"
 source = { editable = "../../" }
 dependencies = [
     { name = "bashlex" },

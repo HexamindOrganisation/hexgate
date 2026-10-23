@@ -1111,7 +1111,7 @@ class AuditAnomaly(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# AI Act evidence report (https://app.notion.com/p/3e2fb45dbae281f794fefa40ff4a1a8d)
+# AI Act evidence report
 # ---------------------------------------------------------------------------
 
 
