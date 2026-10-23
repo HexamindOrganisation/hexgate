@@ -85,7 +85,7 @@ class ClientMetadata(OAuthClientInformationFull):
 
         The platform's registry decides, not the document's own ``scope``
         field, which most clients (Claude Code's among them) leave out. With
-        no ``scope`` this returns None, as the SDK does. A repeated scope is
+        no ``scope`` this returns None, as the MCP SDK does. A repeated scope is
         kept once, in the order first asked.
         """
         if requested_scope is None:
