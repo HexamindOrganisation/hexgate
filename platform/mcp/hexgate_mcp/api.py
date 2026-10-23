@@ -1,11 +1,11 @@
 """Calls the platform API as the caller: their bearer token, forwarded unchanged.
 
-That is not token passthrough: the API is to mint the token with both
-audiences, this server's resource URL and its own public URL (spec §I, with
-plan PR 7), so the API verifies it as a token issued for itself. That check, once plan PR 9 (#403)
-and plan PR 10 land, is the security boundary; until then the API accepts only
-its session cookie and answers this bearer with 401. This client only turns
-the API's answers into tool errors the model can read.
+That is not token passthrough: the API is to mint the token for two
+audiences, this server's resource URL and its own public URL, so it verifies
+the token as its own; nothing mints one until the code exchange lands. The
+API's bearer branch and its per-route scope marks, already in place, are the
+security boundary. This client only turns the API's answers into tool errors
+the model can read.
 """
 
 import json

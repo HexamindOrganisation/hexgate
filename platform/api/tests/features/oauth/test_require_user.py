@@ -1,8 +1,10 @@
 """The OAuth bearer branch of ``require_user``.
 
-No route declares a scope yet, so a valid token gets a 403 everywhere; the
-401s below come from the token or its user, before any scope is looked at.
-Tokens are hand-minted: nothing in the API mints one yet.
+ROUTE declares no scope, so a valid token gets a 403 there; the 401s below
+come from the token or its user, before any scope is looked at. The mark
+itself (a list of scopes, the project check, the no-project tag) is varied on
+a hand-marked route in its own app. Tokens are hand-minted: nothing in the API
+mints one yet.
 """
 
 from __future__ import annotations
@@ -16,8 +18,6 @@ import pytest
 from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 from jwt.utils import base64url_encode
-from sqlalchemy.ext.asyncio import async_sessionmaker
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.constants import (
     DEFAULT_PROJECT_ID,
@@ -25,60 +25,16 @@ from hexgate_api.constants import (
     OAUTH_NO_PROJECT,
     OAUTH_SCOPE_KEY,
 )
-from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.core.db import get_session
 from hexgate_api.core.keystore import FileKeyStore
-from hexgate_api.core.oauth_tokens import ACCESS_TOKEN_TTL_SECONDS, mint_access_token
+from hexgate_api.core.oauth_tokens import ACCESS_TOKEN_TTL_SECONDS
 from hexgate_api.deps.identity import require_user
-from hexgate_api.main import app
 from hexgate_api.models import User
-from hexgate_api.seeds.defaults import ensure_default_project
 from hexgate_api.settings import get_settings
+from tests.features.oauth.conftest import mint
 
 # A route behind require_user (via require_org_member) that declares no scope.
 ROUTE = f"/v1/projects/{DEFAULT_PROJECT_ID}/agents"
-
-
-@pytest.fixture
-async def session_factory(engine):
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as bootstrap:
-        await ensure_default_project(bootstrap)
-    return factory
-
-
-@pytest.fixture
-def oauth_keystore(tmp_path, monkeypatch: pytest.MonkeyPatch) -> FileKeyStore:
-    ks = FileKeyStore(base_dir=tmp_path / "keystore")
-    ks.ensure_keypair()
-    monkeypatch.setattr(keystore_mod, "keystore", ks)
-    return ks
-
-
-@pytest.fixture
-def client(session_factory, oauth_keystore) -> TestClient:
-    async def override_session():
-        async with session_factory() as session:
-            yield session
-
-    app.dependency_overrides[get_session] = override_session
-    try:
-        yield TestClient(app)
-    finally:
-        app.dependency_overrides.clear()
-
-
-def _mint(**overrides) -> str:
-    settings = get_settings()
-    kwargs = {
-        "sub": DEFAULT_USER_ID,
-        "client_id": "https://client.example/meta.json",
-        "scopes": ["policy:read"],
-        "projects": [DEFAULT_PROJECT_ID],
-        "issuer": settings.public_url,
-        "audience": [settings.mcp_resource_url, settings.public_url],
-    } | overrides
-    return mint_access_token(**kwargs)
 
 
 def _resign(token: str, sign, **claim_overrides) -> str:
@@ -102,8 +58,8 @@ def _get(client: TestClient, token: str, route: str = ROUTE, **headers: str):
 def test_when_token_is_valid_then_a_route_with_no_scope_refuses_it(
     client: TestClient,
 ) -> None:
-    """A valid token is still refused: no route declares a scope yet."""
-    r = _get(client, _mint())
+    """A valid token is still refused on a route that declares no scope."""
+    r = _get(client, mint())
     assert r.status_code == 403
     assert r.json()["detail"] == "token scope does not cover this route"
     assert r.headers["WWW-Authenticate"] == 'Bearer error="insufficient_scope"'
@@ -135,7 +91,7 @@ def test_when_header_is_not_an_oauth_bearer_then_require_user_ignores_it(
     ids=["expired", "wrong-aud", "mcp-only-aud", "wrong-iss"],
 )
 def test_when_token_does_not_verify_then_401(client: TestClient, overrides) -> None:
-    r = _get(client, _mint(**overrides))
+    r = _get(client, mint(**overrides))
     assert r.status_code == 401
     assert r.json()["detail"] == "missing or invalid authentication"
     assert r.headers["WWW-Authenticate"] == 'Bearer error="invalid_token"'
@@ -145,7 +101,7 @@ def test_when_signed_by_the_sdk_key_then_401(
     client: TestClient, oauth_keystore: FileKeyStore
 ) -> None:
     """The SDK root key signs biscuits and sessions; it never passes as the OAuth key."""
-    r = _get(client, _resign(_mint(), oauth_keystore.sign))
+    r = _get(client, _resign(mint(), oauth_keystore.sign))
     assert r.status_code == 401
 
 
@@ -157,13 +113,13 @@ async def test_when_user_is_inactive_then_401(
         user.is_active = False
         session.add(user)
         await session.commit()
-    r = _get(client, _mint())
+    r = _get(client, mint())
     assert r.status_code == 401
     assert r.headers["WWW-Authenticate"] == 'Bearer error="invalid_token"'
 
 
 def test_when_user_does_not_exist_then_401(client: TestClient) -> None:
-    r = _get(client, _mint(sub="no-such-user"))
+    r = _get(client, mint(sub="no-such-user"))
     assert r.status_code == 401
 
 
@@ -202,7 +158,7 @@ MARKED = "/p/{project_id}"
 def _marked_client(
     session_factory, path: str = MARKED, extra: dict | None = None
 ) -> TestClient:
-    """A hand-marked route in its own app: no real route declares a scope yet."""
+    """A hand-marked route in its own app, to vary the mark itself."""
     marked = FastAPI()
 
     @marked.get(path, openapi_extra=extra or {OAUTH_SCOPE_KEY: "policy:read"})
@@ -232,7 +188,7 @@ def test_when_route_declares_scopes_then_the_token_must_hold_all(
     session_factory, oauth_keystore, mark, status: int
 ) -> None:
     client = _marked_client(session_factory, extra={OAUTH_SCOPE_KEY: mark})
-    r = _get(client, _mint(scopes=["policy:read", "audit:read"]), MARKED)
+    r = _get(client, mint(scopes=["policy:read", "audit:read"]), MARKED)
     assert r.status_code == status, r.text
 
 
@@ -260,7 +216,7 @@ def test_when_route_is_scoped_then_the_token_must_name_its_project(
     client = _marked_client(
         session_factory, path, {OAUTH_SCOPE_KEY: "policy:read"} | tag
     )
-    r = _get(client, _mint(projects=projects), path)
+    r = _get(client, mint(projects=projects), path)
     assert r.status_code == status, r.text
     if status == 403:
         assert r.json()["detail"] == "token does not cover this project"
@@ -270,7 +226,7 @@ def test_request_state_oauth_holds_an_accepted_token_and_none_otherwise(
     session_factory, oauth_keystore, caplog: pytest.LogCaptureFixture
 ) -> None:
     client = _marked_client(session_factory)
-    token = _mint()
+    token = mint()
     jti = jwt.decode(token, options={"verify_signature": False})["jti"]
     with caplog.at_level(logging.INFO, logger="hexgate_api.deps.identity"):
         assert _get(client, token, MARKED).json()["jti"] == jti
