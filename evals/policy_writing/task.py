@@ -83,7 +83,7 @@ CLAUDE_FLAGS = [
     *["--disallowedTools", "WebFetch,WebSearch"],
 ]
 # No eval-only system prompt: the agent gets the request and the skill, as in
-# real use (design doc, Annex D).
+# real use.
 NO_RESULT = "no result event"
 USAGE_KEYS = ("usage", "total_cost_usd", "modelUsage", "duration_ms", "num_turns")
 # Claude Code's session log: the only place the expanded slash command is written.
