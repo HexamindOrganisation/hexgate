@@ -84,7 +84,8 @@ Read from the real environment or `platform/api/.env`. See
 | `DATABASE_URL` | Postgres DSN. Unset → local SQLite. Bare `postgres://` URLs are normalized to the `asyncpg` driver. |
 | `RESEND_API_KEY` | Resend API key — enables `ResendEmailSender` when paired with `HEXGATE_EMAIL_FROM`. |
 | `HEXGATE_EMAIL_FROM` | From-address on a verified Resend domain, e.g. `"Hexgate <noreply@yourdomain.com>"`. |
-| `HEXGATE_DASHBOARD_URL` | Link host embedded inside verification / reset emails. |
+| `HEXGATE_DASHBOARD_URL` | The dashboard's absolute `http(s)` URL (default `http://localhost:5173`; no user, query or fragment). Link host embedded inside verification / reset emails, and where an MCP client's OAuth login is sent for consent. |
+| `HEXGATE_OAUTH_ALLOW_INSECURE_CLIENT_IDS` | Set to `1` to also accept `http` OAuth client ids on a loopback host, for a client on your own machine. Refused at startup unless both `HEXGATE_PUBLIC_URL` and `HEXGATE_DASHBOARD_URL` are on a local host. |
 | `HEXGATE_REDPANDA_BOOTSTRAP_SERVER` | Kafka-protocol broker the span-enricher consumes from and the collector publishes to (default `localhost:9092`). |
 
 The collector and the span-enricher are separate processes with their own

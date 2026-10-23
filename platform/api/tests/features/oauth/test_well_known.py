@@ -36,6 +36,8 @@ def oauth_keystore(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FileKeySt
 @pytest.fixture(autouse=True)
 def public_url(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("HEXGATE_PUBLIC_URL", PUBLIC_URL)
+    # A developer's .env may turn it on, which the remote public_url refuses.
+    monkeypatch.setenv("HEXGATE_OAUTH_ALLOW_INSECURE_CLIENT_IDS", "0")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

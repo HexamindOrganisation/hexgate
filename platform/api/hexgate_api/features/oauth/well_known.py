@@ -9,9 +9,8 @@ from __future__ import annotations
 from fastapi import APIRouter
 from jwt.utils import base64url_encode
 
-from hexgate_api.constants import OAUTH_SCOPES
+from hexgate_api.constants import OAUTH_PREFIX, OAUTH_SCOPES
 from hexgate_api.core.oauth_tokens import ACCESS_TOKEN_ALGORITHM
-from hexgate_api.features.oauth.provider import OAUTH_PREFIX
 from hexgate_api.settings import get_settings
 
 router = APIRouter()
