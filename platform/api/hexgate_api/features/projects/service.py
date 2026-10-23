@@ -66,6 +66,14 @@ async def list_projects(session: AsyncSession, org_id: str) -> list[Project]:
     return list((await session.exec(stmt)).all())
 
 
+async def org_ids_of_projects(
+    session: AsyncSession, project_ids: frozenset[str]
+) -> set[str]:
+    """The orgs the given projects belong to; unknown ids are ignored."""
+    stmt = select(Project.org_id).where(Project.id.in_(list(project_ids)))  # type: ignore[attr-defined]
+    return set((await session.exec(stmt)).all())
+
+
 async def update_project_name(
     session: AsyncSession,
     *,

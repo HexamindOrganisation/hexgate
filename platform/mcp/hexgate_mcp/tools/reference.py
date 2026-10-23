@@ -9,7 +9,8 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
-from mcp.types import ToolAnnotations
+
+from hexgate_mcp.tools import READ_ONLY
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +78,7 @@ def register(mcp: FastMCP, sections: dict[str, str] | None = None) -> None:
             "grammar, and how policies are built, signed and tested. With no "
             "`section`, lists the sections. " + INSTRUCTIONS
         ),
-        # Static text: clients may call it without asking the user first.
-        annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+        annotations=READ_ONLY,
         # Unstructured, like every tool here: a `str` return otherwise goes
         # out a second time as structuredContent.
         structured_output=False,
