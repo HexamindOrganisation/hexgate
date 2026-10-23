@@ -221,9 +221,13 @@ def test_when_query_invalid_then_error_redirected_to_verified_client(
 def test_when_authorize_posted_then_not_handled_by_sdk(
     client: TestClient, fetches: list[bool]
 ) -> None:
-    # The consent POST takes this path later; the MCP SDK's form-POST authorize must not.
-    resp = client.post("/v1/oauth/authorize", data={"client_id": CLIENT_ID})
-    assert resp.status_code == 405
+    # The consent POST has this path, and refuses a form; the MCP SDK's form-POST authorize must not take it.
+    resp = client.post(
+        "/v1/oauth/authorize",
+        data={"client_id": CLIENT_ID},
+        headers={"Origin": DASHBOARD_URL},
+    )
+    assert resp.status_code == 400
     assert fetches == []  # The MCP SDK's handler would have loaded the client.
 
 

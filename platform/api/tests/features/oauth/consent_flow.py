@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from fastapi.testclient import TestClient
 
 from hexgate_api.constants import DEFAULT_PROJECT_ID, DEFAULT_USER_ID
 from hexgate_api.core.oauth_tokens import mint_access_token
@@ -40,6 +42,7 @@ OTHER_ORG_ID = "00000000-0000-0000-0000-0000000000a1"
 OTHER_PROJECT_ID = "00000000-0000-0000-0000-0000000000a3"
 OTHER_USER_ID = "00000000-0000-0000-0000-0000000000a2"
 USER_HEADERS = {"X-Dev-User": DEFAULT_USER_ID}
+POST_HEADERS = {**USER_HEADERS, "Origin": DASHBOARD_URL}
 
 ENV = {
     "HEXGATE_PUBLIC_URL": PUBLIC_URL,
@@ -90,3 +93,29 @@ def authorization(**overrides: str | None) -> dict[str, str]:
         "resource": RESOURCE_URL,
     } | overrides
     return {k: v for k, v in params.items() if v is not None}
+
+
+_DEFAULT = object()
+
+
+def consent(
+    client: TestClient,
+    projects: list[str] | None | object = _DEFAULT,
+    headers: dict[str, str] | None = None,
+    **overrides: str | None,
+):
+    """POST the consent; ``projects=None`` leaves the field out."""
+    body = authorization(**overrides)
+    if projects is not None:
+        body["projects"] = [DEFAULT_PROJECT_ID] if projects is _DEFAULT else projects
+    return client.post(
+        "/v1/oauth/authorize",
+        json=body,
+        headers=POST_HEADERS if headers is None else headers,
+    )
+
+
+def code_of(resp) -> str:
+    """The code in a consent response's ``redirect_to``."""
+    (code,) = parse_qs(urlsplit(resp.json()["redirect_to"]).query)["code"]
+    return code
