@@ -165,11 +165,15 @@ async def test_when_json_has_charset_then_accepted(consent_client: TestClient) -
     assert resp.status_code == 200
 
 
-async def test_when_consent_posted_with_a_valid_token_then_401(
+async def test_when_consent_posted_with_a_valid_token_then_403(
     consent_client: TestClient, engine
 ) -> None:
     bearer = {"Origin": DASHBOARD_URL, "Authorization": f"Bearer {access_token()}"}
-    assert consent(consent_client, headers=bearer).status_code == 401
+    resp = consent(consent_client, headers=bearer)
+    assert (
+        resp.status_code == 403
+    )  # require_user's default-deny: the route has no scope
+    assert resp.json()["detail"] == "token scope does not cover this route"
     assert await _codes(engine) == []
 
 

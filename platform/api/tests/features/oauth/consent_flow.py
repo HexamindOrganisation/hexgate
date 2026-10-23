@@ -64,6 +64,8 @@ REFUSED_REQUESTS = [
     pytest.param({"client_id": "https://unknown.example/m.json"}, id="client"),
     pytest.param({"response_type": "token"}, id="response-type"),
     pytest.param({"state": "s" * (MAX_STATE_LENGTH + 1)}, id="long-state"),
+    # 171 x "é" is 171 characters but 1026 URL-encoded ("%C3%A9" each).
+    pytest.param({"state": "é" * 171}, id="long-encoded-state"),
 ]
 
 

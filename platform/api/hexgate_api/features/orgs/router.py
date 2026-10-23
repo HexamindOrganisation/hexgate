@@ -1,11 +1,12 @@
-"""Organization CRUD — list/create/read/update, cookie-authed."""
+"""Organization CRUD — list/create/read/update, cookie-authed (listing also takes an OAuth token)."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from hexgate_api.constants import OAUTH_NO_PROJECT, OAUTH_SCOPE_KEY
 from hexgate_api.core.db import get_session
-from hexgate_api.deps.identity import require_user
+from hexgate_api.deps.identity import oauth_projects, require_user
 from hexgate_api.deps.org import require_org_admin, require_org_membership
 from hexgate_api.models import Organization, OrganizationMember, User, utcnow
 from hexgate_api.schemas import OrgCreate, OrgRead, OrgUpdate, OrgWithRole
@@ -17,8 +18,13 @@ def _org_read(org: Organization) -> OrgRead:
     return OrgRead(id=org.id, slug=org.slug, name=org.name, created_at=org.created_at)
 
 
-@router.get("/orgs", tags=["orgs"])
+@router.get(
+    "/orgs",
+    openapi_extra={OAUTH_SCOPE_KEY: "projects:read", OAUTH_NO_PROJECT: True},
+    tags=["orgs"],
+)
 async def api_list_orgs(
+    request: Request,
     user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[OrgWithRole]:
@@ -36,14 +42,22 @@ async def api_list_orgs(
     so the repair is opportunistic and silent. The helper is
     idempotent on the "user already owns an org" invariant, so a
     concurrent repair-then-create race can't double-bootstrap.
+
+    An OAuth caller sees only the orgs of the projects its token names, and
+    never triggers the repair: a read scope must not write.
     """
     from hexgate_api.features.orgs.service import (
         ensure_personal_default_org,
         list_orgs_for_user,
     )
+    from hexgate_api.features.projects.service import org_ids_of_projects
 
     rows = await list_orgs_for_user(session, user.id)
-    if not rows:
+    granted = oauth_projects(request)
+    if granted is not None:
+        org_ids = await org_ids_of_projects(session, granted)
+        rows = [(o, role) for o, role in rows if o.id in org_ids]
+    elif not rows:
         await ensure_personal_default_org(session, user)
         await session.commit()
         rows = await list_orgs_for_user(session, user.id)

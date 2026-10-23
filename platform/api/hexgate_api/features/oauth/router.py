@@ -34,15 +34,6 @@ from hexgate_api.settings import get_settings
 router = APIRouter(prefix="/oauth", tags=["oauth"])
 
 
-def _refuse_authorization_header(
-    authorization: str | None = Header(default=None),
-) -> None:
-    """Consent is given by a person in the dashboard, never by a token: an OAuth
-    token or SDK key must not be able to grant another."""
-    if authorization is not None:
-        raise HTTPException(status_code=401, detail="consent needs a session cookie")
-
-
 def _origin(url: str) -> str | None:
     """``url``'s origin as a browser serialises it: lowercase, no default port."""
     parts = urlsplit(url)
@@ -106,10 +97,13 @@ async def _user_projects(
     return list(rows.all())
 
 
+# Unmarked, like consent-info: a token never gives a consent.
 @router.post(
     "/authorize",
+    # require_user first, so who is calling is decided before the request's
+    # shape (FastAPI runs it once; the handler's user is the cached result).
     dependencies=[
-        Depends(_refuse_authorization_header),
+        Depends(require_user),
         Depends(_require_dashboard_origin),
         Depends(_require_json),
     ],
@@ -148,7 +142,9 @@ async def api_consent(
     )
 
 
-@router.get("/consent-info", dependencies=[Depends(_refuse_authorization_header)])
+# Unmarked, so require_user's default-deny refuses any OAuth token (403): only
+# a person in the dashboard, with a session cookie, sees or gives a consent.
+@router.get("/consent-info")
 async def api_consent_info(
     request: Request,
     user: User = Depends(require_user),

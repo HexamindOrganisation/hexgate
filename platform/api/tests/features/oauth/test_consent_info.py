@@ -21,10 +21,15 @@ from tests.features.oauth.consent_flow import (
 )
 
 
-def test_when_state_at_cap_then_accepted(consent_client: TestClient) -> None:
+@pytest.mark.parametrize(
+    "state", ["s" * MAX_STATE_LENGTH, "é" * 170], ids=["ascii", "encoded-1020"]
+)
+def test_when_state_at_cap_then_accepted(
+    consent_client: TestClient, state: str
+) -> None:
     resp = consent_client.get(
         "/v1/oauth/consent-info",
-        params=authorization(state="s" * MAX_STATE_LENGTH),
+        params=authorization(state=state),
         headers=USER_HEADERS,
     )
     assert resp.status_code == 200
@@ -57,14 +62,19 @@ def test_when_consent_info_query_tampered_then_400(
     assert resp.status_code == 400
 
 
-@pytest.mark.parametrize("token", [True, False], ids=["bearer", "no-session"])
-def test_when_consent_info_without_session_then_401(
-    consent_client: TestClient, token: bool
+def test_when_consent_info_with_a_valid_token_then_403(
+    consent_client: TestClient,
 ) -> None:
-    headers = {"Authorization": f"Bearer {access_token()}"} if token else {}
+    headers = {"Authorization": f"Bearer {access_token()}"}
     resp = consent_client.get(
         "/v1/oauth/consent-info", params=authorization(), headers=headers
     )
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "token scope does not cover this route"
+
+
+def test_when_consent_info_without_session_then_401(consent_client: TestClient) -> None:
+    resp = consent_client.get("/v1/oauth/consent-info", params=authorization())
     assert resp.status_code == 401
 
 
