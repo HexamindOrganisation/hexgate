@@ -63,9 +63,11 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
             if draft is not None and not any(f["name"] == draft.name for f in files):
                 raise ToolError(
                     f"{draft.name!r} is not stored yet, so nothing imports it and "
-                    "the draft cannot apply; save it first from the dashboard's "
-                    "Policies page (it changes nothing while nothing imports "
-                    f"it), then draft the {ENTRY_FILE!r} that imports it"
+                    "the draft cannot apply; save it first with policy_save "
+                    "(or, without the 'policy:write' scope, from the "
+                    "dashboard's Policies page; it changes nothing while "
+                    f"nothing imports it), then draft the {ENTRY_FILE!r} that "
+                    "imports it"
                 )
             return
         # Bindings first: without them a retry without the draft is refused

@@ -429,7 +429,7 @@ def test_when_draft_is_a_file_not_stored_then_it_is_refused(token, name, argumen
 
     message = error(call(token, name, **arguments))
 
-    assert "save it first from the dashboard's Policies page" in message
+    assert "save it first with policy_save" in message
     assert {r.method for r in api_requests()} == {"GET"}
 
 
