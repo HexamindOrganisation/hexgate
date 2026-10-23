@@ -19,7 +19,15 @@ from hexgate_mcp.auth import JwksTokenVerifier
 from hexgate_mcp.jwks import JwksCache
 from hexgate_mcp.scopes import OAUTH_SCOPES
 from hexgate_mcp.settings import Settings
-from hexgate_mcp.tools import policy, projects, reference, write_local
+from hexgate_mcp.tools import (
+    agents,
+    audit,
+    policy,
+    policy_save,
+    projects,
+    reference,
+    write_local,
+)
 
 
 async def health(_: Request) -> JSONResponse:
@@ -60,8 +68,8 @@ def build_app(settings: Settings, http: httpx.AsyncClient) -> Starlette:
     mcp.custom_route("/health", methods=["GET"], include_in_schema=False)(health)
     reference.register(mcp)
     api = ApiClient(settings.api_v1_url, http)
-    projects.register(mcp, api)
-    policy.register(mcp, api)
+    for tools in (projects, policy, policy_save, audit, agents):
+        tools.register(mcp, api)
     if settings.local_policy_dir is not None:
         write_local.register(mcp, settings.local_policy_dir)
     app = mcp.streamable_http_app()
