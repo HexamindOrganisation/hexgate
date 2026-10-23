@@ -10,6 +10,7 @@ exists, so ``/token`` answers a known client ``invalid_grant``.
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlencode
 
 from mcp.server.auth.provider import (
@@ -28,13 +29,14 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from pydantic import AnyHttpUrl
 from starlette.routing import Route
 
-from hexgate_api.constants import OAUTH_SCOPES
+from hexgate_api.constants import OAUTH_PREFIX, OAUTH_SCOPES
 from hexgate_api.features.oauth.client_cache import ClientMetadataCache
 from hexgate_api.features.oauth.client_metadata import ClientMetadataError
 from hexgate_api.settings import get_settings
 
-OAUTH_PREFIX = "/v1/oauth"
 CONSENT_PATH = "/oauth/consent"
+# RFC 7636 §4.2: an S256 challenge is the base64url SHA-256, unpadded.
+_S256_CHALLENGE = re.compile(r"[A-Za-z0-9_-]{43}")
 
 
 class HexgateOAuthProvider(
@@ -52,6 +54,7 @@ class HexgateOAuthProvider(
         # where a raised error would be a 500.
         try:
             return await self._clients.get(client_id)
+        # The cache logs a refusal once, when it caches the failure.
         except ClientMetadataError:
             return None
 
@@ -69,6 +72,10 @@ class HexgateOAuthProvider(
         if params.resource != self._resource_url:
             raise AuthorizeError(
                 "invalid_request", f"resource must be {self._resource_url}"
+            )
+        if not _S256_CHALLENGE.fullmatch(params.code_challenge):
+            raise AuthorizeError(
+                "invalid_request", "code_challenge must be an S256 challenge"
             )
         # No scope asks for every scope, so the consent page shows the whole
         # list and the user decides; a grant of none could do nothing.
@@ -125,7 +132,7 @@ def oauth_routes() -> list[Route]:
     provider = HexgateOAuthProvider(
         clients,
         resource_url=settings.mcp_resource_url,
-        consent_url=f"{settings.dashboard_url.rstrip('/')}{CONSENT_PATH}",
+        consent_url=f"{settings.dashboard_url}{CONSENT_PATH}",
     )
     (authorize,) = [
         route
