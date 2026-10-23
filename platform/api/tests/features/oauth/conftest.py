@@ -8,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from hexgate_api.core import db
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.core.db import get_session
 from hexgate_api.core.keystore import FileKeyStore
@@ -81,6 +82,8 @@ async def consent_client(engine, tmp_path, monkeypatch: pytest.MonkeyPatch):
         return consent_flow.DOCUMENT
 
     monkeypatch.setattr(client_cache, "fetch_client_metadata", fake_fetch)
+    # The provider reads codes through this factory, outside FastAPI's dependencies.
+    monkeypatch.setattr(db, "async_session_factory", factory)
     app = create_app()
 
     async def override_session():

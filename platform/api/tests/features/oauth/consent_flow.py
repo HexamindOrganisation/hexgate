@@ -119,3 +119,14 @@ def code_of(resp) -> str:
     """The code in a consent response's ``redirect_to``."""
     (code,) = parse_qs(urlsplit(resp.json()["redirect_to"]).query)["code"]
     return code
+
+
+def redeem(client: TestClient, code: str, **overrides: str):
+    form = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": REDIRECT_URI,
+        "code_verifier": VERIFIER,
+        "client_id": CLIENT_ID,
+    } | overrides
+    return client.post("/v1/oauth/token", data=form)

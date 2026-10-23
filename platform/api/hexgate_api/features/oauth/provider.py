@@ -2,10 +2,10 @@
 
 The MCP SDK's handlers parse and check the ``/authorize`` and ``/token`` requests
 (response type, PKCE method, the client's redirect and scopes) and format the
-standard errors; the provider answers what only the platform knows. This half
-loads clients and sends an accepted login to the dashboard's consent page.
-Redeeming the code the consent POST writes (``router.py``) comes in a later
-half: until then no code loads, so ``/token`` answers a known client
+standard errors; the provider answers what only the platform knows: it loads
+clients, sends an accepted login to the dashboard's consent page, and swaps
+the code the consent POST wrote (``router.py``) for the first tokens. Refresh
+tokens come in a later half: until then none loads, so a refresh answers
 ``invalid_grant``.
 """
 
@@ -27,10 +27,11 @@ from mcp.server.auth.middleware.client_auth import ClientAuthenticator
 from mcp.server.auth.routes import AUTHORIZATION_PATH, TOKEN_PATH, create_auth_routes
 from mcp.server.auth.settings import ClientRegistrationOptions
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
-from pydantic import AnyHttpUrl
+from pydantic import AnyHttpUrl, AnyUrl
 from starlette.routing import Route
 
 from hexgate_api.constants import OAUTH_PREFIX
+from hexgate_api.core import db
 from hexgate_api.features.oauth.authorization import (
     CheckedAuthorization,
     check_authorization,
@@ -38,13 +39,22 @@ from hexgate_api.features.oauth.authorization import (
 )
 from hexgate_api.features.oauth.client_cache import ClientMetadataCache
 from hexgate_api.features.oauth.client_metadata import ClientMetadataError
+from hexgate_api.features.oauth.grants import as_utc, issue_tokens, redeem_code
 from hexgate_api.settings import get_settings
 
 CONSENT_PATH = "/oauth/consent"
 
 
+class GrantedCode(AuthorizationCode):
+    """A redeemed code, with what the tokens carry beyond the MCP SDK's fields."""
+
+    resource: str  # always stored: /authorize refuses a request without it
+    user_id: str
+    projects: list[str]
+
+
 class HexgateOAuthProvider(
-    OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken, AccessToken]
+    OAuthAuthorizationServerProvider[GrantedCode, RefreshToken, AccessToken]
 ):
     def __init__(
         self,
@@ -98,18 +108,48 @@ class HexgateOAuthProvider(
 
     async def load_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: str
-    ) -> AuthorizationCode | None:
-        return None  # Codes are redeemed in a later half.
+    ) -> GrantedCode | None:
+        """Spend the code and return it, or None if it is unknown, used or expired.
+
+        Spent here, before the MCP SDK compares the client, ``redirect_uri`` and
+        PKCE verifier, so a request that fails any of them burns the code.
+        """
+        async with db.async_session_factory() as session:
+            row = await redeem_code(session, authorization_code)
+        if row is None:
+            return None
+        return GrantedCode(
+            code=authorization_code,
+            scopes=row.scopes_csv.split(","),
+            expires_at=as_utc(row.expires_at).timestamp(),
+            client_id=row.client_id,
+            code_challenge=row.code_challenge,
+            # Stored normalised; the MCP SDK normalises the /token one to compare.
+            redirect_uri=AnyUrl(row.redirect_uri),
+            redirect_uri_provided_explicitly=True,
+            resource=row.resource,
+            user_id=row.user_id,
+            projects=row.projects_csv.split(","),
+        )
 
     async def exchange_authorization_code(
-        self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
+        self, client: OAuthClientInformationFull, authorization_code: GrantedCode
     ) -> OAuthToken:
-        raise NotImplementedError  # Unreachable: no code loads.
+        async with db.async_session_factory() as session:
+            return await issue_tokens(
+                session,
+                user_id=authorization_code.user_id,
+                client_id=client.client_id,
+                client_name=client.client_name or client.client_id,
+                scopes=authorization_code.scopes,
+                projects=authorization_code.projects,
+                resource=authorization_code.resource,
+            )
 
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str
     ) -> RefreshToken | None:
-        return None  # No refresh token is issued before the code exchange exists.
+        return None  # Refresh lands in a later half; until then a refresh is invalid_grant.
 
     async def exchange_refresh_token(
         self,
