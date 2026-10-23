@@ -3,6 +3,7 @@
 from urllib.parse import urlparse
 
 import httpx
+from mcp.server.auth.middleware.bearer_auth import RequireAuthMiddleware
 from mcp.server.auth.routes import build_resource_metadata_url, cors_middleware
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
@@ -10,14 +11,15 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.auth import ProtectedResourceMetadata
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from hexgate_mcp.api import ApiClient
 from hexgate_mcp.auth import JwksTokenVerifier
 from hexgate_mcp.jwks import JwksCache
 from hexgate_mcp.scopes import OAUTH_SCOPES
 from hexgate_mcp.settings import Settings
-from hexgate_mcp.tools import reference
+from hexgate_mcp.tools import projects, reference
 
 
 async def health(_: Request) -> JSONResponse:
@@ -57,9 +59,27 @@ def build_app(settings: Settings, http: httpx.AsyncClient) -> Starlette:
     )
     mcp.custom_route("/health", methods=["GET"], include_in_schema=False)(health)
     reference.register(mcp)
+    projects.register(mcp, ApiClient(settings.api_v1_url, http))
     app = mcp.streamable_http_app()
     _serve_resource_metadata(app, auth, settings.issuer)
+    _refuse_get_stream(app, auth, mcp.settings.streamable_http_path)
     return app
+
+
+def _refuse_get_stream(app: Starlette, auth: AuthSettings, path: str) -> None:
+    """Answer an authenticated GET on the MCP path with 405. A stateless server
+    never pushes a message outside a POST's own response, so the SSE stream a
+    client opens with GET would only carry pings until the connection times
+    out; the MCP spec lets the server refuse it, and clients then stop asking.
+    Behind the same auth check as the SDK's route, so a GET with no token still
+    gets the 401 that names the resource metadata. Inserted ahead of the SDK's
+    route, which accepts every method."""
+    endpoint = RequireAuthMiddleware(
+        Response(status_code=405, headers={"Allow": "POST"}),
+        required_scopes=[],
+        resource_metadata_url=build_resource_metadata_url(auth.resource_server_url),
+    )
+    app.router.routes.insert(0, Route(path, endpoint, methods=["GET"]))
 
 
 def _serve_resource_metadata(app: Starlette, auth: AuthSettings, issuer: str) -> None:

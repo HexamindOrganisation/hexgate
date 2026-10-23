@@ -79,6 +79,9 @@ def register(mcp: FastMCP, sections: dict[str, str] | None = None) -> None:
         ),
         # Static text: clients may call it without asking the user first.
         annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+        # Unstructured, like every tool here: a `str` return otherwise goes
+        # out a second time as structuredContent.
+        structured_output=False,
     )
     def policy_reference(section: str | None = None) -> str:
         if not sections:
