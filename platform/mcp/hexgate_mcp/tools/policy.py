@@ -49,8 +49,9 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         capability in the library (or nothing), check the module store's lints
         and the test route that same `default` role. A draft takes effect only
         as the entry file itself, or as a stored file beside one (the API's
-        own test): otherwise
-        the preview and the test route answer for the saved policy."""
+        own test): otherwise the preview answers a link-error when there is
+        no entry file, and for the saved policy beside one, and the test route
+        answers for the saved policy."""
         if draft is not None and draft.name == ENTRY_FILE:
             return
         files = await read(project_id, "/policy-files")
