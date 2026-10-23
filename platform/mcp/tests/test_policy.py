@@ -15,7 +15,14 @@ ANSWERS = {
     ("GET", "/policy-files"): [ENTRY, CAP],
     ("GET", "/policy-modules"): [MODULE],
     ("GET", "/policy/resolve"): {"roles": {}},
-    ("GET", "/policy/graph"): {"nodes": [], "edges": [], "roles": ["support"]},
+    ("GET", "/policy/graph"): {
+        "nodes": [
+            {"id": "agent:billing", "kind": "agent", "label": "billing"},
+            {"id": "tool:refund", "kind": "tool", "label": "refund"},
+        ],
+        "edges": [],
+        "roles": ["support"],
+    },
     ("GET", "/policy-roles"): {"roles": {"support": {"*": ["refunds"]}}},
 }
 # One call of every tool here, each with the arguments it needs.
@@ -108,10 +115,19 @@ def error(result: dict) -> str:
             {"role": "support", "agent": "billing"},
             [
                 ("GET", "/policy-files", {}),
+                ("GET", "/policy/graph", {}),
                 ("GET", "/policy/resolve", {"role": "support", "agent": "billing"}),
             ],
             {"roles": {}},
             id="resolve-role-and-agent",
+        ),
+        pytest.param(
+            "policy_resolve",
+            {"agent": "*"},
+            # The generic view is every project's: no agent lookup.
+            [("GET", "/policy-files", {}), ("GET", "/policy/resolve", {"agent": "*"})],
+            {"roles": {}},
+            id="resolve-generic-agent",
         ),
         pytest.param(
             "policy_graph",
@@ -173,6 +189,21 @@ def test_when_name_and_tier_are_swapped_then_policy_read_file_refuses(token):
 
     assert "tier" in error(result)
     assert api_requests() == []
+
+
+@pytest.mark.parametrize("agent", ["biling", "refund"])
+def test_when_agent_is_not_declared_then_policy_resolve_refuses(token, agent):
+    # A tool node's label is not an agent.
+    mock_api()
+
+    message = error(call(token, "policy_resolve", agent=agent))
+
+    assert (
+        f"agent {agent!r} is not declared in the policy (declared: ['billing'])"
+        in message
+    )
+    assert 'runs under the generic "*" view' in message
+    assert all(sent(r)[1] != "/policy/resolve" for r in api_requests())
 
 
 def test_when_role_is_unknown_then_policy_graph_refuses(token):
