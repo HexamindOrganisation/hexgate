@@ -681,8 +681,7 @@ export const LLM_MESSAGE_PAGE = 50;
 // --- AI Act evidence report -------------------------------------------------
 //
 // Wire shapes for the two slices the tab talks to, pinned field-for-field to
-// what the endpoints serve rather than to the spec's prose, which is looser
-// than both:
+// what the endpoints serve:
 //
 //   classification  hexgate_api/schemas.py: AgentClassificationRead/Write
 //   report          hexgate_api/schemas.py: AiActReportCreate/Summary/Read

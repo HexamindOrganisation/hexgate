@@ -656,8 +656,8 @@ def _seed_usage_sources(client, database: str, minutes: Sequence) -> list:
 
 @clickhouse_only
 def test_usage_minute_backfill_matches_the_views() -> None:
-    """The backfill must count exactly what the views count — both DP1 answers,
-    pinned as numbers — and a second run must insert nothing."""
+    """The backfill must count exactly what the views count, pinned as numbers,
+    and a second run must insert nothing."""
     from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
@@ -677,7 +677,7 @@ def test_usage_minute_backfill_matches_the_views() -> None:
             run_clickhouse_script(client, USAGE_BACKFILL.read_text(), database)
             assert _usage(client, database) == expected, "a rerun inserted rows"
 
-            # A redelivered decision is summed by the view (F1), but FINAL
+            # A redelivered decision is summed by the view, but FINAL
             # collapses it when the backfill rebuilds the rollup.
             client.insert(
                 "policy_decision",
@@ -802,7 +802,7 @@ def _user_usage_minutes() -> list:
 @clickhouse_only
 def test_usage_minute_user_backfill_matches_the_views() -> None:
     """The user backfill counts exactly what the user views count, a second run
-    inserts nothing, and neither path ever writes a '' row (G4)."""
+    inserts nothing, and neither path ever writes a '' row."""
     minutes = _user_usage_minutes()
     expected = _expected_user_usage(minutes)
 

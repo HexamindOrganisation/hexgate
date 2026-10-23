@@ -1,9 +1,9 @@
 """Verifies the platform API's OAuth access tokens against its JWKS.
 
-This check is for a clean 401 and the client's re-login. The token names two
-audiences, this server and the API, and the API verifies it again on every
-call it receives as a token minted for itself; that check is the security
-boundary.
+This check is for a clean 401 and the client's re-login. The API is to mint
+the token for two audiences, this server's resource URL and its own public URL;
+nothing mints one until the code exchange lands. The API's own check of the
+token on every call it receives is the security boundary.
 """
 
 import logging
@@ -101,7 +101,7 @@ def _access_token(
             scopes=scope.split(),
             expires_at=claims["exp"],
             # Our own resource URL, which jwt.decode has already found in
-            # `aud`. The claim itself is a list, since the token also names the
+            # `aud`. The claim itself is a list once the token also names the
             # API, and the SDK types `resource` as a single string.
             resource=audience,
             subject=claims["sub"],

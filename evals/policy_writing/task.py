@@ -381,7 +381,7 @@ def policy_checks(model: str | None = None):
             size, pulled = await pull(sandbox(), Path(tmp))
             case, answer = CASES[state.sample_id], state.output.completion
             score = grade(case, Path(tmp), answer, size, agent_ran(state) or pulled)
-        # What Claude Code reported, for the cost report (PR 15), and the
+        # What Claude Code reported, for the cost report, and the
         # `--model` asked for (None: the subscription's default).
         score.metadata["usage"] = state.store.get("usage")
         score.metadata["model"] = model

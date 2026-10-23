@@ -274,7 +274,7 @@ For secret values (tokens, keys): render as `fty_live_xxxx•••••••�
 
 ---
 
-## 7. The graph canvas (§9.2 of main POC doc)
+## 7. The graph canvas
 
 This is the centerpiece of the product's visual identity. Spend effort here.
 
