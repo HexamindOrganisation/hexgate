@@ -8,6 +8,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 from hexgate_mcp.auth import HexgateAccessToken
 from hexgate_mcp.tools import (
+    ANY_NAME,
     RESULT_CAP_BYTES,
     TRUNCATED_MARKER,
     caller,
@@ -95,11 +96,23 @@ def test_when_grant_does_not_cover_the_call_then_refused_before_any_request(
     assert not api.called
 
 
-def test_when_a_by_name_value_is_not_a_dict_then_it_is_walked_normally():
-    names = frozenset({"properties"})
-    value = {"properties": [{"title": "t"}]}
+def test_untrusted_happy_path():
+    spec = {"name": None, "params": {ANY_NAME: {"type": None}}}
+    value = {"name": "n", "params": {"db": {"type": "s", "title": "t"}}, "x": 1}
 
-    assert untrusted(value, names, names) == {"properties": [{"untrusted_title": "t"}]}
+    assert untrusted(value, spec) == {
+        "name": "n",
+        "params": {"db": {"type": "s", "untrusted_title": "t"}},
+        "untrusted_x": 1,
+    }
+
+
+def test_when_a_trusted_name_appears_at_another_depth_then_it_is_marked():
+    spec = {"name": None, "inner": {}}
+
+    assert untrusted([{"name": "n", "inner": {"name": "m"}}], spec) == [
+        {"name": "n", "inner": {"untrusted_name": "m"}}
+    ]
 
 
 def test_result_text_happy_path():
@@ -160,3 +173,27 @@ def test_when_first_list_item_exceeds_the_cap_then_head_is_kept():
     assert len(text.encode()) == RESULT_CAP_BYTES
     assert text.startswith('["xxx')
     assert text.endswith(TRUNCATED_MARKER)
+
+
+def test_when_a_page_of_small_rows_exceeds_the_cap_then_as_many_as_fit_are_kept():
+    # Many small rows: the ", " between them is two of every five bytes.
+    page = {"rows": ["r"] * RESULT_CAP_BYTES, "total": RESULT_CAP_BYTES}
+
+    text = result_text(page)
+
+    sent = json.loads(text)
+    assert RESULT_CAP_BYTES - len(', "r"') < len(text.encode()) <= RESULT_CAP_BYTES
+    assert sent["truncated"] is True
+    assert sent["total"] == RESULT_CAP_BYTES
+
+
+def test_when_first_row_exceeds_the_cap_then_the_page_keeps_no_rows():
+    page = {"rows": ["x" * RESULT_CAP_BYTES], "total": 1, "offset": 7}
+
+    assert json.loads(result_text(page)) == {
+        "truncated": True,
+        "rows": [],
+        "total": 1,
+        "offset": 7,
+        "next_offset": 7,
+    }

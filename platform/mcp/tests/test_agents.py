@@ -23,9 +23,14 @@ def manifest(text: str) -> dict:
                 "name": "delete_database",
                 f"{text}description": INJECTED,
                 "input_schema": {
-                    # Parameter names keep their keys, trusted or not.
+                    # Parameter names keep their keys, trusted or not; a
+                    # trusted key at a level where it is not trusted does not.
                     "properties": {
-                        "db": {f"{text}title": INJECTED, f"{text}type": "s"}
+                        "db": {
+                            f"{text}title": INJECTED,
+                            f"{text}type": "s",
+                            f"{text}name": INJECTED,
+                        }
                     },
                     "required": ["db"],
                 },

@@ -22,10 +22,13 @@ def save(key, name: str) -> dict:
 def test_policy_save_happy_path(key):
     respx.get(JWKS_URL).respond(json=jwks(key))
     # Quoted, or the `?` would start a query string.
-    route = respx.put(f"{FILES_URL}/modules/a%20b%3F.yaml").respond(json=SAVED)
+    route = respx.put(f"{FILES_URL}/modules/a%20b%3F.yaml").respond(
+        json=SAVED | {"content": "version: 1\n"}
+    )
 
     result = save(key, "modules/a b?.yaml")
 
+    # The text the model just sent is not sent back.
     assert json.loads(result["content"][0]["text"]) == SAVED
     request = route.calls.last.request
     assert json.loads(request.content) == {"content": "version: 1\n"}

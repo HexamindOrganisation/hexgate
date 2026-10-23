@@ -9,7 +9,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import BaseModel
 
 from hexgate_mcp.api import ApiClient
-from hexgate_mcp.tools import READ_ONLY, caller, result_text
+from hexgate_mcp.tools import READ_ONLY, caller, result_text, without_content
 
 # The compose store's entry file (platform/api policy_modules/service.py
 # ENTRY_FILE).
@@ -116,11 +116,11 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         files = await read(project_id, "/policy-files")
         modules = await read(project_id, "/policy-modules")
         # Names only: the contents of every file would crowd out the rest.
-        listed = [_without_content(m) for m in modules]
+        listed = [without_content(m) for m in modules]
         if _has_entry(files):
             listed = {"in_force": False, "note": NOT_IN_FORCE, "modules": listed}
         return result_text(
-            {"files": [_without_content(f) for f in files], "modules": listed}
+            {"files": [without_content(f) for f in files], "modules": listed}
         )
 
     @mcp.tool(annotations=READ_ONLY, structured_output=False)
@@ -236,7 +236,3 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
 
 def _has_entry(files: list[dict[str, Any]]) -> bool:
     return any(f["name"] == ENTRY_FILE for f in files)
-
-
-def _without_content(item: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in item.items() if k != "content"}

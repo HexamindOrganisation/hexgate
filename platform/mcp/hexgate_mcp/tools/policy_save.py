@@ -7,7 +7,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from hexgate_mcp.api import ApiClient
-from hexgate_mcp.tools import caller, result_text
+from hexgate_mcp.tools import caller, result_text, without_content
 
 
 def file_path(project_id: str, name: str) -> str:
@@ -42,4 +42,6 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         on the draft first."""
         token = caller("policy:write", project_id=project_id)
         path = file_path(project_id, name)
-        return result_text(await api.put(path, token.token, {"content": content}))
+        # The saved file without its text, which the model just sent.
+        saved = await api.put(path, token.token, {"content": content})
+        return result_text(without_content(saved))
