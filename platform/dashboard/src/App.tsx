@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "@/components/AppShell";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
@@ -9,6 +9,7 @@ import { AuditPage } from "@/routes/Audit";
 import { BansPage } from "@/routes/Bans";
 import { ForgotPasswordPage } from "@/routes/ForgotPassword";
 import { GraphPage } from "@/routes/Graph";
+import { HomePage } from "@/routes/Home";
 import { OrgMembersPage } from "@/routes/OrgMembers";
 import { OrgSettingsPage } from "@/routes/OrgSettings";
 import { OrgsPage } from "@/routes/Orgs";
@@ -57,7 +58,7 @@ export default function App() {
             </ProtectedRoute>
           }
         >
-          <Route index element={<Navigate to="/agents" replace />} />
+          <Route index element={<HomePage />} />
           <Route path="agents" element={<AgentsPage />} />
           <Route path="policies" element={<PoliciesPage />} />
           <Route path="graph" element={<GraphPage />} />

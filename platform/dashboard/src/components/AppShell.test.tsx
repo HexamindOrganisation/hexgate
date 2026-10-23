@@ -94,6 +94,7 @@ describe("AppShell", () => {
       expect(screen.getByText("Agents")).toBeInTheDocument();
     });
     for (const label of [
+      "Home",
       "Policies",
       "Graph",
       "Playground",
@@ -102,6 +103,59 @@ describe("AppShell", () => {
     ]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+    expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute(
+      "href",
+      "/",
+    );
+  });
+
+  it("groups the workspace nav under section headings", async () => {
+    renderWithProviders(<AppShell />);
+    await waitFor(() => expect(screen.getByText("Agents")).toBeInTheDocument());
+    for (const heading of ["Build", "Monitor", "Control"]) {
+      expect(screen.getByText(heading)).toBeInTheDocument();
+    }
+  });
+
+  it("counts active bans on the Bans link for admins", async () => {
+    vi.restoreAllMocks();
+    stubFetch({
+      "/v1/users/me": USER,
+      "/v1/orgs": [ORG_A, ORG_B],
+      "/v1/orgs/org-a/projects": [PROJ_A1, PROJ_A2],
+      [`/v1/projects/${PROJ_A1.id}/bans`]: [{ id: "b1" }, { id: "b2" }],
+    });
+    renderWithProviders(<AppShell />);
+    expect(
+      await screen.findByRole("link", { name: "Bans, 2 active bans" }),
+    ).toHaveTextContent("2");
+  });
+
+  it("never asks a non-admin for bans (admin-only endpoint)", async () => {
+    act(() => {
+      useActive.setState({ activeOrgId: ORG_B.id, activeProjectId: "proj-b1" });
+    });
+    vi.restoreAllMocks();
+    stubFetch({
+      "/v1/users/me": USER,
+      "/v1/orgs": [ORG_A, ORG_B],
+      "/v1/orgs/org-b/projects": [
+        { id: "proj-b1", name: "beta", org_id: "org-b" },
+      ],
+    });
+    renderWithProviders(<AppShell />);
+    await waitFor(() => expect(screen.getByText("beta")).toBeInTheDocument());
+    const calls = vi.mocked(window.fetch).mock.calls.map(([u]) => String(u));
+    expect(calls.some((u) => u.includes("/bans"))).toBe(false);
+  });
+
+  it("hides section headings when collapsed", async () => {
+    useUi.setState({ sidebarCollapsed: true });
+    renderWithProviders(<AppShell />);
+    await waitFor(() =>
+      expect(screen.getByTitle("Agents")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Build")).not.toBeInTheDocument();
   });
 
   it("keeps org/account admin out of the product sidebar", async () => {
