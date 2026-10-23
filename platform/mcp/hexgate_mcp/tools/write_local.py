@@ -8,6 +8,7 @@ caller still needs `policy:write`.
 import os
 import stat
 import tempfile
+from contextlib import suppress
 from pathlib import Path
 
 import anyio
@@ -54,14 +55,36 @@ def new_file_mode() -> int:
     return 0o644 & ~umask
 
 
-def write_atomic(target: Path, data: bytes, new_mode: int) -> None:
+def write_atomic(root: Path, target: Path, data: bytes, new_mode: int) -> None:
+    """Write `data` to `target`, creating missing directories below `root`
+    only, and removing them again if the write fails. A root deleted since
+    start-up is refused rather than recreated."""
+    if not root.is_dir():
+        raise ToolError("the local policy directory no longer exists")
+    below = [d for d in target.parents if d != root and d.is_relative_to(root)]
+    # Only what this call made: a parallel write may create the same
+    # directories, and removing them would fail that write too.
+    created = []
+    try:
+        for d in reversed(below):
+            with suppress(FileExistsError):
+                d.mkdir()
+                created.append(d)
+        replace_file(target, data, new_mode)
+    except BaseException:
+        for d in reversed(created):
+            with suppress(OSError):
+                d.rmdir()
+        raise
+
+
+def replace_file(target: Path, data: bytes, new_mode: int) -> None:
     """Write through a temp file renamed over `target`, so a reader sees the
     old file or the new one, never half of it. The temp file sits in the same
     directory: a rename is atomic only within one file system. It takes the
     replaced file's permission bits, or `new_mode`, rather than mkstemp's 0600;
     never setuid, setgid, sticky or executable. Durable once it returns: the
     file and then its directory entry are fsynced."""
-    target.parent.mkdir(parents=True, exist_ok=True)
     fd, temp = tempfile.mkstemp(dir=target.parent, prefix=".hexgate-")
     try:
         with os.fdopen(fd, "wb") as f:
@@ -112,7 +135,7 @@ def register(mcp: FastMCP, root: Path) -> None:
             if len(data) > CONTENT_CAP_BYTES:
                 raise ToolError(f"{path!r} is over {CONTENT_CAP_BYTES} bytes")
             # Off the event loop: the fsync would stall every other request.
-            await anyio.to_thread.run_sync(write_atomic, target, data, new_mode)
+            await anyio.to_thread.run_sync(write_atomic, root, target, data, new_mode)
         # ValueError covers a NUL in the path and UnicodeError (a lone
         # surrogate in the content).
         except (OSError, ValueError) as e:
