@@ -98,6 +98,38 @@ function stubFetch(role: string, manifest: unknown = MANIFEST) {
           return manifest === "error"
             ? new Response("boom", { status: 500 })
             : json([manifest]);
+        case `/v1/projects/${PROJECT}/policy-files`:
+          return json([
+            {
+              name: "policy.yaml",
+              content: "",
+              content_hash: "h",
+              updated_at: "2026-01-01T00:00:00Z",
+            },
+          ]);
+        case `/v1/projects/${PROJECT}/policy/matrix`:
+          return json({
+            roles: ["guest", "support"],
+            tools: ["refund"],
+            cells: {
+              refund: {
+                guest: { mode: "deny", constraint: null },
+                support: { mode: "allow", constraint: "args.amount <= 50" },
+              },
+              // An unlisted manifest tool: the server's fallback cells.
+              ...(url.searchParams.getAll("tool").includes("lookup") && {
+                lookup: {
+                  guest: { mode: "deny", constraint: null },
+                  support: { mode: "allow", constraint: "user.tier == 1" },
+                },
+              }),
+            },
+            defaults: {
+              guest: { mode: "deny", constraint: null },
+              support: { mode: "allow", constraint: "user.tier == 1" },
+            },
+            aliased_default: null,
+          });
         case `/v1/projects/${PROJECT}/audit/summary`:
           return json({
             totals: { all: 15, allow: 10, deny: 4, needs_approval: 1 },
@@ -149,6 +181,40 @@ describe("AgentsPage — ban tie-in", () => {
     const params = new URL(href, "http://x").searchParams;
     expect(params.get("agent")).toBe("support_bot");
     expect(params.get("range")).toBe("24h");
+  });
+
+  it("shows how each role treats each tool", async () => {
+    stubFetch("admin", {
+      ...MANIFEST,
+      manifest: {
+        ...MANIFEST.manifest,
+        tools: [
+          {
+            name: "refund",
+            description: "",
+            input_schema: { type: "object", properties: {}, required: [] },
+          },
+          {
+            name: "lookup",
+            description: "",
+            input_schema: { type: "object", properties: {}, required: [] },
+          },
+        ],
+      },
+    });
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    // The engine's condition text rides on the chip.
+    expect(
+      await screen.findByTitle("support: args.amount <= 50"),
+    ).toHaveTextContent("support allow*");
+    // A manifest tool the policy doesn't list takes the engine's fallback,
+    // role-wide constraint included.
+    expect(
+      screen.getByTitle("guest: not listed, default applies"),
+    ).toHaveTextContent("guest deny");
+    expect(
+      screen.getByTitle("support: not listed, default applies, user.tier == 1"),
+    ).toHaveTextContent("support allow*");
   });
 
   it("shows the agent's last 24 hours", async () => {

@@ -505,6 +505,29 @@ class ResolvedPolicyResponse(BaseModel):
     roles: dict[str, dict] = Field(default_factory=dict)
 
 
+class PolicyMatrixCell(BaseModel):
+    """One role's standing authorisation for one tool, as the engine decides
+    it (``hexgate.security.matrix.MatrixCell``). ``constraint`` is the composed
+    condition, role-wide fence first; always null on a deny."""
+
+    mode: Literal["allow", "approval", "deny"]
+    constraint: str | None = None
+
+
+class PolicyMatrixResponse(BaseModel):
+    """Roles x tools for one agent's resolved policy. ``cells[tool][role]`` is
+    complete for every listed tool; ``defaults[role]`` is the fallback for an
+    ordinary tool outside ``tools`` (never for reserved ``agent.*`` keys, which
+    are closed-world deny). ``aliased_default`` names the role copied into an
+    undeclared ``default`` slot."""
+
+    roles: list[str]
+    tools: list[str]
+    cells: dict[str, dict[str, PolicyMatrixCell]]
+    defaults: dict[str, PolicyMatrixCell]
+    aliased_default: str | None = None
+
+
 class PolicyLintOut(BaseModel):
     """One analyzer lint, tagged with the role and the named agent it fired in
     (None if project-wide; ``agent`` is also None for the generic ``"*"`` view).
@@ -557,6 +580,7 @@ class PolicyPreviewResponse(BaseModel):
     """The effective policy per role for the draft, plus any resolution lints."""
 
     resolved: dict[str, dict] | None = None
+    matrix: PolicyMatrixResponse | None = None
     lints: list[PolicyLintOut] = Field(default_factory=list)
 
 

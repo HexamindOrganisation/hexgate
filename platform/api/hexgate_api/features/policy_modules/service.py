@@ -551,6 +551,32 @@ async def is_modular(session: AsyncSession, project_id: str) -> bool:
     return row is not None
 
 
+def matrix_json(result, extra_tools: Iterable[str] = ()) -> dict:
+    """Roles x tools for a resolution, tabulated by the engine's own fallback
+    and constraint composition (``hexgate.security.matrix``) — the grid the AI
+    Act report evidences, so the editor can't read a grant the engine won't
+    enforce. ``extra_tools`` the policy doesn't list get the engine's fallback
+    cells (reserved keys deny) in ``cells``, but stay out of ``tools``."""
+    from hexgate.security.matrix import authorisation_matrix
+
+    m = authorisation_matrix(result.policy_set)
+
+    def cell(c) -> dict:
+        return {"mode": c.mode, "constraint": c.constraint_text}
+
+    cells = {t: {r: cell(m.cell(t, r)) for r in m.roles} for t in m.tools}
+    for t in extra_tools:
+        if t not in cells:
+            cells[t] = {r: cell(m.default_cell(t, r)) for r in m.roles}
+    return {
+        "roles": list(m.roles),
+        "tools": list(m.tools),
+        "cells": cells,
+        "defaults": {r: cell(c) for r, c in m.defaults.items()},
+        "aliased_default": m.aliased_default,
+    }
+
+
 def roles_json(result, role: str | None = None) -> dict:
     """The effective policy per role, as JSON-able dicts.
 
@@ -892,23 +918,28 @@ async def compose_preview(
     name: str,
     content: str,
     agent: str = DEFAULT_AGENT,
-) -> tuple[dict | None, list[PolicyLint]]:
+) -> tuple[dict | None, dict | None, list[PolicyLint]]:
     """Resolve the project with a draft ``name``=``content`` overlaid — the
-    editor's live preview. Returns ``(resolved, lints)``: the requested agent's
-    effective policy (``None`` when it doesn't compose) and the lints. Validates *every* declared agent (like the save-time 409 check) so
+    editor's live preview. Returns ``(resolved, matrix, lints)``: the requested
+    agent's effective policy and its roles x tools matrix (both ``None`` when it
+    doesn't compose) and the lints. Validates *every* declared agent (like the save-time 409 check) so
     the preview and the save agree — a draft that breaks a different agent still
     previews as an error, not falsely clean. The lints are the same findings
     :func:`check_auto` returns for the saved project."""
     files = {**await _files_map(session, project_id), name: content}
     if ENTRY_FILE not in files:
-        return None, [_link_error(f"no entry file {ENTRY_FILE!r} in this project")]
+        return (
+            None,
+            None,
+            [_link_error(f"no entry file {ENTRY_FILE!r} in this project")],
+        )
     try:
         # Every declared agent, so the preview and the save agree.
         resolved, lints = await _resolve_and_lint(session, project_id, files)
         requested = _resolution_for(resolved, agent)
     except compose_error_types() as exc:
-        return None, [_link_error(str(exc))]
-    return roles_json(requested), lints
+        return None, None, [_link_error(str(exc))]
+    return roles_json(requested), matrix_json(requested), lints
 
 
 def _graph_from(agent_names, resolve_for_agent, role: str | None = None) -> dict:

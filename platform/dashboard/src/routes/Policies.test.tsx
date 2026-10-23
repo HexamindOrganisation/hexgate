@@ -75,6 +75,13 @@ function baseRoutes(): Record<string, unknown> {
     [`/v1/projects/${PID}/policy/resolve`]: {
       roles: { default: { tools: { read_ticket: { mode: "allow" } } } },
     },
+    [`/v1/projects/${PID}/policy/matrix`]: {
+      roles: ["default"],
+      tools: ["read_ticket"],
+      cells: { read_ticket: { default: { mode: "allow", constraint: null } } },
+      defaults: { default: { mode: "deny", constraint: null } },
+      aliased_default: null,
+    },
     [`/v1/projects/${PID}/policy/check`]: { ok: true, lints: [] },
     // A saved new file echoes back its stored row.
     [`/v1/projects/${PID}/policy-files/extra.yaml`]: file("extra.yaml", ""),

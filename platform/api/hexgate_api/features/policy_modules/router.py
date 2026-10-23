@@ -15,7 +15,7 @@ import logging
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.db import get_session
@@ -36,6 +36,7 @@ from hexgate_api.schemas import (
     PolicyPreviewResponse,
     PolicyTestRequest,
     PolicyTestResponse,
+    PolicyMatrixResponse,
     ResolvedPolicyResponse,
     RoleBindingsRead,
     RoleBindingsWrite,
@@ -469,10 +470,14 @@ async def api_preview_policy(
     """Resolve the project with a draft file overlaid, without saving — the
     editor's live preview. Always 200: a resolution failure returns an error lint,
     not an HTTP error, so the editor can render it inline."""
-    resolved, lints = await service.compose_preview(
+    resolved, matrix, lints = await service.compose_preview(
         session, project_id, name=body.name, content=body.content, agent=body.agent
     )
-    return PolicyPreviewResponse(resolved=resolved, lints=[_lint_out(x) for x in lints])
+    return PolicyPreviewResponse(
+        resolved=resolved,
+        matrix=PolicyMatrixResponse(**matrix) if matrix else None,
+        lints=[_lint_out(x) for x in lints],
+    )
 
 
 @router.get("/projects/{project_id}/policy/resolve", tags=["policy"])
@@ -499,6 +504,26 @@ async def api_resolve_policy(
         )
 
     return ResolvedPolicyResponse(roles=service.roles_json(result, role=role))
+
+
+@router.get("/projects/{project_id}/policy/matrix", tags=["policy"])
+async def api_policy_matrix(
+    project_id: str,
+    agent: str = service.DEFAULT_AGENT,
+    tool: list[str] = Query(default=[]),
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> PolicyMatrixResponse:
+    """Roles x tools for one executing agent (``agent``, default ``"*"``), each
+    cell resolved by the engine's own fallback and constraint composition — the
+    same tabulation the AI Act report evidences. Each ``tool`` the policy
+    doesn't list also gets its fallback cells. 422 if the policy can't be
+    composed."""
+    try:
+        result = await service.resolve_auto(session, project_id, agent=agent)
+    except service.compose_error_types() as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PolicyMatrixResponse(**service.matrix_json(result, tool))
 
 
 @router.get("/projects/{project_id}/policy/check", tags=["policy"])

@@ -133,6 +133,56 @@ def test_resolve_composes_per_role(client: TestClient) -> None:
     assert "refund_order" not in body["roles"]["default"]["tools"]
 
 
+def test_matrix_tabulates_roles_by_tools_with_the_engine_fallback(
+    client: TestClient,
+) -> None:
+    pid = _project(client)
+    _seed_bundle(client, pid)
+
+    body = client.get(f"/v1/projects/{pid}/policy/matrix").json()
+    assert body["roles"][0] == "default"
+    assert set(body["roles"]) == {"default", "billing"}
+    refund = body["cells"]["refund_order"]
+    assert refund["billing"]["mode"] == "allow"
+    assert "amount <= 1000" in refund["billing"]["constraint"]
+    # default never got the grant: the engine's fallback denies it.
+    assert refund["default"] == {"mode": "deny", "constraint": None}
+    # a deny never carries a constraint.
+    assert all(
+        c["constraint"] is None
+        for row in body["cells"].values()
+        for c in row.values()
+        if c["mode"] == "deny"
+    )
+    assert set(body["defaults"]) == set(body["roles"])
+
+
+def test_matrix_answers_unlisted_tools_with_the_engine_fallback(
+    client: TestClient,
+) -> None:
+    pid = _project(client)
+    _seed_bundle(client, pid)
+    listed = client.get(f"/v1/projects/{pid}/policy/matrix").json()
+
+    body = client.get(
+        f"/v1/projects/{pid}/policy/matrix",
+        params={"tool": ["lookup_order", "agent.run", "refund_order"]},
+    ).json()
+    # Extra tools get cells but don't join the grid's rows.
+    assert body["tools"] == listed["tools"]
+    assert body["cells"]["refund_order"] == listed["cells"]["refund_order"]
+    assert body["cells"]["lookup_order"] == body["defaults"]
+    # Reserved keys are closed-world: deny whatever the role default says.
+    assert all(c["mode"] == "deny" for c in body["cells"]["agent.run"].values())
+
+
+def test_matrix_is_422_when_the_policy_does_not_compose(client: TestClient) -> None:
+    pid = _project(client)
+    _put_module(client, pid, "capability", "bad", "tools:\n  x: { mode: deny }\n")
+    client.put(f"/v1/projects/{pid}/policy-roles", json={"roles": {"default": ["bad"]}})
+    assert client.get(f"/v1/projects/{pid}/policy/matrix").status_code == 422
+
+
 def test_resolve_single_role(client: TestClient) -> None:
     pid = _project(client)
     _seed_bundle(client, pid)
@@ -1127,6 +1177,8 @@ def test_preview_resolves_a_draft(client):
     assert r.status_code == 200, r.text
     body = r.json()
     assert set(body["resolved"]["default"]["tools"]) == {"a", "b"}
+    # the matrix tabulates the draft, not the saved file
+    assert body["matrix"]["cells"]["b"]["default"]["mode"] == "allow"
     assert body["lints"] == []
     # the saved file is unchanged (preview doesn't persist)
     saved = client.get(f"/v1/projects/{pid}/policy-files").json()
@@ -1143,6 +1195,7 @@ def test_preview_reports_resolution_error_inline(client):
     assert r.status_code == 200
     body = r.json()
     assert body["resolved"] is None
+    assert body["matrix"] is None
     assert body["lints"][0]["severity"] == "error"
 
 

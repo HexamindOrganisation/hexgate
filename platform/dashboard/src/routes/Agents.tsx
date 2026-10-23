@@ -1,5 +1,11 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import {
+  MATRIX_MODE_TONE,
+  usePolicyFiles,
+  usePolicyMatrix,
+} from "@/lib/policy_files";
+import { ENTRY_FILE } from "@/lib/file_tree";
 import { useAgentSelection } from "@/lib/agent_param";
 import {
   Ban,
@@ -15,6 +21,7 @@ import {
   type AgentManifestView,
   type GuardDefinition,
   type InputSchema,
+  type PolicyMatrixCell,
   type SkillDefinition,
   type SkillResources,
   type ToolDefinition,
@@ -66,6 +73,34 @@ export function AgentsPage() {
   const active = manifests.data?.find((m) => m.name === selectedName);
   // 24h activity per agent; shares Home's cache entry.
   const summary = useAuditSummary24h(scope.projectId, { poll: true });
+  // Roles x tools for the selected agent, as the engine tabulates them.
+  // Only projects with a policy.yaml compose; others have no matrix.
+  const policyFiles = usePolicyFiles(scope.projectId);
+  const modular = !!policyFiles.data?.some((f) => f.name === ENTRY_FILE);
+  // Manifest tools the policy doesn't list get the engine's fallback too.
+  const toolNames = useMemo(
+    () => active?.manifest?.tools?.map((t) => t.name) ?? [],
+    [active],
+  );
+  const matrix = usePolicyMatrix(
+    scope.projectId,
+    active?.name ?? "",
+    modular && !!active,
+    toolNames,
+  ).data;
+  const roleModes = useMemo(() => {
+    if (!matrix) return undefined;
+    return (tool: string): RoleMode[] =>
+      matrix.roles.map((role) => {
+        const cell = matrix.cells[tool]?.[role];
+        return {
+          role,
+          mode: cell?.mode,
+          constraint: cell?.constraint ?? null,
+          defaulted: !matrix.tools.includes(tool),
+        };
+      });
+  }, [matrix]);
   const byAgent = useMemo(
     () => new Map(summary.data?.by_agent.map((r) => [r.key, r])),
     [summary.data],
@@ -286,7 +321,7 @@ export function AgentsPage() {
                 )
               )}
             </Card>
-            <ManifestView agent={active} />
+            <ManifestView agent={active} roleModes={roleModes} />
           </div>
         ) : (
           manifests.isSuccess &&
@@ -301,12 +336,19 @@ export function AgentsPage() {
   );
 }
 
-function ManifestView({ agent }: { agent: AgentManifestView }) {
+function ManifestView({
+  agent,
+  roleModes,
+}: {
+  agent: AgentManifestView;
+  roleModes?: (tool: string) => RoleMode[];
+}) {
   return (
     <div className="space-y-4">
       <ToolsSection
         tools={agent.manifest?.tools ?? []}
         unregistered={agent.manifest === null}
+        roleModes={roleModes}
       />
       <GuardsSection
         guards={agent.manifest?.guards ?? null}
@@ -324,12 +366,24 @@ function ManifestView({ agent }: { agent: AgentManifestView }) {
   );
 }
 
+/** How each role treats one tool, from the composed policy. */
+interface RoleMode {
+  role: string;
+  mode: PolicyMatrixCell["mode"] | undefined;
+  /** The engine's condition text, when the cell is constrained. */
+  constraint: string | null;
+  /** The policy lists the tool for no role: every chip is a fallback. */
+  defaulted: boolean;
+}
+
 function ToolsSection({
   tools,
   unregistered,
+  roleModes,
 }: {
   tools: ToolDefinition[];
   unregistered: boolean;
+  roleModes?: (tool: string) => RoleMode[];
 }) {
   return (
     <section className="rounded-xl border border-border bg-card">
@@ -349,7 +403,7 @@ function ToolsSection({
       ) : (
         <ul className="divide-y divide-border">
           {tools.map((t) => (
-            <ToolRow key={t.name} tool={t} />
+            <ToolRow key={t.name} tool={t} roles={roleModes?.(t.name)} />
           ))}
         </ul>
       )}
@@ -514,11 +568,41 @@ function SystemPromptSection({
   );
 }
 
-function ToolRow({ tool }: { tool: ToolDefinition }) {
+function chipTitle(r: RoleMode): string | undefined {
+  const notes = [r.defaulted && "not listed, default applies", r.constraint];
+  const text = notes.filter(Boolean).join(", ");
+  return text ? `${r.role}: ${text}` : undefined;
+}
+
+function ToolRow({
+  tool,
+  roles,
+}: {
+  tool: ToolDefinition;
+  roles?: RoleMode[];
+}) {
   return (
     <li className="px-5 py-4 space-y-2">
-      <div className="flex items-baseline gap-3">
+      <div className="flex flex-wrap items-baseline gap-3">
         <span className="font-mono text-sm text-foreground">{tool.name}</span>
+        {roles && roles.length > 0 && (
+          <span className="ml-auto flex flex-wrap gap-1.5">
+            {roles.map((r) => (
+              <span
+                key={r.role}
+                title={chipTitle(r)}
+                className={cn(
+                  "rounded-md px-2 py-0.5 text-[11px] font-medium",
+                  r.mode ? MATRIX_MODE_TONE[r.mode] : "text-muted-foreground",
+                  r.defaulted && "opacity-50",
+                )}
+              >
+                <span className="font-mono">{r.role}</span> {r.mode ?? "—"}
+                {r.constraint && "*"}
+              </span>
+            ))}
+          </span>
+        )}
       </div>
       {tool.description?.trim() ? (
         <p className="text-xs text-muted-foreground">{tool.description}</p>
