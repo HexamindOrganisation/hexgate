@@ -28,7 +28,8 @@ def confine(root: Path, path: str) -> Path:
     first follows every `..` and symlink, so one check refuses an absolute
     path, a `..` that leaves the directory and a link out alike. The directory
     itself is refused too: it is not a file to write. The suffix and dot rules
-    are name hygiene, not a sandbox: the start-up checks keep the root itself sane."""
+    are name hygiene, not a sandbox: the start-up checks keep the root itself
+    sane, and no file is written inside a repo below it."""
     target = (root / path).resolve()
     if target == root or not target.is_relative_to(root):
         raise ToolError(f"{path!r} is not a file inside the local policy directory")
@@ -37,6 +38,11 @@ def confine(root: Path, path: str) -> Path:
         raise ToolError(
             f"{path!r} is not a policy file: only .yaml or .yml, outside dot-directories"
         )
+    repos = [
+        d for d in target.parents if d.is_relative_to(root) and (d / ".git").exists()
+    ]
+    if repos:
+        raise ToolError(f"{path!r} is inside the repo {repos[0].relative_to(root)}")
     return target
 
 
@@ -77,7 +83,8 @@ def replace_file(target: Path, data: bytes, new_mode: int) -> None:
     old file or the new one, never half of it. The temp file sits in the same
     directory: a rename is atomic only within one file system. It takes the
     replaced file's permission bits, or `new_mode`, rather than mkstemp's 0600;
-    never setuid, setgid, sticky or executable."""
+    never setuid, setgid, sticky or executable. Durable once it returns: the
+    file and then its directory entry are fsynced."""
     fd, temp = tempfile.mkstemp(dir=target.parent, prefix=".hexgate-")
     try:
         with os.fdopen(fd, "wb") as f:
@@ -97,6 +104,12 @@ def replace_file(target: Path, data: bytes, new_mode: int) -> None:
     except BaseException:
         os.unlink(temp)
         raise
+    # Without this the rename can be lost on power failure after success.
+    dir_fd = os.open(target.parent, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def register(mcp: FastMCP, root: Path) -> None:
