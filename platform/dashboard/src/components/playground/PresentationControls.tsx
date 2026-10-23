@@ -47,13 +47,13 @@ export function AccentStyle() {
 }
 
 // Curated accent swatches (HSL channels, matching the --primary token format).
-// "Blue"/"Plum" mirror the two built-in schemes — read from theme's single
+// "Blue"/"Violet"/"Plum" mirror built-in schemes — read from theme's single
 // source so they match the built-in in BOTH palettes, not just the mode whose
 // value happened to be hardcoded; the rest are extra demo accents.
 function accentPresets(dark: boolean): { name: string; value: string }[] {
   return [
     { name: "Blue", value: schemeAccent("blue", dark) },
-    { name: "Violet", value: "262 70% 58%" },
+    { name: "Violet", value: schemeAccent("violet", dark) },
     { name: "Plum", value: schemeAccent("plum", dark) },
     { name: "Rose", value: "340 75% 55%" },
     { name: "Amber", value: "38 92% 50%" },
