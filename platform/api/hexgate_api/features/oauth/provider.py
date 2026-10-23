@@ -1,6 +1,6 @@
 """The OAuth authorization server: the MCP SDK's routes over our provider.
 
-The SDK's handlers parse and check the ``/authorize`` and ``/token`` requests
+The MCP SDK's handlers parse and check the ``/authorize`` and ``/token`` requests
 (response type, PKCE method, the client's redirect and scopes) and format the
 standard errors; the provider answers what only the platform knows. This half
 loads clients and sends an accepted login to the dashboard's consent page.
@@ -48,7 +48,7 @@ class HexgateOAuthProvider(
         self._consent_url = consent_url
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
-        # None, not the error: the SDK then answers "client not found" itself,
+        # None, not the error: the MCP SDK then answers "client not found" itself,
         # where a raised error would be a 500.
         try:
             return await self._clients.get(client_id)
@@ -65,7 +65,7 @@ class HexgateOAuthProvider(
         """
         # RFC 8707: the token is bound to the one MCP server, and the MCP spec
         # makes clients send it, so a missing resource is refused too. /token
-        # never re-checks it: the SDK doesn't pass it to the provider there.
+        # never re-checks it: the MCP SDK doesn't pass it to the provider there.
         if params.resource != self._resource_url:
             raise AuthorizeError(
                 "invalid_request", f"resource must be {self._resource_url}"
@@ -110,12 +110,12 @@ class HexgateOAuthProvider(
 
 
 def oauth_routes() -> list[Route]:
-    """The SDK's authorize and token handlers under ``/v1/oauth``, over one provider.
+    """The MCP SDK's authorize and token handlers under ``/v1/oauth``, over one provider.
 
     Not its metadata route: ``well_known.py`` serves that document, with an
     ``issuer`` that equals the tokens' ``iss``. The authorize route takes GET
     only (no HEAD), so the consent POST can have that path. The token route
-    is the SDK's handler without its allow-any-origin CORS wrapper, so the
+    is the MCP SDK's handler without its allow-any-origin CORS wrapper, so the
     app's ``CORSMiddleware`` alone decides which origins may call it.
     """
     settings = get_settings()
@@ -139,7 +139,7 @@ def oauth_routes() -> list[Route]:
     authorize_route = Route(
         f"{OAUTH_PREFIX}{AUTHORIZATION_PATH}", authorize.endpoint, methods=["GET"]
     )
-    # Starlette adds HEAD to every GET route; the SDK's handler would read it as a form POST.
+    # Starlette adds HEAD to every GET route; the MCP SDK's handler would read it as a form POST.
     authorize_route.methods.discard("HEAD")
     token_route = Route(
         f"{OAUTH_PREFIX}{TOKEN_PATH}",

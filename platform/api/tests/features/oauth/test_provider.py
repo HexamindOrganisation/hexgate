@@ -141,7 +141,7 @@ def test_when_scope_omitted_then_consent_asks_for_every_scope(
         ),
         pytest.param({"client_id": "x" * 3000}, id="long-client-id"),
         pytest.param({"redirect_uri": UNVERIFIED_REDIRECT}, id="unregistered"),
-        # The document lists one, which the SDK would otherwise stand in.
+        # The document lists one, which the MCP SDK would otherwise stand in.
         pytest.param({"redirect_uri": None}, id="no-redirect"),
         pytest.param({"redirect_uri": "http://localhost:33418/other"}, id="other-path"),
         pytest.param(
@@ -196,10 +196,10 @@ def test_when_query_invalid_then_error_redirected_to_verified_client(
 def test_when_authorize_posted_then_not_handled_by_sdk(
     client: TestClient, fetches: list[bool]
 ) -> None:
-    # The consent POST takes this path later; the SDK's form-POST authorize must not.
+    # The consent POST takes this path later; the MCP SDK's form-POST authorize must not.
     resp = client.post("/v1/oauth/authorize", data={"client_id": CLIENT_ID})
     assert resp.status_code == 405
-    assert fetches == []  # The SDK's handler would have loaded the client.
+    assert fetches == []  # The MCP SDK's handler would have loaded the client.
 
 
 @pytest.mark.parametrize(
@@ -255,7 +255,7 @@ def test_when_authorize_head_then_405(client: TestClient, fetches: list[bool]) -
 def test_when_token_posted_cross_origin_then_app_cors_decides(
     client: TestClient, origin: str, allowed: str | None
 ) -> None:
-    # The SDK's own wrapper would answer any origin with "*".
+    # The MCP SDK's own wrapper would answer any origin with "*".
     resp = client.post(
         "/v1/oauth/token",
         data={
@@ -275,7 +275,7 @@ def test_when_state_empty_then_consent_query_keeps_it(client: TestClient) -> Non
 
 
 def test_oauth_routes_happy_path() -> None:
-    # Only under /v1/oauth: the SDK's own metadata route, were it kept, would
+    # Only under /v1/oauth: the MCP SDK's own metadata route, were it kept, would
     # serve a different issuer whenever it was mounted ahead of well_known.py's.
     assert sorted(route.path for route in oauth_routes()) == [
         "/v1/oauth/authorize",

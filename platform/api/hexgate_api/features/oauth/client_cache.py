@@ -67,7 +67,7 @@ class ClientMetadata(OAuthClientInformationFull):
         Both sides are pydantic URLs, so they compare in normalised form (host
         lowercased, default port dropped), which is the URL the login is
         redirected to. A ``redirect_uri`` is required, even when the document
-        lists only one: the SDK would stand that one in and then redirect an
+        lists only one: the MCP SDK would stand that one in and then redirect an
         error there, which RFC 6749 §4.1.2.1 forbids for a target the request
         did not supply.
         """
