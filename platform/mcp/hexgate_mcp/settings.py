@@ -36,5 +36,9 @@ class Settings:
         )
 
     @property
+    def api_v1_url(self) -> str:
+        return f"{self.api_url.rstrip('/')}/v1"
+
+    @property
     def jwks_url(self) -> str:
         return f"{self.api_url.rstrip('/')}/.well-known/jwks.json"
