@@ -69,7 +69,7 @@ def client(session_factory, oauth_keystore) -> Iterator[TestClient]:
 
 
 def mint(**overrides) -> str:
-    """An access token for the default user and project, as plan PR 7 will mint it."""
+    """An access token for the default user and project, shaped as the API mints it."""
     settings = get_settings()
     kwargs = {
         "sub": DEFAULT_USER_ID,
