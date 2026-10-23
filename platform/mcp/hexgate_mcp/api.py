@@ -2,10 +2,10 @@
 
 That is not token passthrough: the API is to mint the token with both
 audiences, this server's resource URL and its own public URL (spec §I, with
-plan PR 7), so the API verifies it as a token issued for itself. That check, once plan PR 9 (#403)
-and plan PR 10 land, is the security boundary; until then the API accepts only
-its session cookie and answers this bearer with 401. This client only turns
-the API's answers into tool errors the model can read.
+plan PR 7), so the API verifies it as a token issued for itself. That check,
+with the route's scope and the token's projects (plan PRs 9 and 10), is the
+security boundary. This client only turns the API's answers into tool errors
+the model can read.
 """
 
 import json
