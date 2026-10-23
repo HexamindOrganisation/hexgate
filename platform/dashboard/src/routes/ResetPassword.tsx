@@ -2,21 +2,14 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { Lock } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { AuthLink, AuthShell } from "@/components/auth/AuthShell";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useResetPassword } from "@/lib/auth";
-import { AuthCardLayout } from "./SignIn";
 
 const Schema = z
   .object({
@@ -56,104 +49,82 @@ export function ResetPasswordPage() {
 
   if (!token) {
     return (
-      <AuthCardLayout>
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle className="text-center">Invalid reset link</CardTitle>
-            <CardDescription className="text-center">
-              This reset link is missing a token. Request a new one from the
-              forgot-password page.
-            </CardDescription>
-          </CardHeader>
-          <CardFooter>
-            <Button asChild variant="ghost" className="w-full">
-              <Link to="/forgot-password">Request a new link</Link>
-            </Button>
-          </CardFooter>
-        </Card>
-      </AuthCardLayout>
+      <AuthShell
+        tone="error"
+        title="Invalid reset link"
+        description="This reset link is missing a token. Request a new one from the forgot-password page."
+        footer={<AuthLink to="/forgot-password">Request a new link</AuthLink>}
+      />
     );
   }
 
   if (reset.isSuccess) {
     return (
-      <AuthCardLayout>
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle className="text-center">Password updated</CardTitle>
-            <CardDescription className="text-center">
-              Sending you to sign in…
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </AuthCardLayout>
+      <AuthShell
+        tone="success"
+        title="Password updated"
+        description="Sending you to sign in…"
+      />
     );
   }
 
   return (
-    <AuthCardLayout>
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="text-center">Set a new password</CardTitle>
-          <CardDescription className="text-center">
-            Pick something you don't use anywhere else.
-          </CardDescription>
-        </CardHeader>
-        <form onSubmit={form.handleSubmit(onSubmit)}>
-          <CardContent className="space-y-4">
-            {reset.isError && (
-              <Alert variant="destructive">
-                <AlertDescription>
-                  This reset link has expired or is invalid. Request a fresh one
-                  from the{" "}
-                  <Link
-                    to="/forgot-password"
-                    className="underline underline-offset-2"
-                  >
-                    forgot-password page
-                  </Link>
-                  .
-                </AlertDescription>
-              </Alert>
-            )}
+    <AuthShell
+      icon={Lock}
+      title="Set a new password"
+      description="Pick something you don't use anywhere else."
+    >
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        {reset.isError && (
+          <Alert variant="destructive">
+            <AlertDescription>
+              This reset link has expired or is invalid. Request a fresh one
+              from the{" "}
+              <Link
+                to="/forgot-password"
+                className="underline underline-offset-2"
+              >
+                forgot-password page
+              </Link>
+              .
+            </AlertDescription>
+          </Alert>
+        )}
 
-            <div className="space-y-2">
-              <Label htmlFor="password">New password</Label>
-              <Input
-                id="password"
-                type="password"
-                autoComplete="new-password"
-                {...form.register("password")}
-              />
-              {form.formState.errors.password && (
-                <p className="text-xs text-destructive">
-                  {form.formState.errors.password.message}
-                </p>
-              )}
-            </div>
+        <div className="space-y-2">
+          <Label htmlFor="password">New password</Label>
+          <Input
+            id="password"
+            type="password"
+            autoComplete="new-password"
+            {...form.register("password")}
+          />
+          {form.formState.errors.password && (
+            <p className="text-xs text-deny">
+              {form.formState.errors.password.message}
+            </p>
+          )}
+        </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="confirm">Confirm new password</Label>
-              <Input
-                id="confirm"
-                type="password"
-                autoComplete="new-password"
-                {...form.register("confirm")}
-              />
-              {form.formState.errors.confirm && (
-                <p className="text-xs text-destructive">
-                  {form.formState.errors.confirm.message}
-                </p>
-              )}
-            </div>
-          </CardContent>
-          <CardFooter>
-            <Button type="submit" className="w-full" disabled={reset.isPending}>
-              {reset.isPending ? "Updating…" : "Update password"}
-            </Button>
-          </CardFooter>
-        </form>
-      </Card>
-    </AuthCardLayout>
+        <div className="space-y-2">
+          <Label htmlFor="confirm">Confirm new password</Label>
+          <Input
+            id="confirm"
+            type="password"
+            autoComplete="new-password"
+            {...form.register("confirm")}
+          />
+          {form.formState.errors.confirm && (
+            <p className="text-xs text-deny">
+              {form.formState.errors.confirm.message}
+            </p>
+          )}
+        </div>
+
+        <Button type="submit" className="w-full" disabled={reset.isPending}>
+          {reset.isPending ? "Updating…" : "Update password"}
+        </Button>
+      </form>
+    </AuthShell>
   );
 }

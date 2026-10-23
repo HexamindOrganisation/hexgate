@@ -1,22 +1,13 @@
-import { Link } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { MailCheck } from "lucide-react";
 
+import { AuthLink, AuthShell } from "@/components/auth/AuthShell";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useForgotPassword } from "@/lib/auth";
-import { AuthCardLayout } from "./SignIn";
 
 const Schema = z.object({ email: z.string().email("Enter a valid email") });
 type Values = z.infer<typeof Schema>;
@@ -37,74 +28,47 @@ export function ForgotPasswordPage() {
 
   if (forgot.isSuccess) {
     return (
-      <AuthCardLayout>
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <div className="mb-2 flex justify-center">
-              <MailCheck className="h-8 w-8 text-primary" />
-            </div>
-            <CardTitle className="text-center">Check your email</CardTitle>
-            <CardDescription className="text-center">
-              If an account exists for {form.getValues("email")}, we just sent a
-              reset link to it. Open it and follow the prompt within an hour.
-            </CardDescription>
-          </CardHeader>
-          <CardFooter>
-            <Button asChild variant="ghost" className="w-full">
-              <Link to="/sign-in">Back to sign in</Link>
-            </Button>
-          </CardFooter>
-        </Card>
-      </AuthCardLayout>
+      <AuthShell
+        tone="success"
+        icon={MailCheck}
+        title="Check your email"
+        description={
+          <>
+            If an account exists for {form.getValues("email")}, we just sent a
+            reset link to it. Open it and follow the prompt within an hour.
+          </>
+        }
+        footer={<AuthLink to="/sign-in">Back to sign in</AuthLink>}
+      />
     );
   }
 
   return (
-    <AuthCardLayout>
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="text-center">Reset your password</CardTitle>
-          <CardDescription className="text-center">
-            Enter the email on your account and we'll send a reset link.
-          </CardDescription>
-        </CardHeader>
-        <form onSubmit={form.handleSubmit(onSubmit)}>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                autoComplete="email"
-                placeholder="you@example.com"
-                {...form.register("email")}
-              />
-              {form.formState.errors.email && (
-                <p className="text-xs text-destructive">
-                  {form.formState.errors.email.message}
-                </p>
-              )}
-            </div>
-          </CardContent>
-          <CardFooter className="flex-col gap-3">
-            <Button
-              type="submit"
-              className="w-full"
-              disabled={forgot.isPending}
-            >
-              {forgot.isPending ? "Sending…" : "Send reset link"}
-            </Button>
-            <p className="text-center text-sm text-muted-foreground">
-              <Link
-                to="/sign-in"
-                className="text-primary underline-offset-2 hover:underline"
-              >
-                Back to sign in
-              </Link>
+    <AuthShell
+      title="Reset your password"
+      description="Enter the email on your account and we'll send a reset link."
+      footer={<AuthLink to="/sign-in">Back to sign in</AuthLink>}
+    >
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        <div className="space-y-2">
+          <Label htmlFor="email">Email</Label>
+          <Input
+            id="email"
+            type="email"
+            autoComplete="email"
+            placeholder="you@example.com"
+            {...form.register("email")}
+          />
+          {form.formState.errors.email && (
+            <p className="text-xs text-deny">
+              {form.formState.errors.email.message}
             </p>
-          </CardFooter>
-        </form>
-      </Card>
-    </AuthCardLayout>
+          )}
+        </div>
+        <Button type="submit" className="w-full" disabled={forgot.isPending}>
+          {forgot.isPending ? "Sending…" : "Send reset link"}
+        </Button>
+      </form>
+    </AuthShell>
   );
 }
