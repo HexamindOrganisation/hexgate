@@ -3,9 +3,16 @@ import json
 import pytest
 import respx
 
-from tests.conftest import API_URL, JWKS_URL, PROJECT, jwks, mcp_client, post_mcp
-
-OTHER_PROJECT = "00000000-0000-0000-0000-000000000004"
+from tests.conftest import (
+    API_URL,
+    JWKS_URL,
+    OTHER_PROJECT,
+    PROJECT,
+    call_tool,
+    jwks,
+    mcp_client,
+    post_mcp,
+)
 
 
 def project(id: str, org_id: str) -> dict[str, str]:
@@ -13,20 +20,7 @@ def project(id: str, org_id: str) -> dict[str, str]:
 
 
 def call_projects_list(token: str) -> dict:
-    call = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {"name": "projects_list", "arguments": {}},
-    }
-    with mcp_client() as c:
-        response = post_mcp(c, call, token)
-    data = next(
-        line.removeprefix("data: ")
-        for line in response.text.splitlines()
-        if line.startswith("data: ")
-    )
-    return json.loads(data)["result"]
+    return call_tool(token, "projects_list", {})
 
 
 def project_url(project_id: str) -> str:
