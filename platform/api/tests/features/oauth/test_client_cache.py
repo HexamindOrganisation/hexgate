@@ -418,7 +418,8 @@ def test_when_no_scope_then_none_as_in_the_sdk():
     assert _client("http://localhost/cb").validate_scope(None) is None
 
 
-def test_when_no_redirect_uri_then_sole_registered_one_used():
+def test_when_no_redirect_uri_then_refused_even_with_one_registered():
     client = _client("http://localhost/cb")
 
-    assert client.validate_redirect_uri(None) == AnyUrl("http://localhost/cb")
+    with pytest.raises(InvalidRedirectUriError):
+        client.validate_redirect_uri(None)

@@ -59,8 +59,12 @@ dependencies = [
     "jinja2>=3.1.6",
     # OAuth access tokens are EdDSA JWTs (core/oauth_tokens.py). Transitive
     # via fastapi-users, pinned since we import it directly (same rule as
-    # python-dotenv above).
-    "pyjwt[crypto]>=2.10",
+    # python-dotenv above). 2.10.1 fixes CVE-2024-53861 (`iss` compared as a
+    # substring).
+    "pyjwt[crypto]>=2.10.1",
+    # The OAuth server is the MCP SDK's auth routes (features/oauth/provider.py).
+    # Transitive via the hexgate SDK, pinned since we import it directly.
+    "mcp>=1.27,<2",
 ]
 
 [dependency-groups]
