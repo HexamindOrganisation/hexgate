@@ -250,6 +250,27 @@ Two things that are never drop reasons:
   and gets verified like one you meant to report. A wrong fact in a drop is worse
   than a wrong finding: nothing downstream re-reads it.
 
+**Every dismissal names its rule** — a bullet label above, a section 0 fact, or
+the Scope clause. A drop that names none is an open finding, and so is one whose
+stated reason this section excludes: the cost or size of the fix; "pre-existing"
+or "not caused by the diff" when the diff exposes or surfaces it; a premise
+nobody checked against the code; "loud" or "unobservable" without saying who
+observes it. Each of these was dismissed, then reported by a human:
+
+```
+#405  "a rename needs a migration"; "API design, not caused by this diff" (the tool surfaces it)
+#377  "loud"; "unobservable" — neither said who observes it
+#411  "no deploy value has them" — on three validator findings, never checked
+```
+
+**Dismissal audit.** Before every review round after the first, and before the
+PR is opened or the tree certified, re-read the dismissed list the run keeps,
+every entry from every round. It is a separate pass with the lens list closed:
+it judges the dismissals, not the code again. For each entry, check that the
+named rule actually applies and that its premise still holds against the
+current code — a later fix can change it. An entry that fails comes back as a
+finding and goes through the gate.
+
 One exception overrides every drop rule: **a cost claim is settled by measuring,
 not by judgement.** If the Break is about resource use — memory, rows scanned,
 latency, payload size, a query plan — no drop rule applies until you have a
@@ -311,6 +332,8 @@ N findings:
    > **Notice** <who sees it — and why that is nobody>
 
 Housekeeping (optional): <stale comments, wrong pointers, format nits — one line>
+
+Dismissal audit: <N> entries, each with its rule, re-checked on <short sha>; <M> reopened
 ```
 
 The example is the point of this review, so it gets its own blockquote: the same
@@ -362,7 +385,8 @@ gh api repos/<owner>/<repo>/pulls/<n>/comments --jq length   # == number of inli
 ### Certify
 
 **The last thing you do: certify the diff.** A review is about one state of the
-tree, so record which one — only for a review you carried to completion:
+tree, so record which one — only for a review you carried to completion, and
+only once the dismissal audit (section 4) has run on this final tree:
 
 ```bash
 bash "${CLAUDE_REVIEW_HOOK:-$HOME/.claude/hooks/require-review.sh}" --certify
@@ -417,7 +441,8 @@ found four new bugs, one per skipped check):
 **Re-gate the drops a fix touched.** A fix can make a dropped finding real:
 re-read every drop line from this review (and any dismissed list the caller
 keeps) whose premise names what the fix changed — a severity, where a check
-runs, a code path — and run its example again.
+runs, a code path — and run its example again. The dismissal audit still
+re-checks the whole list before the next round.
 
 Each fix gets a test that **fails with the fix reverted** — revert it, run the
 test, see red.
