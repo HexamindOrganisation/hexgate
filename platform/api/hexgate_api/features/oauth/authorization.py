@@ -8,6 +8,7 @@ consent routes get the request back from the browser, so
 from __future__ import annotations
 
 import re
+from urllib.parse import quote_plus
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -24,9 +25,10 @@ from pydantic import AnyUrl, ValidationError
 
 from hexgate_api.constants import OAUTH_SCOPES
 
-# The state rides in /authorize's redirect to the consent page and back to the
-# client. RFC 6749 sets no cap; clients send a few dozen characters, and a
-# 60 KB one would make a Location header nginx answers with a 502.
+# The state rides, URL-encoded, in /authorize's redirect to the consent page and
+# back to the client. RFC 6749 sets no cap; clients send a few dozen characters,
+# and a Location header past nginx's proxy buffer is a 502. So the cap is on the
+# encoded form: one 4-byte character encodes to 12.
 MAX_STATE_LENGTH = 1024
 # RFC 7636 §4.2: an S256 challenge is the base64url SHA-256, unpadded.
 _S256_CHALLENGE = re.compile(r"[A-Za-z0-9_-]{43}")
@@ -104,9 +106,10 @@ def check_authorization(
         raise AuthorizeError(
             "invalid_request", "code_challenge must be an S256 challenge"
         )
-    if params.state is not None and len(params.state) > MAX_STATE_LENGTH:
+    if params.state is not None and len(quote_plus(params.state)) > MAX_STATE_LENGTH:
         raise AuthorizeError(
-            "invalid_request", f"state is longer than {MAX_STATE_LENGTH} characters"
+            "invalid_request",
+            f"state is longer than {MAX_STATE_LENGTH} characters URL-encoded",
         )
     # No scope asks for every scope, so the consent page shows the whole
     # list and the user decides; a grant of none could do nothing.

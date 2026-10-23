@@ -21,10 +21,15 @@ from tests.features.oauth.consent_flow import (
 )
 
 
-def test_when_state_at_cap_then_accepted(consent_client: TestClient) -> None:
+@pytest.mark.parametrize(
+    "state", ["s" * MAX_STATE_LENGTH, "é" * 170], ids=["ascii", "encoded-1020"]
+)
+def test_when_state_at_cap_then_accepted(
+    consent_client: TestClient, state: str
+) -> None:
     resp = consent_client.get(
         "/v1/oauth/consent-info",
-        params=authorization(state="s" * MAX_STATE_LENGTH),
+        params=authorization(state=state),
         headers=USER_HEADERS,
     )
     assert resp.status_code == 200
