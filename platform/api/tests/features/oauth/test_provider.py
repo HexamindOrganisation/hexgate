@@ -296,7 +296,7 @@ def test_when_token_posted_cross_origin_then_app_cors_decides(
 def test_when_client_metadata_refused_then_reason_logged(
     client: TestClient, caplog: pytest.LogCaptureFixture
 ) -> None:
-    caplog.set_level(logging.WARNING, logger="hexgate_api.features.oauth.provider")
+    caplog.set_level(logging.WARNING, logger="hexgate_api.features.oauth.client_cache")
     _authorize(client, client_id="https://unknown.example/m.json")
     assert (
         "client metadata refused for 'https://unknown.example/m.json': "
@@ -304,10 +304,20 @@ def test_when_client_metadata_refused_then_reason_logged(
     ) in caplog.messages
 
 
+def test_when_client_refused_repeatedly_then_logged_once(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The second request is answered from the failure cache, without a fetch.
+    caplog.set_level(logging.WARNING, logger="hexgate_api.features.oauth.client_cache")
+    for _ in range(3):
+        _authorize(client, client_id="https://unknown.example/m.json")
+    assert len([m for m in caplog.messages if m.startswith("client metadata")]) == 1
+
+
 def test_when_client_id_has_newline_then_logged_on_one_line(
     client: TestClient, caplog: pytest.LogCaptureFixture
 ) -> None:
-    caplog.set_level(logging.WARNING, logger="hexgate_api.features.oauth.provider")
+    caplog.set_level(logging.WARNING, logger="hexgate_api.features.oauth.client_cache")
     _authorize(client, client_id="https://x.example/\nFORGED " + "a" * 1000)
     (message,) = [m for m in caplog.messages if m.startswith("client metadata")]
     assert "\n" not in message

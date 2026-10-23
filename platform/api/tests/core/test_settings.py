@@ -66,6 +66,11 @@ def test_oauth_urls_dev_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "https://:p@dash.example",
         "https://dash.example/?x=1",
         "https://dash.example#f",
+        "https://dash.example/?",
+        "https://dash.example#",
+        "https://dash.example/a\x00b",
+        "https://dash.example/a\tb",
+        "https://dash\nexample",
     ],
 )
 def test_when_dashboard_url_not_absolute_http_then_refused(dashboard_url: str) -> None:
@@ -77,6 +82,9 @@ def test_when_dashboard_url_not_absolute_http_then_refused(dashboard_url: str) -
     ("dashboard_url", "expected"),
     [
         ("https://app.hexgate.ai/", "https://app.hexgate.ai"),
+        # A CRLF env file, or stray spaces.
+        ("https://app.hexgate.ai\r", "https://app.hexgate.ai"),
+        (" https://app.hexgate.ai/ ", "https://app.hexgate.ai"),
         ("https://app.hexgate.ai/dash", "https://app.hexgate.ai/dash"),
     ],
 )

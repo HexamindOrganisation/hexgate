@@ -10,7 +10,6 @@ exists, so ``/token`` answers a known client ``invalid_grant``.
 
 from __future__ import annotations
 
-import logging
 import re
 from urllib.parse import urlencode
 
@@ -35,12 +34,9 @@ from hexgate_api.features.oauth.client_cache import ClientMetadataCache
 from hexgate_api.features.oauth.client_metadata import ClientMetadataError
 from hexgate_api.settings import get_settings
 
-logger = logging.getLogger(__name__)
-
 CONSENT_PATH = "/oauth/consent"
 # RFC 7636 §4.2: an S256 challenge is the base64url SHA-256, unpadded.
 _S256_CHALLENGE = re.compile(r"[A-Za-z0-9_-]{43}")
-_LOGGED_CHARS = 256
 
 
 class HexgateOAuthProvider(
@@ -58,12 +54,8 @@ class HexgateOAuthProvider(
         # where a raised error would be a 500.
         try:
             return await self._clients.get(client_id)
-        except ClientMetadataError as exc:
-            # %r and capped: the client_id is unauthenticated, so a newline
-            # in it must not forge a log line, nor a long one fill the log.
-            logger.warning(
-                "client metadata refused for %r: %s", client_id[:_LOGGED_CHARS], exc
-            )
+        # The cache logs a refusal once, when it caches the failure.
+        except ClientMetadataError:
             return None
 
     async def authorize(

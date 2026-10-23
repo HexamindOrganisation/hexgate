@@ -68,13 +68,19 @@ class Settings(BaseSettings):
     @classmethod
     def _dashboard_url_absolute(cls, value: str) -> str:
         # Every login is redirected here, and email links point at it.
+        # Stripped first: a CRLF env file leaves a "\r" that would end up in
+        # the redirect's Location header. urlsplit drops tabs and newlines
+        # before parsing, and gives an empty query for a bare "?", so control
+        # characters, "?" and "#" are refused on the raw text.
+        value = value.strip()
         parts = urlsplit(value)
         if (
             parts.scheme not in ("http", "https")
             or not parts.hostname
             or parts.username is not None  # any userinfo, password included
-            or parts.query
-            or parts.fragment
+            or "?" in value
+            or "#" in value
+            or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
         ):
             raise ValueError(
                 f"dashboard_url={value!r} must be an absolute http(s) URL with "
