@@ -10,14 +10,14 @@ exists, so ``/token`` answers a known client ``invalid_grant``.
 
 from __future__ import annotations
 
-import re
+from collections.abc import Mapping
+from typing import Any
 from urllib.parse import urlencode
 
 from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationCode,
     AuthorizationParams,
-    AuthorizeError,
     OAuthAuthorizationServerProvider,
     RefreshToken,
 )
@@ -29,21 +29,28 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from pydantic import AnyHttpUrl
 from starlette.routing import Route
 
-from hexgate_api.constants import OAUTH_PREFIX, OAUTH_SCOPES
+from hexgate_api.constants import OAUTH_PREFIX
+from hexgate_api.features.oauth.authorization import (
+    CheckedAuthorization,
+    check_authorization,
+    check_authorization_request,
+)
 from hexgate_api.features.oauth.client_cache import ClientMetadataCache
 from hexgate_api.features.oauth.client_metadata import ClientMetadataError
 from hexgate_api.settings import get_settings
 
 CONSENT_PATH = "/oauth/consent"
-# RFC 7636 §4.2: an S256 challenge is the base64url SHA-256, unpadded.
-_S256_CHALLENGE = re.compile(r"[A-Za-z0-9_-]{43}")
 
 
 class HexgateOAuthProvider(
     OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken, AccessToken]
 ):
     def __init__(
-        self, clients: ClientMetadataCache, *, resource_url: str, consent_url: str
+        self,
+        clients: ClientMetadataCache,
+        *,
+        resource_url: str,
+        consent_url: str,
     ) -> None:
         self._clients = clients
         self._resource_url = resource_url
@@ -66,31 +73,27 @@ class HexgateOAuthProvider(
         Nothing is stored: the consent POST checks the client, redirect and
         scopes again before it writes a code.
         """
-        # RFC 8707: the token is bound to the one MCP server, and the MCP spec
-        # makes clients send it, so a missing resource is refused too. /token
-        # never re-checks it: the MCP SDK doesn't pass it to the provider there.
-        if params.resource != self._resource_url:
-            raise AuthorizeError(
-                "invalid_request", f"resource must be {self._resource_url}"
-            )
-        if not _S256_CHALLENGE.fullmatch(params.code_challenge):
-            raise AuthorizeError(
-                "invalid_request", "code_challenge must be an S256 challenge"
-            )
-        # No scope asks for every scope, so the consent page shows the whole
-        # list and the user decides; a grant of none could do nothing.
-        scopes = sorted(OAUTH_SCOPES) if params.scopes is None else params.scopes
+        checked = check_authorization(client, params, resource_url=self._resource_url)
+        # The whole request: the consent routes check it again as /authorize did.
         query = {
+            "response_type": "code",
             "client_id": client.client_id,
-            "redirect_uri": str(params.redirect_uri),
-            "scope": " ".join(scopes),
-            "code_challenge": params.code_challenge,
+            "redirect_uri": str(checked.redirect_uri),
+            "scope": " ".join(checked.scopes),
+            "code_challenge": checked.code_challenge,
             "code_challenge_method": "S256",
-            "resource": params.resource,
+            "resource": checked.resource,
         }
-        if params.state is not None:
-            query["state"] = params.state
+        if checked.state is not None:
+            query["state"] = checked.state
         return f"{self._consent_url}?{urlencode(query)}"
+
+    async def check_request(self, params: Mapping[str, Any]) -> CheckedAuthorization:
+        """Check an authorization request sent back by the consent page, as
+        ``/authorize`` checked it; raises ``AuthorizeError``."""
+        return await check_authorization_request(
+            params, get_client=self.get_client, resource_url=self._resource_url
+        )
 
     async def load_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: str
@@ -116,8 +119,21 @@ class HexgateOAuthProvider(
         raise NotImplementedError  # Unreachable: no refresh token loads.
 
 
-def oauth_routes() -> list[Route]:
-    """The MCP SDK's authorize and token handlers under ``/v1/oauth``, over one provider.
+def build_oauth_provider() -> HexgateOAuthProvider:
+    """The provider the OAuth routes share, so they share one client cache."""
+    settings = get_settings()
+    clients = ClientMetadataCache(
+        allow_insecure_localhost=settings.oauth_allow_insecure_client_ids
+    )
+    return HexgateOAuthProvider(
+        clients,
+        resource_url=settings.mcp_resource_url,
+        consent_url=f"{settings.dashboard_url}{CONSENT_PATH}",
+    )
+
+
+def oauth_routes(provider: HexgateOAuthProvider) -> list[Route]:
+    """The MCP SDK's authorize and token handlers under ``/v1/oauth``, over ``provider``.
 
     Not its metadata route: ``well_known.py`` serves that document, with an
     ``issuer`` that equals the tokens' ``iss``. The authorize route takes GET
@@ -126,14 +142,6 @@ def oauth_routes() -> list[Route]:
     app's ``CORSMiddleware`` alone decides which origins may call it.
     """
     settings = get_settings()
-    clients = ClientMetadataCache(
-        allow_insecure_localhost=settings.oauth_allow_insecure_client_ids
-    )
-    provider = HexgateOAuthProvider(
-        clients,
-        resource_url=settings.mcp_resource_url,
-        consent_url=f"{settings.dashboard_url}{CONSENT_PATH}",
-    )
     (authorize,) = [
         route
         for route in create_auth_routes(
