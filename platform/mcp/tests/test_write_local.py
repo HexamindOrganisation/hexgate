@@ -113,6 +113,12 @@ def directory_target(root, tmp_path):
     (root / "team.yaml").mkdir()
 
 
+def repo_inside(root, tmp_path):
+    # A multi-repo parent such as ~/workspace: start-up allows it, writes into
+    # one of its repos are refused.
+    (root / "hexgate" / ".git").mkdir(parents=True)
+
+
 LEAVES, NOT_POLICY, OK = "not a file inside", "not a policy file", "policy:write"
 NOT_POLICIES = """Makefile agent.yaml.bak agent.json .git/hooks/pre-commit .hexgate.yaml
     .config/agent.yaml team/.hidden/agent.yaml""".split()
@@ -128,12 +134,22 @@ REFUSALS = {
     },
     **{f"not policy {p}": (None, p, POLICY, OK, NOT_POLICY) for p in NOT_POLICIES},
     "alias to dot path": (alias_to_dot_path, "alias.yaml", POLICY, OK, NOT_POLICY),
-    "read-only scope": (None, "agent.yaml", POLICY, "policy:read", "'policy:write'"),
+    "read-only scope": (
+        existing,
+        "agent.yaml",
+        POLICY,
+        "policy:read",
+        "'policy:write'",
+    ),
     "lone surrogate": (None, "agent.yaml", "\ud800", OK, "could not write"),
     "NUL in path": (None, "a\x00.yaml", POLICY, OK, "could not write"),
-    "over the cap": (None, "agent.yaml", "x" * (CAP + 1), OK, "is over"),
+    "over the cap": (existing, "agent.yaml", "x" * (CAP + 1), OK, "is over"),
     "over in bytes": (None, "agent.yaml", "é" * (CAP // 2 + 1), OK, "is over"),
     "directory target": (directory_target, "team.yaml", POLICY, OK, "'team.yaml'"),
+    **{
+        f"in a repo {p}": (repo_inside, p, POLICY, OK, "inside the repo hexgate")
+        for p in ["hexgate/deploy.yml", "hexgate/platform/compose.yaml"]
+    },
 }
 
 
@@ -145,12 +161,23 @@ async def test_when_write_is_refused_then_nothing_changes(
 ):
     if setup:
         setup(root, tmp_path)
-    before = sorted(tmp_path.rglob("*"))
+    before = snapshot(tmp_path)
 
     with pytest.raises(ToolError, match=error):
         await write(root, path, content, scopes)
 
-    assert sorted(tmp_path.rglob("*")) == before
+    assert snapshot(tmp_path) == before
+
+
+def snapshot(directory):
+    """Every path below `directory` with its mode and, for a file, its bytes."""
+    return {
+        p: (
+            p.lstat().st_mode,
+            p.read_bytes() if p.is_file() and not p.is_symlink() else None,
+        )
+        for p in directory.rglob("*")
+    }
 
 
 # 002 pins the 0644 base (0666 would give 0664) and 027 the umask itself; a
@@ -247,3 +274,17 @@ def test_when_local_policy_dir_is_set_then_policy_write_local_is_listed(key, roo
     tools = {t["name"]: t for t in json.loads(data)["result"]["tools"]}
 
     assert tools["policy_write_local"]["annotations"]["destructiveHint"] is True
+
+
+async def test_policy_write_local_fsyncs_the_directory_entry(root, monkeypatch):
+    synced = []
+    fsync = os.fsync
+    monkeypatch.setattr(
+        write_local.os,
+        "fsync",
+        lambda fd: synced.append(stat.S_ISDIR(os.fstat(fd).st_mode)) or fsync(fd),
+    )
+
+    await write(root, "agent.yaml")
+
+    assert synced == [False, True]

@@ -68,11 +68,14 @@ START_UP_REFUSALS = {
     "missing": ("missing", None, "not a directory"),
     "a file": ("file", None, "not a directory"),
     "remote issuer": ("policies", "https://app.hexgate.test", NOT_LOCAL),
+    "stray in deploy": ("missing", "https://app.hexgate.test", NOT_LOCAL),
     "lookalike host": ("policies", "http://localhost.hexgate.test", NOT_LOCAL),
     "repo root": ("repo", None, "policies folder"),
     "worktree root": ("worktree", None, "policies folder"),
     "filesystem root": ("/", None, "policies folder"),
+    "etc": ("/etc", None, "policies folder"),
     "home": ("home", None, "policies folder"),
+    "above home": (".", None, "policies folder"),
 }
 
 
@@ -97,3 +100,11 @@ def test_when_dir_is_set_then_main_binds_loopback(monkeypatch, tmp_path):
     runpy.run_module("hexgate_mcp", run_name="__main__")
 
     assert run.call_args.kwargs["host"] == "127.0.0.1"
+
+
+def test_when_dir_holds_repos_then_start_up_allows_it(monkeypatch, dirs):
+    # ~/workspace with repos below: confine() refuses writes into them.
+    (dirs / "workspace" / "app" / ".git").mkdir(parents=True)
+    monkeypatch.setenv("HEXGATE_MCP_LOCAL_POLICY_DIR", str(dirs / "workspace"))
+
+    assert Settings.from_env().local_policy_dir == dirs / "workspace"
