@@ -4,7 +4,7 @@
 list of :class:`SubagentLink` (``target`` name + ``via`` + an optional live
 ``child`` handle). It reads whatever the framework exposes:
 
-- **HexgateAgent** — the ``subagents=`` registry authored in PR 1 (native/pydantic).
+- **HexgateAgent** — the ``subagents=`` registry (native/pydantic).
 - **OpenAI Agents** — ``Agent.handoffs`` (handoff) and ``Agent.as_tool()`` origin
   metadata (tool), via the adapter's existing origin reader.
 - **Google ADK** — ``sub_agents`` (handoff) and ``AgentTool`` on ``tools`` (tool).
@@ -12,7 +12,7 @@ list of :class:`SubagentLink` (``target`` name + ``via`` + an optional live
   object) — the sub-agent hides in a tool closure with no handle, so ``[]``.
 
 This is pure introspection: no rewrapping, no policy, no behavior change. It is
-the reader that PR 3 (manifest refs) and PR 4 (recursive registration) build on.
+the reader that manifest sub-agent refs and recursive registration build on.
 
 ``SubagentLink`` is intentionally distinct from the authoring ``SubagentEdge``:
 enumeration must describe an edge the framework may only expose *by name* (an
@@ -22,7 +22,8 @@ one to recurse into.
 
 Framework dispatch mirrors :func:`hexgate.manifest.builder.create_manifest` — the
 same module-string classifier — so enumeration only ever reports edges on an agent
-that ``create_manifest`` can also build a manifest for (PR 4 needs both).
+that ``create_manifest`` can also build a manifest for (recursive registration
+needs both).
 """
 
 from __future__ import annotations

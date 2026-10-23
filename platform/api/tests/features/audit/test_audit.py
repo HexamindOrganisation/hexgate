@@ -1472,9 +1472,8 @@ def test_ban_enforcement_read_clamps_limit_to_200(
 
 
 # ---------------------------------------------------------------------------
-# Batch inserts (OTel migration design doc PR 4) — the span-enricher job's
-# write path. Nothing in the API calls these yet; the contract is exercised
-# directly with a MagicMock client capturing the insert call.
+# Batch inserts — the span-enricher job's write path. The contract is
+# exercised directly with a MagicMock client capturing the insert call.
 # ---------------------------------------------------------------------------
 
 

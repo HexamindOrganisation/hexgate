@@ -1,4 +1,4 @@
-"""Guards surfaced on the manifest (PR1 of the platform-guards work).
+"""Guards surfaced on the manifest.
 
 Covers the ``Guard`` → :class:`GuardManifest` mapping (:func:`_to_guard_manifest`)
 and its attachment in :func:`create_manifest`: position, reach, observe, and the

@@ -51,9 +51,9 @@ processors:
         action: upsert
 
   # Span-level placeholder — proves the wiring point exists. No real
-  # per-span transformation decided yet: the design doc assigns
-  # redaction/byte-capping to the enrichment job downstream, not this
-  # Collector, so this processor doesn't have a real job yet either.
+  # per-span transformation decided yet: redaction/byte-capping belongs to
+  # the enrichment job downstream, not this Collector, so this processor
+  # doesn't have a real job yet either.
   attributes:
     actions:
       - key: collector.stage

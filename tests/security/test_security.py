@@ -332,9 +332,8 @@ async def test_enforce_policy_approval_required_defaults_to_graceful_block(
         "ok": False,
         "error": {
             "type": "approval_required",
-            # Step 2 of the GuardedTool refactor: message now comes verbatim
-            # from ApprovalRequiredError in authorize_tool_call rather than
-            # being substituted by the old _security_result helper.
+            # The message comes verbatim from ApprovalRequiredError in
+            # authorize_tool_call.
             "message": 'Policy requires approval for tool "sample_tool"',
             "tool_name": "sample_tool",
             "agent_name": "default",

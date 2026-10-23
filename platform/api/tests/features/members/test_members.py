@@ -399,7 +399,7 @@ async def test_remove_member_when_refused_for_last_owner_then_no_key_is_revoked(
 
 
 async def test_revoke_owned_keys_does_not_commit(session_factory, signing_key) -> None:
-    """The load-bearing half of the atomicity guarantee (decision D8).
+    """The load-bearing half of the atomicity guarantee.
 
     ``revoke_api_key`` commits; the sweep must not, or a removal that 409s
     would still kill the member's keys.

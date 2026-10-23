@@ -118,7 +118,7 @@ def test_every_table_carries_a_creation_actor_or_is_explicitly_exempt() -> None:
 
 
 def test_update_actor_lands_only_on_tables_mutated_in_place() -> None:
-    """``updated_by_user_id`` is deliberately NOT on every table (decision D3).
+    """``updated_by_user_id`` is deliberately NOT on every table.
 
     It only means something where a row is edited in place. ``role_binding`` is
     replaced wholesale, ``agent_version`` / ``tool`` / ``skill`` are immutable,

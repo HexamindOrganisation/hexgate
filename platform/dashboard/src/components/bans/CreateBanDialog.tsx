@@ -27,7 +27,7 @@ import { useCreateBan, type BanType } from "@/lib/bans";
 import { PROPAGATION_HINT } from "./constants";
 
 /**
- * Prefill contract (§9.8) — the cross-page tie-ins open the dialog
+ * Prefill contract — the cross-page tie-ins open the dialog
  * pre-set to a type + target (and optionally a seeded reason).
  * Undefined `initial` = a blank "Create ban".
  */
@@ -37,7 +37,7 @@ export interface CreateBanInitial {
   reason?: string;
 }
 
-/** Turn a create-ban failure into copy safe to show verbatim (§9.4).
+/** Turn a create-ban failure into copy safe to show verbatim.
  * 409 = an active ban already exists; 400/422 = target/type mismatch. */
 function createErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -95,7 +95,7 @@ export function CreateBanDialog({
   const target = banType === "agent" ? agentName : userId.trim();
   const canSubmit = target.length > 0 && !createBan.isPending;
 
-  // §9.4 — emphasise scope per ban type in the warning banner.
+  // Emphasise scope per ban type in the warning banner.
   const warning = useMemo(
     () =>
       banType === "user"

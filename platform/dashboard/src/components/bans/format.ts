@@ -1,5 +1,5 @@
 /** Shared time formatting for the Bans page tables. Relative for the
- * cell, absolute for the `title` tooltip on hover (§9.3). */
+ * cell, absolute for the `title` tooltip on hover. */
 
 export function formatRelative(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();

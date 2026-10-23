@@ -18,7 +18,7 @@ function dedupById(rows: BanEnforcementRow[]): BanEnforcementRow[] {
 }
 
 /**
- * Region C (§9.3) — the secondary panel. A feed of runs refused by a
+ * Region C — the secondary panel. A feed of runs refused by a
  * ban, before the model ran, from the dedicated `ban_enforcement` table.
  *
  * Paged by OFFSET (not a growing limit): the endpoint hard-caps limit at
