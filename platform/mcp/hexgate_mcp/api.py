@@ -1,8 +1,9 @@
 """Calls the platform API as the caller: their bearer token, forwarded unchanged.
 
-That is not token passthrough: the API mints the token for two audiences,
-this server's resource URL and its own public URL, so the API verifies it as
-its own. The API's bearer branch and its per-route scope marks are the
+That is not token passthrough: the API is to mint the token for two
+audiences, this server's resource URL and its own public URL, so it verifies
+the token as its own; nothing mints one until the code exchange lands. The
+API's bearer branch and its per-route scope marks, already in place, are the
 security boundary. This client only turns the API's answers into tool errors
 the model can read.
 """
