@@ -208,7 +208,7 @@ async def test_when_refetch_fails_then_expired_document_served(
     assert all(doc is first for doc in served)
     assert len(fetches.client_ids) == 3
     assert caplog.messages[-1] == (
-        f"serving stale OAuth client metadata for {CLIENT_ID}: "
+        f"serving stale OAuth client metadata for {CLIENT_ID!r}: "
         "refetch failed (TimeoutError)"
     )
 
@@ -412,6 +412,15 @@ def test_when_scope_not_in_registry_then_refused(requested):
 
     with pytest.raises(InvalidScopeError):
         client.validate_scope(requested)
+
+
+def test_when_scope_repeated_then_kept_once_in_order():
+    client = _client("http://localhost/cb")
+
+    assert client.validate_scope("audit:read policy:read audit:read") == [
+        "audit:read",
+        "policy:read",
+    ]
 
 
 def test_when_no_scope_then_none_as_in_the_sdk():

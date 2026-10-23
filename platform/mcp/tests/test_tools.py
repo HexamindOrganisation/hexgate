@@ -1,6 +1,56 @@
 import json
 
-from hexgate_mcp.tools import RESULT_CAP_BYTES, TRUNCATED_MARKER, result_text
+import pytest
+from mcp.server.auth.middleware.auth_context import auth_context_var
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+from mcp.server.fastmcp.exceptions import ToolError
+
+from hexgate_mcp.auth import HexgateAccessToken
+from hexgate_mcp.tools import (
+    RESULT_CAP_BYTES,
+    TRUNCATED_MARKER,
+    caller,
+    result_text,
+)
+from tests.conftest import PROJECT
+
+
+@pytest.fixture
+def signed_in():
+    token = HexgateAccessToken(
+        token="t",
+        client_id="c",
+        scopes=["policy:read", "audit:read"],
+        subject="u",
+        projects=[PROJECT],
+    )
+    reset = auth_context_var.set(AuthenticatedUser(token))
+    yield token
+    auth_context_var.reset(reset)
+
+
+def test_caller_happy_path(signed_in):
+    assert caller("policy:read", "audit:read", project_id=PROJECT) is signed_in
+
+
+def test_when_one_of_several_scopes_is_missing_then_refused(signed_in):
+    with pytest.raises(ToolError, match="'agents:read' scope"):
+        caller("policy:read", "agents:read")
+
+
+def test_when_project_is_not_granted_then_refused(signed_in):
+    with pytest.raises(ToolError, match="project 'other' is not one of the projects"):
+        caller("policy:read", project_id="other")
+
+
+def test_when_no_token_then_refused():
+    with pytest.raises(ToolError, match="not authenticated"):
+        caller("policy:read")
+
+
+def test_when_tool_names_no_scope_then_it_raises(signed_in):
+    with pytest.raises(ValueError, match="must name the scope"):
+        caller(project_id=PROJECT)
 
 
 def test_result_text_happy_path():

@@ -8,6 +8,7 @@ catch-all, fails here.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -42,6 +43,8 @@ def settings(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("HEXGATE_MCP_RESOURCE_URL", RESOURCE_URL)
     monkeypatch.setenv("HEXGATE_DASHBOARD_URL", DASHBOARD_URL)
     monkeypatch.setenv("HEXGATE_CORS_ORIGINS", "http://localhost:5173")
+    # A developer's .env may turn it on, which the remote public_url refuses.
+    monkeypatch.setenv("HEXGATE_OAUTH_ALLOW_INSECURE_CLIENT_IDS", "0")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -180,6 +183,27 @@ def test_when_client_or_redirect_unverified_then_400_and_no_redirect(
         ),
         pytest.param({"resource": f"{RESOURCE_URL}/"}, "invalid_request", id="slash"),
         pytest.param({"resource": None}, "invalid_request", id="no-resource"),
+        pytest.param({"code_challenge": ""}, "invalid_request", id="empty-challenge"),
+        pytest.param(
+            {"code_challenge": CODE_CHALLENGE[:42]},
+            "invalid_request",
+            id="short-challenge",
+        ),
+        pytest.param(
+            {"code_challenge": f"{CODE_CHALLENGE}A"},
+            "invalid_request",
+            id="long-challenge",
+        ),
+        pytest.param(
+            {"code_challenge": f"{CODE_CHALLENGE[:42]}="},
+            "invalid_request",
+            id="padded",
+        ),
+        pytest.param(
+            {"code_challenge": f"{CODE_CHALLENGE[:42]}+"},
+            "invalid_request",
+            id="bad-char",
+        ),
     ],
 )
 def test_when_query_invalid_then_error_redirected_to_verified_client(
@@ -269,6 +293,37 @@ def test_when_token_posted_cross_origin_then_app_cors_decides(
     assert resp.headers.get("access-control-allow-origin") == allowed
 
 
+def test_when_client_metadata_refused_then_reason_logged(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger="hexgate_api.features.oauth.client_cache")
+    _authorize(client, client_id="https://unknown.example/m.json")
+    assert (
+        "client metadata refused for 'https://unknown.example/m.json': "
+        "client_id answered HTTP 404"
+    ) in caplog.messages
+
+
+def test_when_client_refused_repeatedly_then_logged_once(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The second request is answered from the failure cache, without a fetch.
+    caplog.set_level(logging.WARNING, logger="hexgate_api.features.oauth.client_cache")
+    for _ in range(3):
+        _authorize(client, client_id="https://unknown.example/m.json")
+    assert len([m for m in caplog.messages if m.startswith("client metadata")]) == 1
+
+
+def test_when_client_id_has_newline_then_logged_on_one_line(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger="hexgate_api.features.oauth.client_cache")
+    _authorize(client, client_id="https://x.example/\nFORGED " + "a" * 1000)
+    (message,) = [m for m in caplog.messages if m.startswith("client metadata")]
+    assert "\n" not in message
+    assert len(message) < 400
+
+
 def test_when_state_empty_then_consent_query_keeps_it(client: TestClient) -> None:
     _, query = _location(_authorize(client, state=""))
     assert query["state"] == [""]
@@ -276,7 +331,7 @@ def test_when_state_empty_then_consent_query_keeps_it(client: TestClient) -> Non
 
 def test_oauth_routes_happy_path() -> None:
     # Only under /v1/oauth: the MCP SDK's own metadata route, were it kept, would
-    # serve a different issuer whenever it was mounted ahead of well_known.py's.
+    # serve its issuer with a trailing slash and advertise client-secret auth.
     assert sorted(route.path for route in oauth_routes()) == [
         "/v1/oauth/authorize",
         "/v1/oauth/token",
@@ -298,6 +353,9 @@ def test_when_insecure_client_ids_set_then_cache_fetches_accordingly(
     env: str,
     insecure: bool,
 ) -> None:
+    # The flag is refused unless public_url and dashboard_url are local.
+    monkeypatch.setenv("HEXGATE_PUBLIC_URL", "http://localhost:8000")
+    monkeypatch.setenv("HEXGATE_DASHBOARD_URL", "http://localhost:5173")
     monkeypatch.setenv("HEXGATE_OAUTH_ALLOW_INSECURE_CLIENT_IDS", env)
     get_settings.cache_clear()
     _authorize(TestClient(_app(tmp_path, monkeypatch), follow_redirects=False))

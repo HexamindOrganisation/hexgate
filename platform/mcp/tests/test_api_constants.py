@@ -6,6 +6,7 @@ from pathlib import Path
 
 from hexgate_mcp.auth import ACCESS_TOKEN_TYPE
 from hexgate_mcp.scopes import OAUTH_SCOPES
+from hexgate_mcp.tools.policy import ENTRY_FILE
 
 API = Path(__file__).parents[2] / "api" / "hexgate_api"
 
@@ -28,3 +29,8 @@ def test_oauth_scopes_happy_path():
 def test_access_token_type_happy_path():
     node = _api_constant(API / "core" / "oauth_tokens.py", "ACCESS_TOKEN_TYPE")
     assert ACCESS_TOKEN_TYPE == ast.literal_eval(node)
+
+
+def test_entry_file_happy_path():
+    service = API / "features" / "policy_modules" / "service.py"
+    assert ENTRY_FILE == ast.literal_eval(_api_constant(service, "ENTRY_FILE"))
