@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 DETAIL_CAP_CHARS = 300
 
 # The refusals a caller can act on: log in again, ask for a scope or project,
-# fix the request. Anything else is the API failing (see `get`).
+# fix the request. Anything else is the API failing (see `_send`).
 TOOL_ERRORS = {
     401: "not authenticated",
     403: "forbidden",
@@ -37,21 +37,29 @@ class ApiClient:
         self._base_url = base_url
         self._http = http
 
-    async def get(self, path: str, token: str) -> Any:
+    async def get(self, path: str, token: str, params: dict | None = None) -> Any:
+        # httpx sends a None value as an empty string; an unset optional
+        # parameter is left out instead, so the API applies its own default.
+        query = {k: v for k, v in (params or {}).items() if v is not None}
+        return await self._send("GET", path, token, params=query)
+
+    async def _send(self, method: str, path: str, token: str, **kwargs: Any) -> Any:
         try:
-            response = await self._http.get(
+            response = await self._http.request(
+                method,
                 f"{self._base_url}{path}",
                 headers={"Authorization": f"Bearer {token}"},
+                **kwargs,
             )
         except httpx.HTTPError as exc:
-            raise _api_failed(path, type(exc).__name__) from exc
+            raise _api_failed(method, path, type(exc).__name__) from exc
         _raise_refusal(response)
         if not response.is_success:
-            raise _api_failed(path, str(response.status_code))
+            raise _api_failed(method, path, str(response.status_code))
         try:
             return response.json()
         except ValueError as exc:
-            raise _api_failed(path, "response is not JSON") from exc
+            raise _api_failed(method, path, "response is not JSON") from exc
 
 
 class ApiRefusal(ToolError):
@@ -71,11 +79,11 @@ def _raise_refusal(response: httpx.Response) -> None:
         )
 
 
-def _api_failed(path: str, cause: str) -> ToolError:
+def _api_failed(method: str, path: str, cause: str) -> ToolError:
     """Logged here, since FastMCP turns a tool's exception into an error result
     without a log line. The model gets no internal URL: httpx's own messages
     name the private-network API host."""
-    logger.warning("API call failed: GET %s: %s", path, cause)
+    logger.warning("API call failed: %s %s: %s", method, path, cause)
     return ToolError("the Hexgate API failed to answer; try again shortly")
 
 
