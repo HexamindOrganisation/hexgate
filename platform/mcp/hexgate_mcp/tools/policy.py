@@ -63,11 +63,18 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
             if draft is not None and not any(f["name"] == draft.name for f in files):
                 raise ToolError(
                     f"{draft.name!r} is not stored yet, so nothing imports it and "
-                    "the draft cannot apply; save it first (it changes nothing "
-                    f"while nothing imports it), then draft the {ENTRY_FILE!r} "
-                    "that imports it"
+                    "the draft cannot apply; save it first from the dashboard's "
+                    "Policies page (it changes nothing while nothing imports "
+                    f"it), then draft the {ENTRY_FILE!r} that imports it"
                 )
             return
+        # Bindings first: without them a retry without the draft is refused
+        # too, so the draft refusal would send the model round once for nothing.
+        if not (await read(project_id, "/policy-roles"))["roles"]:
+            raise ToolError(
+                f"this project has no {ENTRY_FILE!r} and no role bindings, so "
+                "each agent enforces its own policy, which this tool does not read"
+            )
         if draft is not None:
             # Not "draft policy.yaml instead": saving a first one moves the
             # whole project's enforcement onto the file store.
@@ -76,12 +83,6 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
                 "apply to it; call again without the draft. Saving a first "
                 f"{ENTRY_FILE!r} would switch every agent onto the file store"
             )
-        if (await read(project_id, "/policy-roles"))["roles"]:
-            return
-        raise ToolError(
-            f"this project has no {ENTRY_FILE!r} and no role bindings, so each "
-            "agent enforces its own policy, which this tool does not read"
-        )
 
     async def refuse_unknown_agent(project_id: str, agent: str | None) -> None:
         """An agent the policy does not declare runs under the generic `"*"`
@@ -186,7 +187,7 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
     async def policy_check(project_id: str, draft: PolicyDraft | None = None) -> str:
         """Lint the project's policy: errors such as a policy that does not
         compose, and warnings such as dead grants. Pass a `draft` file to
-        check it as if it were saved, before calling policy_save. A file
+        check it as if it were saved. A file
         `policy.yaml` does not import is not read, so its draft changes
         nothing until the import exists."""
         await refuse_without_store(project_id, draft)
@@ -211,8 +212,13 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         `attributes` are the caller's ctx.* values. Pass a `draft` file to
         evaluate against it as if it were saved. A file
         `policy.yaml` does not import is not read, so its draft changes
-        nothing until the import exists."""
+        nothing until the import exists. With a `policy.yaml` draft, `agent`
+        is not checked against the draft's own agents: an agent it does not
+        declare is evaluated under the generic view."""
         await refuse_without_store(project_id, draft)
+        # A draft policy.yaml may declare an agent the saved graph lacks.
+        if draft is None or draft.name != ENTRY_FILE:
+            await refuse_unknown_agent(project_id, agent)
         body = {
             "role": role,
             "tool": tool,

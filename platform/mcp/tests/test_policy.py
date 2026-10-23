@@ -221,14 +221,25 @@ def error(result: dict) -> str:
         pytest.param(
             "policy_dry_run",
             FULL_DRY_RUN,
-            [("GET", "/policy-files", {}), ("POST", "/policy/test", FULL_DRY_RUN)],
+            [
+                ("GET", "/policy-files", {}),
+                ("GET", "/policy/graph", {}),
+                ("POST", "/policy/test", FULL_DRY_RUN),
+            ],
             {"outcome": "allow"},
             id="dry_run-every-argument",
         ),
         pytest.param(
             "policy_dry_run",
-            {**DRY_RUN, "draft": ENTRY_DRAFT},
-            [("POST", "/policy/test", {**DRY_RUN, "draft": ENTRY_DRAFT})],
+            # A draft policy.yaml may declare a new agent: no agent lookup.
+            {**DRY_RUN, "agent": "triage", "draft": ENTRY_DRAFT},
+            [
+                (
+                    "POST",
+                    "/policy/test",
+                    {**DRY_RUN, "agent": "triage", "draft": ENTRY_DRAFT},
+                )
+            ],
             {"outcome": "allow"},
             id="dry_run-entry-draft",
         ),
@@ -330,19 +341,25 @@ def test_when_project_has_role_bindings_only_then_resolved_views_answer(
         ("policy_dry_run", {**DRY_RUN, "draft": DRAFT}),
     ],
 )
-@pytest.mark.parametrize("roles", [{"support": {"*": ["refunds"]}}, {}])
+@pytest.mark.parametrize(
+    ("roles", "expected"),
+    [
+        # Module store: the preview could only answer link-error, and the test
+        # route would evaluate the saved policy, ignoring the draft.
+        ({"support": {"*": ["refunds"]}}, "a draft file cannot apply"),
+        # Classic: a retry without the draft would be refused too, so the
+        # refusal names the real reason at once.
+        ({}, "each agent enforces its own policy"),
+    ],
+)
 def test_when_project_has_no_entry_file_then_a_draft_is_refused(
-    token, name, arguments, roles
+    token, name, arguments, roles, expected
 ):
-    # Without an entry file the preview could only answer link-error, and the
-    # test route would evaluate the saved policy, ignoring the draft; with no
-    # role bindings either, the draft is still what the refusal names.
     mock_api(**{"/policy-files": [CAP], "/policy-roles": {"roles": roles}})
 
     message = error(call(token, name, **arguments))
 
-    assert "a draft file cannot apply" in message
-    assert "would switch every agent onto the file store" in message
+    assert expected in message
     assert {r.method for r in api_requests()} == {"GET"}
 
 
@@ -410,5 +427,16 @@ def test_when_draft_is_a_file_not_stored_then_it_is_refused(token, name, argumen
     # Nothing imports a new file yet, so the API would answer for the saved policy.
     mock_api()
 
-    assert "save it first" in error(call(token, name, **arguments))
+    message = error(call(token, name, **arguments))
+
+    assert "save it first from the dashboard's Policies page" in message
+    assert {r.method for r in api_requests()} == {"GET"}
+
+
+def test_when_agent_is_not_declared_then_policy_dry_run_refuses(token):
+    mock_api()
+
+    message = error(call(token, "policy_dry_run", **DRY_RUN, agent="biling"))
+
+    assert "agent 'biling' is not declared in the policy" in message
     assert {r.method for r in api_requests()} == {"GET"}
