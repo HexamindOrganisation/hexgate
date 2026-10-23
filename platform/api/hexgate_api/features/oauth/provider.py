@@ -4,8 +4,9 @@ The MCP SDK's handlers parse and check the ``/authorize`` and ``/token`` request
 (response type, PKCE method, the client's redirect and scopes) and format the
 standard errors; the provider answers what only the platform knows. This half
 loads clients and sends an accepted login to the dashboard's consent page.
-Codes and tokens come in later halves: until then no code or refresh token
-exists, so ``/token`` answers a known client ``invalid_grant``.
+Redeeming the code the consent POST writes (``router.py``) comes in a later
+half: until then no code loads, so ``/token`` answers a known client
+``invalid_grant``.
 """
 
 from __future__ import annotations
@@ -98,7 +99,7 @@ class HexgateOAuthProvider(
     async def load_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: str
     ) -> AuthorizationCode | None:
-        return None  # No code is written before the consent POST exists.
+        return None  # Codes are redeemed in a later half.
 
     async def exchange_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
