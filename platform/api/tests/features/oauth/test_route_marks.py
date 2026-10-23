@@ -139,7 +139,9 @@ def test_when_route_is_marked_then_require_user_accepts_the_token(
 ) -> None:
     """The token passes ``require_user`` and the route's own gate (the user owns the project)."""
     r = _call(client, method, route, token)
-    assert r.status_code not in (401, 403), r.text
+    # 422: no body was sent, and FastAPI validates it only after the
+    # dependencies passed. 503: the audit route with an unreachable or broken ClickHouse.
+    assert r.status_code < 400 or r.status_code in (422, 503), r.text
 
 
 @pytest.mark.parametrize(("method", "route"), UNMARKED_USER)
