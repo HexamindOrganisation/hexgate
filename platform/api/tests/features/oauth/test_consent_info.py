@@ -57,14 +57,19 @@ def test_when_consent_info_query_tampered_then_400(
     assert resp.status_code == 400
 
 
-@pytest.mark.parametrize("token", [True, False], ids=["bearer", "no-session"])
-def test_when_consent_info_without_session_then_401(
-    consent_client: TestClient, token: bool
+def test_when_consent_info_with_a_valid_token_then_403(
+    consent_client: TestClient,
 ) -> None:
-    headers = {"Authorization": f"Bearer {access_token()}"} if token else {}
+    headers = {"Authorization": f"Bearer {access_token()}"}
     resp = consent_client.get(
         "/v1/oauth/consent-info", params=authorization(), headers=headers
     )
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "token scope does not cover this route"
+
+
+def test_when_consent_info_without_session_then_401(consent_client: TestClient) -> None:
+    resp = consent_client.get("/v1/oauth/consent-info", params=authorization())
     assert resp.status_code == 401
 
 

@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from mcp.server.auth.provider import AuthorizeError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -28,15 +28,6 @@ from hexgate_api.features.oauth.schemas import (
 from hexgate_api.models import Organization, OrganizationMember, Project, User
 
 router = APIRouter(prefix="/oauth", tags=["oauth"])
-
-
-def _refuse_authorization_header(
-    authorization: str | None = Header(default=None),
-) -> None:
-    """Consent is given by a person in the dashboard, never by a token: an OAuth
-    token or SDK key must not be able to grant another."""
-    if authorization is not None:
-        raise HTTPException(status_code=401, detail="consent needs a session cookie")
 
 
 def _provider(request: Request) -> HexgateOAuthProvider:
@@ -68,7 +59,9 @@ async def _user_projects(
     return list(rows.all())
 
 
-@router.get("/consent-info", dependencies=[Depends(_refuse_authorization_header)])
+# Unmarked, so require_user's default-deny refuses any OAuth token (403): only
+# a person in the dashboard, with a session cookie, sees or gives a consent.
+@router.get("/consent-info")
 async def api_consent_info(
     request: Request,
     user: User = Depends(require_user),

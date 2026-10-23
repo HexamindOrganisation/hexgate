@@ -85,6 +85,16 @@ async def require_user(
     raise HTTPException(status_code=401, detail="missing or invalid authentication")
 
 
+def oauth_projects(request: Request) -> frozenset[str] | None:
+    """The projects an OAuth caller's token names, or None for a dashboard caller.
+
+    For the ``OAUTH_NO_PROJECT`` routes, which have no ``project_id`` for
+    :func:`require_user` to check and must filter their results by it instead.
+    """
+    claims = request.state.oauth
+    return None if claims is None else claims.projects
+
+
 def _oauth_bearer(authorization: str | None) -> str | None:
     """The bearer of ``authorization`` if it is an OAuth token, not an SDK key."""
     if authorization is None:
