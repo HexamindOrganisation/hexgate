@@ -30,6 +30,7 @@ import { api, type TokenListItem, type TokenMintResponse } from "@/lib/api";
 import { useProjectScoped } from "@/lib/active";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/page-header";
+import { isStaleKey } from "@/lib/keys";
 
 function formatRelative(iso: string | null): string {
   if (!iso) return "Never";
@@ -270,6 +271,8 @@ export function TokensPage() {
     queryFn: () => api.listTokens(scope.projectId as string),
     enabled: !!scope.projectId,
   });
+  // "Now" is when the list was fetched, so render stays pure.
+  const keysFetchedAt = tokens.dataUpdatedAt;
   const qc = useQueryClient();
   const revoke = useMutation({
     mutationFn: (tokenId: string) =>
@@ -352,6 +355,7 @@ export function TokensPage() {
             </thead>
             <tbody>
               {tokens.data.map((t) => {
+                const stale = isStaleKey(t, keysFetchedAt);
                 const isTest = t.masked.startsWith("fty_test_");
                 return (
                   <tr
@@ -363,9 +367,7 @@ export function TokensPage() {
                         <KeyRound className="size-3.5 text-muted-foreground" />
                         <span className="font-medium">{t.name}</span>
                         {isTest && <Badge variant="approval">test</Badge>}
-                        {!t.last_used_at && (
-                          <Badge variant="outline">stale</Badge>
-                        )}
+                        {stale && <Badge variant="outline">stale</Badge>}
                       </span>
                     </td>
                     <td className="px-5 py-3">
@@ -402,9 +404,7 @@ export function TokensPage() {
                     <td
                       className={cn(
                         "px-5 py-3",
-                        t.last_used_at
-                          ? "text-muted-foreground"
-                          : "text-approval",
+                        stale ? "text-approval" : "text-muted-foreground",
                       )}
                     >
                       {formatRelative(t.last_used_at)}

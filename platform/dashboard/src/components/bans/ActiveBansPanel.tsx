@@ -13,8 +13,8 @@ import { formatAbsolute, formatRelative } from "./format";
 /**
  * Region B (§9.3) — the primary panel. Lists the project's active bans.
  *
- * Reads a danger surface: a subtle destructive left border + a shield
- * header, without being alarming when the table is empty. Revoke is
+ * Reads a danger surface through its shield header, without being
+ * alarming when the table is empty. Revoke is
  * admin-only (`canManage`) and destructively styled; the confirm step
  * uses the shared ConfirmDialog (§9.5).
  */
@@ -51,7 +51,7 @@ export function ActiveBansPanel({
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border border-l-2 border-l-destructive/50 bg-card">
+    <div className="overflow-hidden rounded-xl border border-border bg-card">
       <div className="flex items-center gap-2 border-b border-border px-5 py-3.5">
         <ShieldAlert className="size-4 text-destructive" />
         <span className="text-sm font-medium">Active bans</span>

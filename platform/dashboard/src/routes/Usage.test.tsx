@@ -183,7 +183,7 @@ describe("UsagePage", () => {
     expect(screen.getByText("75% of total")).toBeInTheDocument();
     expect(screen.getByText("25% of total")).toBeInTheDocument();
     expect(screen.getByText("41/day avg")).toBeInTheDocument();
-    expect(screen.getByText("40000/day avg")).toBeInTheDocument();
+    expect(screen.getByText("40.0K/day avg")).toBeInTheDocument();
   });
 
   it("shows zero percentages and the empty breakdown message with no calls yet", async () => {
