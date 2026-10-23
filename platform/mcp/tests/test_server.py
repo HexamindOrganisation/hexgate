@@ -3,7 +3,15 @@ import respx
 from starlette.testclient import TestClient
 
 from hexgate_mcp.scopes import OAUTH_SCOPES
-from tests.conftest import JWKS_URL, RESOURCE, SETTINGS, jwks, mcp_client, post_mcp
+from tests.conftest import (
+    JWKS_URL,
+    RESOURCE,
+    SETTINGS,
+    jwks,
+    mcp_client,
+    post_mcp,
+    rpc,
+)
 
 METADATA_URL = "https://app.hexgate.test/.well-known/oauth-protected-resource/mcp"
 INITIALIZE = {
@@ -70,6 +78,14 @@ def test_when_get_on_mcp_then_405_rather_than_an_idle_stream(key):
     assert response.headers["allow"] == "POST"
 
 
+def test_when_get_on_mcp_has_no_token_then_401_names_resource_metadata():
+    with mcp_client() as c:
+        response = c.get("/mcp", headers={"Accept": "text/event-stream"})
+
+    assert response.status_code == 401
+    assert f'resource_metadata="{METADATA_URL}"' in response.headers["www-authenticate"]
+
+
 def test_protected_resource_metadata_happy_path():
     with mcp_client() as c:
         response = c.get("/.well-known/oauth-protected-resource/mcp")
@@ -88,3 +104,32 @@ def test_health_happy_path():
         response = c.get("/health")
 
     assert response.json() == {"status": "ok", "service": "hexgate-mcp"}
+
+
+@respx.mock
+def test_when_tools_are_listed_then_only_policy_save_writes(key):
+    # Clients may call a read-only tool without asking the user first;
+    # policy_save is the one write, and says so.
+    respx.get(JWKS_URL).respond(json=jwks(key))
+
+    tools = rpc(key.mint(), "tools/list", {})["tools"]
+
+    read_only = {"readOnlyHint": True, "openWorldHint": False}
+    assert {t["name"]: t["annotations"] for t in tools} == {
+        "projects_list": read_only,
+        "policy_reference": read_only,
+        "policy_list_files": read_only,
+        "policy_read_file": read_only,
+        "policy_resolve": read_only,
+        "policy_graph": read_only,
+        "policy_list_roles": read_only,
+        "policy_check": read_only,
+        "policy_dry_run": read_only,
+        "audit_decisions": read_only,
+        "agents_list": read_only,
+        "policy_save": {
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+    }

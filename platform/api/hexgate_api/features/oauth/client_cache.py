@@ -48,6 +48,9 @@ from hexgate_api.features.oauth.client_metadata import (
 )
 
 logger = logging.getLogger(__name__)
+# client_id is unauthenticated: logged with %r so a newline can't forge a
+# line, and capped so a long one can't fill the log.
+_LOGGED_CHARS = 256
 
 DOCUMENT_TTL_SECONDS = 3600.0
 FAILURE_TTL_SECONDS = 60.0
@@ -66,10 +69,13 @@ class ClientMetadata(OAuthClientInformationFull):
 
         Both sides are pydantic URLs, so they compare in normalised form (host
         lowercased, default port dropped), which is the URL the login is
-        redirected to. With no ``redirect_uri``, the SDK's own rule applies.
+        redirected to. A ``redirect_uri`` is required, even when the document
+        lists only one: the MCP SDK would stand that one in and then redirect an
+        error there, which RFC 6749 §4.1.2.1 forbids for a target the request
+        did not supply.
         """
         if redirect_uri is None:
-            return super().validate_redirect_uri(redirect_uri)
+            raise InvalidRedirectUriError("redirect_uri is required")
         for registered in self.redirect_uris or ():
             if _redirect_matches(redirect_uri, registered):
                 return redirect_uri
@@ -82,11 +88,12 @@ class ClientMetadata(OAuthClientInformationFull):
 
         The platform's registry decides, not the document's own ``scope``
         field, which most clients (Claude Code's among them) leave out. With
-        no ``scope`` this returns None, as the SDK does.
+        no ``scope`` this returns None, as the MCP SDK does. A repeated scope is
+        kept once, in the order first asked.
         """
         if requested_scope is None:
             return None
-        scopes = requested_scope.split(" ")
+        scopes = list(dict.fromkeys(requested_scope.split(" ")))
         for scope in scopes:
             if scope not in OAUTH_SCOPES:
                 raise InvalidScopeError(f"Unknown scope {scope!r}")
@@ -147,11 +154,17 @@ class ClientMetadataCache:
         except ClientMetadataError as exc:
             stale = self._documents.get(client_id, include_expired=True)
             if stale is None or self._clock() >= stale.stale_until:
+                # Once per failure cached, not per request it then refuses.
+                logger.warning(
+                    "client metadata refused for %r: %s",
+                    client_id[:_LOGGED_CHARS],
+                    exc,
+                )
                 self._failures.put(client_id, str(exc), FAILURE_TTL_SECONDS)
                 raise
             logger.warning(
-                "serving stale OAuth client metadata for %s: refetch failed (%s)",
-                client_id,
+                "serving stale OAuth client metadata for %r: refetch failed (%s)",
+                client_id[:_LOGGED_CHARS],
                 type(exc.__cause__ or exc).__name__,
             )
             # Never past stale_until, even when the last retry falls just before it.

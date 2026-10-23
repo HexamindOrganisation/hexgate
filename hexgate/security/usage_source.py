@@ -7,7 +7,7 @@ namespace a decision reads. Shared per ``(api_key, base_url)`` like
 :class:`~hexgate.security.bans.PlatformBanSource`, and fail-soft: a platform blip
 degrades to ledger-only values by default, never to an error. User states are held
 in an LRU (``HEXGATE_USAGE_USER_CACHE``) and back off together, and log lines print a
-user as a fingerprint. Inert until the run boundary calls it.
+user as a fingerprint.
 """
 
 from __future__ import annotations
@@ -87,7 +87,8 @@ _KIND_PAUSED_MESSAGE: Final = (
     "pausing every %s refresh for %.0f s, using last-good"
 )
 _ROUTE_MISSING_MESSAGE: Final = (
-    "this platform has no %s usage read; user_usage.* reads local usage only"
+    "this platform has no %s usage read; user_usage.* reads as unavailable "
+    "(local counts under usage.on_unavailable: allow, refused under deny)"
 )
 _KEY_UNREADABLE_MESSAGE: Final = (
     f"%s is not a key the platform can read (over {USER_ID_MAX_LENGTH} characters "
@@ -95,7 +96,8 @@ _KEY_UNREADABLE_MESSAGE: Final = (
 )
 _EXECUTOR_THREAD_PREFIX: Final = "hexgate-usage"
 # Single-flight per scope already, so workers only keep one slow scope from
-# delaying another's refresh.
+# delaying another's refresh. Agents and users share them: a user burst can delay an
+# agent's background refresh, never its run-boundary fetch.
 _EXECUTOR_MAX_WORKERS: Final = 4
 
 

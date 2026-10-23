@@ -48,7 +48,7 @@ def test_agents_list_happy_path(key):
     respx.get(MANIFEST_URL).respond(json=[{"manifest": manifest("")}, unregistered])
     token = key.mint(scope="agents:read")
 
-    result = call_tool("agents_list", {"project_id": PROJECT}, token)
+    result = call_tool(token, "agents_list", {"project_id": PROJECT})
 
     assert json.loads(result["content"][0]["text"]) == [
         {"manifest": manifest("untrusted_")},

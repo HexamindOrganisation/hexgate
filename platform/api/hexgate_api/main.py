@@ -31,6 +31,7 @@ from hexgate_api.features.llm_messages.service import (
     verify_schema as verify_messages_schema,
 )
 from hexgate_api.features.members.router import router as members_router
+from hexgate_api.features.oauth.provider import oauth_routes
 from hexgate_api.features.oauth.well_known import router as well_known_router
 from hexgate_api.features.orgs.router import router as orgs_router
 from hexgate_api.features.policy_modules.router import router as policy_modules_router
@@ -213,7 +214,8 @@ async def lifespan(app_: FastAPI):
 
 def create_app() -> FastAPI:
     """Build the FastAPI app: middleware + health + the root ``/.well-known``
-    OAuth discovery documents + the versioned ``/v1`` router.
+    OAuth discovery documents + the versioned ``/v1`` router + the OAuth
+    authorize and token routes.
 
     The SPA catch-all and the Google login router are mounted in :func:`lifespan`
     (after startup) so they don't shadow the static routes registered here.
@@ -229,6 +231,7 @@ def create_app() -> FastAPI:
     app_.include_router(health.router)
     app_.include_router(well_known_router)
     app_.include_router(_build_v1_router())
+    app_.router.routes.extend(oauth_routes())
     return app_
 
 

@@ -1,7 +1,9 @@
 """Verifies the platform API's OAuth access tokens against its JWKS.
 
-This check is for a clean 401 and the client's re-login. The API verifies the
-same token on every call it receives, and that check is the security boundary.
+This check is for a clean 401 and the client's re-login. The API is to verify
+the same token on every call it receives, as a token minted for itself too
+(spec §I), and that check is the security boundary; it lands with plan PR 9
+(#403), and until then the API answers the bearer with 401.
 """
 
 import logging
@@ -64,7 +66,7 @@ class JwksTokenVerifier:
             level = logging.WARNING if isinstance(exc, config) else logging.INFO
             logger.log(level, "token refused: %s: %s", type(exc).__name__, exc)
             return None
-        return _access_token(token, claims)
+        return _access_token(token, claims, self._audience)
 
 
 def _header_kid(token: str) -> str | None:
@@ -85,7 +87,9 @@ def _header_kid(token: str) -> str | None:
     return kid
 
 
-def _access_token(token: str, claims: dict[str, Any]) -> HexgateAccessToken | None:
+def _access_token(
+    token: str, claims: dict[str, Any], audience: str
+) -> HexgateAccessToken | None:
     scope = claims.get("scope")
     if not isinstance(scope, str):
         logger.info("token refused: claims: `scope` is not a string")
@@ -96,7 +100,10 @@ def _access_token(token: str, claims: dict[str, Any]) -> HexgateAccessToken | No
             client_id=claims.get("client_id"),
             scopes=scope.split(),
             expires_at=claims["exp"],
-            resource=claims["aud"],
+            # Our own resource URL, which jwt.decode has already found in
+            # `aud`. The claim itself is a list once the token also names the
+            # API (spec §I), and the SDK types `resource` as a single string.
+            resource=audience,
             subject=claims["sub"],
             projects=claims.get("projects"),
             claims=claims,

@@ -20,7 +20,7 @@ def test_audit_decisions_happy_path(key):
     empty = {"agent": "", "role": "", "tool": "", "user": ""}
     arguments = {"project_id": PROJECT, "outcome": "deny"} | day | empty
 
-    result = call_tool("audit_decisions", arguments, key.mint(scope="audit:read"))
+    result = call_tool(key.mint(scope="audit:read"), "audit_decisions", arguments)
 
     assert json.loads(result["content"][0]["text"]) == {
         "rows": [ROW | {f"untrusted_{field}": INJECTED for field in FREE_TEXT}],

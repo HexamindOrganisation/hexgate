@@ -19,7 +19,8 @@ def file_path(project_id: str, name: str) -> str:
             f"invalid policy file name {name!r}: use a relative path such as "
             "'policy.yaml' or 'modules/billing.yaml', with no '.' or '..'"
         )
-    return f"/projects/{project_id}/policy-files/{quote(name, safe='/')}"
+    project = quote(project_id, safe="")
+    return f"/projects/{project}/policy-files/{quote(name, safe='/')}"
 
 
 def register(mcp: FastMCP, api: ApiClient) -> None:

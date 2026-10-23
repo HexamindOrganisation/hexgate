@@ -2,12 +2,12 @@
 
 from datetime import date, datetime, time
 from typing import Literal
+from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import ToolAnnotations
 
 from hexgate_mcp.api import ApiClient
-from hexgate_mcp.tools import caller, result_text, untrusted
+from hexgate_mcp.tools import READ_ONLY, caller, result_text, untrusted
 
 # The page, and the ids, names, timestamps and enums of platform/api/
 # hexgate_api/schemas.py's AuditDecisionRow, which the model filters by. The
@@ -34,10 +34,7 @@ def day_bound(value: str | None, bound: time) -> str | None:
 
 
 def register(mcp: FastMCP, api: ApiClient) -> None:
-    @mcp.tool(
-        annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
-        structured_output=False,  # as in projects.py
-    )
+    @mcp.tool(annotations=READ_ONLY, structured_output=False)
     async def audit_decisions(
         project_id: str,
         window: Literal["24h", "7d", "30d", "90d"] = "24h",
@@ -76,7 +73,7 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
             "end_date": day_bound(end_date, time.max),
         }
         page = await api.get(
-            f"/projects/{project_id}/audit/decisions",
+            f"/projects/{quote(project_id, safe='')}/audit/decisions",
             token.token,
             # An empty filter is left out like an unset one: the API reads
             # `role=""` as "rows with no role".

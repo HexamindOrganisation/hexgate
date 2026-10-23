@@ -88,7 +88,7 @@ def test_when_grant_does_not_cover_the_call_then_refused_before_any_request(
     else:
         token, project_id, error = key.mint(scope=scope), OTHER_PROJECT, OTHER_PROJECT
 
-    result = call_tool(tool, arguments | {"project_id": project_id}, token)
+    result = call_tool(token, tool, arguments | {"project_id": project_id})
 
     assert result["isError"]
     assert repr(error) in result["content"][0]["text"]
@@ -131,3 +131,32 @@ def test_when_cut_falls_inside_a_character_then_it_is_dropped():
 
     assert len(text.encode()) == RESULT_CAP_BYTES - 1
     assert text.endswith("é" + TRUNCATED_MARKER)
+
+
+def test_when_list_exceeds_the_cap_then_whole_items_are_kept():
+    item = {"id": "p", "name": "x" * 1000}
+    value = [item] * 300  # ~300 KiB
+
+    text = result_text(value)
+
+    assert len(text.encode()) <= RESULT_CAP_BYTES
+    result = json.loads(text)
+    assert result["truncated"] is True
+    assert 0 < len(result["items"]) < len(value)
+    assert result["items"] == value[: len(result["items"])]
+    # One more item would not have fit.
+    one_more = json.dumps(
+        {"truncated": True, "items": value[: len(result["items"]) + 1]},
+        ensure_ascii=False,
+    )
+    assert len(one_more.encode()) > RESULT_CAP_BYTES
+
+
+def test_when_first_list_item_exceeds_the_cap_then_head_is_kept():
+    value = ["x" * RESULT_CAP_BYTES]
+
+    text = result_text(value)
+
+    assert len(text.encode()) == RESULT_CAP_BYTES
+    assert text.startswith('["xxx')
+    assert text.endswith(TRUNCATED_MARKER)

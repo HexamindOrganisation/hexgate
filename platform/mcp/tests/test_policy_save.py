@@ -15,7 +15,7 @@ SAVED = {"name": "modules/a b?.yaml", "content_hash": "abc"}
 
 def save(key, name: str) -> dict:
     arguments = {"project_id": PROJECT, "name": name, "content": "version: 1\n"}
-    return call_tool("policy_save", arguments, key.mint(scope="policy:write"))
+    return call_tool(key.mint(scope="policy:write"), "policy_save", arguments)
 
 
 @respx.mock

@@ -75,6 +75,16 @@ async def test_when_422_detail_is_a_list_then_tool_error_carries_it_as_json():
 
 
 @respx.mock
+async def test_when_refusal_body_is_long_and_not_json_then_it_is_cut():
+    respx.get(ORGS_URL).respond(403, text="<html>" + "x" * 5000)
+
+    with pytest.raises(ToolError) as exc:
+        await api().get("/orgs", "t")
+
+    assert str(exc.value) == "403 forbidden: " + ("<html>" + "x" * 5000)[:300]
+
+
+@respx.mock
 async def test_when_refusal_is_not_json_then_tool_error_carries_body():
     respx.get(ORGS_URL).respond(404, text="no such route")
 
@@ -105,3 +115,12 @@ async def test_when_api_fails_then_logged_and_tool_error_hides_its_url(
     assert str(exc.value) == "the Hexgate API failed to answer; try again shortly"
     assert caplog.messages == [f"API call failed: GET /orgs: {cause}"]
     assert caplog.records[0].levelname == "WARNING"
+
+
+@respx.mock
+async def test_when_a_param_is_none_then_it_is_left_out():
+    route = respx.get(ORGS_URL).respond(json=[])
+
+    await api().get("/orgs", "t", {"role": None, "agent": "*"})
+
+    assert dict(route.calls.last.request.url.params) == {"agent": "*"}

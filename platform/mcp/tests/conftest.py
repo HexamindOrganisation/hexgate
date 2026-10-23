@@ -22,6 +22,7 @@ RESOURCE = "https://app.hexgate.test/mcp"
 API_URL = "http://api.internal:8000"
 JWKS_URL = f"{API_URL}/.well-known/jwks.json"
 PROJECT = "00000000-0000-0000-0000-000000000003"
+OTHER_PROJECT = "00000000-0000-0000-0000-000000000004"
 SETTINGS = Settings(api_url=API_URL, issuer=ISSUER, resource_url=RESOURCE)
 
 
@@ -80,16 +81,17 @@ def post_mcp(c: TestClient, body: dict[str, Any], token: str | None) -> httpx.Re
     return c.post("/mcp", json=body, headers=headers)
 
 
-def call_tool(name: str, arguments: dict[str, Any], token: str) -> dict[str, Any]:
-    """The JSON-RPC result of one tools/call over the app's MCP transport."""
-    call = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {"name": name, "arguments": arguments},
-    }
+def call_tool(token: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """One `tools/call` over the MCP transport; its JSON-RPC `result`."""
+    return rpc(token, "tools/call", {"name": name, "arguments": arguments})
+
+
+def rpc(token: str, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    """One JSON-RPC request over the MCP transport; its `result`."""
+    call = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
     with mcp_client() as c:
         response = post_mcp(c, call, token)
+    assert response.status_code == 200, response.text
     data = next(
         line.removeprefix("data: ")
         for line in response.text.splitlines()

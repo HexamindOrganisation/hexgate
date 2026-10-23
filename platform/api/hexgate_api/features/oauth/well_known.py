@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from jwt.utils import base64url_encode
 
-from hexgate_api.constants import OAUTH_SCOPES
+from hexgate_api.constants import OAUTH_PREFIX, OAUTH_SCOPES
 from hexgate_api.core.oauth_tokens import ACCESS_TOKEN_ALGORITHM
 from hexgate_api.settings import get_settings
 
@@ -26,9 +26,9 @@ async def authorization_server_metadata() -> dict[str, object]:
     issuer = get_settings().public_url
     return {
         "issuer": issuer,
-        "authorization_endpoint": f"{issuer}/v1/oauth/authorize",
-        "token_endpoint": f"{issuer}/v1/oauth/token",
-        "revocation_endpoint": f"{issuer}/v1/oauth/revoke",
+        "authorization_endpoint": f"{issuer}{OAUTH_PREFIX}/authorize",
+        "token_endpoint": f"{issuer}{OAUTH_PREFIX}/token",
+        "revocation_endpoint": f"{issuer}{OAUTH_PREFIX}/revoke",
         "jwks_uri": f"{issuer}{JWKS_PATH}",
         "response_types_supported": ["code"],
         # Absent, RFC 8414 adds "fragment", which only the implicit grant uses.
