@@ -69,8 +69,8 @@ def key() -> SigningKey:
     return SigningKey("key-1")
 
 
-def mcp_client() -> TestClient:
-    app = build_app(SETTINGS, httpx.AsyncClient())
+def mcp_client(settings: Settings = SETTINGS) -> TestClient:
+    app = build_app(settings, httpx.AsyncClient())
     return TestClient(app, base_url="https://app.hexgate.test")
 
 

@@ -107,9 +107,9 @@ def test_health_happy_path():
 
 
 @respx.mock
-def test_when_tools_are_listed_then_every_one_is_marked_read_only(key):
-    # Nothing registered by default writes: clients may call any of them
-    # without asking the user first.
+def test_when_tools_are_listed_then_only_policy_save_writes(key):
+    # Clients may call a read-only tool without asking the user first;
+    # policy_save is the one write, and says so.
     respx.get(JWKS_URL).respond(json=jwks(key))
 
     tools = rpc(key.mint(), "tools/list", {})["tools"]
@@ -125,4 +125,11 @@ def test_when_tools_are_listed_then_every_one_is_marked_read_only(key):
         "policy_list_roles": read_only,
         "policy_check": read_only,
         "policy_dry_run": read_only,
+        "audit_decisions": read_only,
+        "agents_list": read_only,
+        "policy_save": {
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
     }
