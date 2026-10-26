@@ -12,9 +12,10 @@ dependencies = [
     # Verifies the API's EdDSA access tokens; [crypto] pulls in cryptography
     # for Ed25519. 2.10.0 compared `iss` by substring (CVE-2024-53861).
     "pyjwt[crypto]>=2.10.1",
-    # The next three are transitive via mcp but imported directly (pydantic by
-    # the token model, starlette by /health, uvicorn by __main__), so pinned
-    # the same way platform/api pins python-dotenv.
+    # The next four are transitive via mcp but imported directly (pydantic by
+    # the token model, starlette by /health, uvicorn by __main__, anyio by
+    # policy_write_local), so pinned the same way platform/api pins python-dotenv.
+    "anyio>=4.5",
     "pydantic>=2.11",
     "starlette>=0.40",
     "uvicorn>=0.32",
