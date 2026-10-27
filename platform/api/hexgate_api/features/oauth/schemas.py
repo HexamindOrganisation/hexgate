@@ -2,7 +2,22 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class ConsentProjects(BaseModel):
+    """The consent POST's own field; the rest of its body is the authorization request."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    # The projects the user ticked. Never empty: a grant with none can do nothing.
+    projects: list[str] = Field(min_length=1)
+
+
+class ConsentRedirect(BaseModel):
+    """Where the dashboard sends the browser: the client's redirect, with the code."""
+
+    redirect_to: str
 
 
 class ConsentScope(BaseModel):
