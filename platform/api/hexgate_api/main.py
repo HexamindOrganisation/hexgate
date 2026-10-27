@@ -31,7 +31,8 @@ from hexgate_api.features.llm_messages.service import (
     verify_schema as verify_messages_schema,
 )
 from hexgate_api.features.members.router import router as members_router
-from hexgate_api.features.oauth.provider import oauth_routes
+from hexgate_api.features.oauth.provider import build_oauth_provider, oauth_routes
+from hexgate_api.features.oauth.router import router as oauth_router
 from hexgate_api.features.oauth.well_known import router as well_known_router
 from hexgate_api.features.orgs.router import router as orgs_router
 from hexgate_api.features.policy_modules.router import router as policy_modules_router
@@ -139,6 +140,7 @@ def _build_v1_router() -> APIRouter:
     v1.include_router(usage_router)
     v1.include_router(ai_act_router)
     v1.include_router(ai_act_pdf_router)
+    v1.include_router(oauth_router)
     include_auth_routers(v1)
     return v1
 
@@ -231,7 +233,9 @@ def create_app() -> FastAPI:
     app_.include_router(health.router)
     app_.include_router(well_known_router)
     app_.include_router(_build_v1_router())
-    app_.router.routes.extend(oauth_routes())
+    # One provider, so the consent routes and the MCP SDK's share a client cache.
+    app_.state.oauth_provider = build_oauth_provider()
+    app_.router.routes.extend(oauth_routes(app_.state.oauth_provider))
     return app_
 
 

@@ -20,7 +20,7 @@ from hexgate_api.constants import OAUTH_SCOPES
 from hexgate_api.core import spa
 from hexgate_api.features.oauth import client_cache
 from hexgate_api.features.oauth.client_metadata import ClientMetadataError
-from hexgate_api.features.oauth.provider import oauth_routes
+from hexgate_api.features.oauth.provider import build_oauth_provider, oauth_routes
 from hexgate_api.features.oauth.well_known import authorization_server_metadata
 from hexgate_api.main import create_app
 from hexgate_api.settings import get_settings
@@ -109,6 +109,7 @@ def test_authorize_happy_path(client: TestClient) -> None:
     target, query = _location(resp)
     assert target == f"{DASHBOARD_URL}/oauth/consent"
     assert query == {
+        "response_type": ["code"],
         "client_id": [CLIENT_ID],
         "redirect_uri": [REDIRECT_URI],
         "scope": ["policy:read audit:read"],
@@ -332,7 +333,7 @@ def test_when_state_empty_then_consent_query_keeps_it(client: TestClient) -> Non
 def test_oauth_routes_happy_path() -> None:
     # Only under /v1/oauth: the MCP SDK's own metadata route, were it kept, would
     # serve its issuer with a trailing slash and advertise client-secret auth.
-    assert sorted(route.path for route in oauth_routes()) == [
+    assert sorted(route.path for route in oauth_routes(build_oauth_provider())) == [
         "/v1/oauth/authorize",
         "/v1/oauth/token",
     ]
