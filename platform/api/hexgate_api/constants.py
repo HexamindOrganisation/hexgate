@@ -45,6 +45,14 @@ ALL_ROLES = {ROLE_OWNER, ROLE_ADMIN, ROLE_MEMBER}
 OAUTH_SCOPES = frozenset(
     {"policy:read", "policy:write", "audit:read", "agents:read", "projects:read"}
 )
+# What the consent page shows for each scope; one entry per scope above.
+OAUTH_SCOPE_DESCRIPTIONS = {
+    "policy:read": "Read and check the policies of the projects you choose",
+    "policy:write": "Save policy files in the projects you choose",
+    "audit:read": "Read the audit decisions of the projects you choose",
+    "agents:read": "Read the agent manifests of the projects you choose",
+    "projects:read": "List the projects you choose and their organizations",
+}
 # ``openapi_extra`` keys on a route. A route accepts an OAuth token only when
 # it declares the scope that covers it (default-deny), and the token's
 # ``projects`` claim must name the route's ``project_id`` unless the route is
