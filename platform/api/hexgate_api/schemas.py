@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Final, Literal, Optional
 from uuid import UUID
@@ -12,6 +12,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from hexgate_api.models import as_utc
 
 # Ceiling for counters stored in ClickHouse UInt32 columns (schema.sql).
 UINT32_MAX = 2**32 - 1
@@ -778,9 +780,8 @@ class AuditEnvelope(BaseModel):
     @field_validator("occurred_at")
     @classmethod
     def _assume_utc(cls, v: datetime) -> datetime:
-        # Assume UTC for naive input so downstream tz-aware comparisons can't
-        # raise TypeError; matches the DateTime64(3, 'UTC') storage column.
-        return v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
+        # Naive input is UTC, matching the DateTime64(3, 'UTC') storage column.
+        return as_utc(v)
 
 
 class AuditOutcome(StrEnum):

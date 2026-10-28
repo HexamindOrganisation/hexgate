@@ -8,7 +8,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
 from typing import Final
@@ -17,6 +17,7 @@ from clickhouse_connect.driver.client import Client
 
 from hexgate_api.core.clickhouse import verify_written_columns
 from hexgate_api.features.usage.paths import UsageMetric, UsageWindowSpec
+from hexgate_api.models import as_utc
 
 USAGE_MINUTE_TABLE: Final = "usage_minute"
 USAGE_MINUTE_USER_TABLE: Final = "usage_minute_user"
@@ -136,10 +137,8 @@ def read_usage(
     as_of, *values = client.query(
         sql, parameters=params, settings=QUERY_SETTINGS
     ).result_rows[0]
-    if as_of.tzinfo is None:
-        as_of = as_of.replace(tzinfo=UTC)
     return UsageReadout(
-        as_of=as_of,
+        as_of=as_utc(as_of),
         values={spec: int(value) for spec, value in zip(specs, values, strict=True)},
     )
 
