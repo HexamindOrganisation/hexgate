@@ -38,6 +38,20 @@ _API_PATH_HEADS = frozenset(
 )
 
 
+# On every page, not only /oauth/consent: the router moves between pages in
+# the browser (back from Google sign-in, say), so the consent page often runs
+# in a document served for another path. Framing it would let another site
+# overlay its Approve button, and its URL carries the MCP client's state and
+# PKCE challenge, which no Referer to another site may leak. Not no-referrer:
+# under it a browser sends ``Origin: null`` on same-origin POSTs, and the
+# consent POST's dashboard-origin check refuses that (test_consent.py).
+_PAGE_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    "Referrer-Policy": "same-origin",
+}
+
+
 def _is_api_path(full_path: str) -> bool:
     """True for catch-all paths that belong to the API, not the SPA."""
     return full_path.split("/", 1)[0] in _API_PATH_HEADS
@@ -139,4 +153,4 @@ def mount_spa(app: FastAPI) -> None:
             and candidate.is_relative_to(dist_resolved)
         ):
             return FileResponse(candidate)
-        return FileResponse(dist / "index.html")
+        return FileResponse(dist / "index.html", headers=_PAGE_HEADERS)

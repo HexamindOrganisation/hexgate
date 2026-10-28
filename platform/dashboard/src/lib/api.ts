@@ -1038,3 +1038,30 @@ export const api = {
   downloadAiActReportPdf: (reportId: string, projectId: string) =>
     requestBlob(`/v1/projects/${projectId}/ai-act/reports/${reportId}.pdf`),
 };
+
+/** Mirror of platform/api features/oauth/schemas.py:ConsentInfo. */
+export interface ConsentInfo {
+  /** Written by whoever controls the client_id URL: a claim, not a fact. */
+  client_name: string | null;
+  client_host: string;
+  redirect_host: string;
+  scopes: { name: string; description: string }[];
+  projects: { id: string; name: string; org_id: string; org_name: string }[];
+}
+
+/** The consent routes take the MCP client's authorization request as it
+ * reached the page: ``search`` is the page's own query string. */
+export const oauthApi = {
+  consentInfo: (search: string) =>
+    request<ConsentInfo>(`/v1/oauth/consent-info${search}`),
+
+  /** Records the consent; the response is the client's redirect with the code. */
+  consent: (search: string, projects: string[]) =>
+    request<{ redirect_to: string }>("/v1/oauth/authorize", {
+      method: "POST",
+      body: JSON.stringify({
+        ...Object.fromEntries(new URLSearchParams(search)),
+        projects,
+      }),
+    }),
+};
