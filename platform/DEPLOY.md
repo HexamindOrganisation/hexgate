@@ -331,6 +331,10 @@ the dashboard goes blank rather than degrading.
 `policy_file` (the compose entry-file store) 500 while the rest of the control
 plane is fine.
 
+`postgres/0005` is scoped the same way: every route touching
+`oauth_refresh_token` 500s, so MCP clients can't finish a login or refresh,
+while the rest of the control plane is fine.
+
 The ClickHouse migrations fail differently again — not a 500 on the routes that
 touch the table, but the boot-time `verify_all` crash loop described above.
 
@@ -344,6 +348,7 @@ running — see *Materialized views and the writers* below.
 | devtoken soft delete | `postgres/0001_devtoken_soft_delete.sql` |
 | control-plane actor columns | `postgres/0002_actor_columns.sql` |
 | actor trail on the compose file store | `postgres/0003_policy_file_actor_columns.sql` |
+| OAuth refresh tokens linked to their authorization code | `postgres/0005_oauth_refresh_code_link.sql` |
 | policy_decision `attributes` | `clickhouse/0001_add_policy_decision_attributes.sql` |
 | run attribution on decisions/usage | `clickhouse/0002_add_run_columns.sql` |
 | LLM message logging (`llm_message` table) | `clickhouse/0003_add_llm_message.sql` — required before the build that stores `hexgate.messages` |

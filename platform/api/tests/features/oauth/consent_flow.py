@@ -11,6 +11,10 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import update
+from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.constants import DEFAULT_PROJECT_ID, DEFAULT_USER_ID
 from hexgate_api.core.oauth_tokens import mint_access_token
@@ -129,6 +133,33 @@ def redeem(client: TestClient, code: str, **overrides: str):
         "code": code,
         "redirect_uri": REDIRECT_URI,
         "code_verifier": VERIFIER,
-        "client_id": CLIENT_ID,
     } | overrides
-    return client.post("/v1/oauth/token", data=form)
+    return _token(client, form)
+
+
+def _token(client: TestClient, form: dict[str, str]):
+    return client.post("/v1/oauth/token", data={"client_id": CLIENT_ID} | form)
+
+
+def login(client: TestClient) -> dict:
+    """Consent and redeem the code: the token response of a new login."""
+    resp = redeem(client, code_of(consent(client)))
+    assert resp.status_code == 200
+    return resp.json()
+
+
+def refresh(client: TestClient, refresh_token: str, **overrides: str):
+    form = {"grant_type": "refresh_token", "refresh_token": refresh_token}
+    return _token(client, form | overrides)
+
+
+async def rows(engine: AsyncEngine, model, order_by=None) -> list:
+    async with AsyncSession(engine) as session:
+        return list((await session.exec(select(model).order_by(order_by))).all())
+
+
+async def set_all(engine: AsyncEngine, model, **values) -> None:
+    """Set ``values`` on every row of ``model``."""
+    async with AsyncSession(engine) as session:
+        await session.exec(update(model).values(**values))
+        await session.commit()
