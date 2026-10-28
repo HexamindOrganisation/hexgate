@@ -43,6 +43,9 @@ extend-select = ["I"]
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+markers = [
+    "integration: runs the platform API as a subprocess (opt-in: `pytest -m integration`)",
+]
 
 [tool.uv]
 package = false
