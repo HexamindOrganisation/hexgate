@@ -15,9 +15,11 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.constants import OAUTH_SCOPES
-from hexgate_api.core import spa
+from hexgate_api.core import db, spa
 from hexgate_api.features.oauth import client_cache
 from hexgate_api.features.oauth.client_metadata import ClientMetadataError
 from hexgate_api.features.oauth.provider import build_oauth_provider, oauth_routes
@@ -76,7 +78,15 @@ def _app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
 
 
 @pytest.fixture
-def client(fetches, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def client(
+    fetches, engine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
+    # /token reads codes through the provider's sessions, not FastAPI's.
+    monkeypatch.setattr(
+        db,
+        "async_session_factory",
+        async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False),
+    )
     return TestClient(_app(tmp_path, monkeypatch), follow_redirects=False)
 
 
