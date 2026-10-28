@@ -87,20 +87,36 @@ async def test_when_rotated_token_reused_then_whole_login_revoked(
     assert resp.json()["error"] == "invalid_grant"
 
 
-async def test_when_thief_rotated_first_then_expired_reuse_still_revokes_login(
-    consent_client: TestClient, engine
+@pytest.mark.parametrize(
+    ("revoked", "expired"),
+    [
+        # Past the purge's retention for revoked rows: kept while the login lives.
+        pytest.param(timedelta(days=8), None, id="revoked-8-days-ago"),
+        # Past its own expiry, still present: the MCP SDK's expiry check is skipped.
+        pytest.param(timedelta(days=2), timedelta(days=1), id="expired"),
+    ],
+)
+async def test_when_thief_rotated_first_then_late_reuse_still_revokes_login(
+    consent_client: TestClient,
+    engine,
+    revoked: timedelta,
+    expired: timedelta | None,
 ) -> None:
     users = login(consent_client)["refresh_token"]
     thief = refresh(consent_client, users).json()["refresh_token"]
     old, _ = await _tokens(engine)
-    # Past its own expiry: the MCP SDK's expiry check is skipped for a revoked row.
+    now = datetime.now(timezone.utc)
+    values = {"revoked_at": now - revoked}
+    if expired is not None:
+        values["expires_at"] = now - expired
     async with AsyncSession(engine) as session:
         await session.exec(
             update(OAuthRefreshToken)
             .where(OAuthRefreshToken.id == old.id)
-            .values(expires_at=datetime.now(timezone.utc) - timedelta(days=1))
+            .values(**values)
         )
         await session.commit()
+    login(consent_client)  # an exchange, which purges
     assert refresh(consent_client, users).json()["error"] == "invalid_grant"
     assert refresh(consent_client, thief).json()["error"] == "invalid_grant"
 

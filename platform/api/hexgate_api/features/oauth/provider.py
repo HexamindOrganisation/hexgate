@@ -57,6 +57,7 @@ from hexgate_api.features.oauth.grants import (
     find_refresh_token,
     issue_tokens,
     projects_of,
+    purge_dead_rows,
     redeem_code,
     revoke_family,
     revoke_replayed_code,
@@ -170,6 +171,8 @@ class HexgateOAuthProvider(
         self, client: OAuthClientInformationFull, authorization_code: GrantedCode
     ) -> OAuthToken:
         async with db.async_session_factory() as session:
+            # Before the write, so a failed purge never loses committed tokens.
+            await purge_dead_rows(session)
             return await issue_tokens(
                 session,
                 user_id=authorization_code.user_id,
@@ -216,6 +219,7 @@ class HexgateOAuthProvider(
         a grant is never narrowed piecemeal."""
         row = refresh_token.row
         async with db.async_session_factory() as session:
+            await purge_dead_rows(session)  # first, as for a code
             if row.revoked_at is None:
                 tokens = await rotate_refresh_token(session, row)
                 if tokens is not None:
