@@ -7,6 +7,7 @@ import { AgentsPage } from "@/routes/Agents";
 import { AiActPage } from "@/routes/AiAct";
 import { AuditPage } from "@/routes/Audit";
 import { BansPage } from "@/routes/Bans";
+import { ConnectedAppsPage } from "@/routes/ConnectedApps";
 import { ForgotPasswordPage } from "@/routes/ForgotPassword";
 import { GraphPage } from "@/routes/Graph";
 import { CONSENT_PATH } from "@/lib/oauth_consent";
@@ -84,6 +85,7 @@ export default function App() {
           <Route path="orgs/:orgId/settings" element={<OrgSettingsPage />} />
           <Route path="orgs/:orgId/members" element={<OrgMembersPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="connected-apps" element={<ConnectedAppsPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -14,6 +14,7 @@ import {
   Moon,
   Network,
   PanelLeft,
+  Plug,
   Scale,
   ScrollText,
   Settings2,
@@ -120,11 +121,14 @@ const workspaceLinks = [
   { to: "/tokens", label: "API keys", icon: KeyRound },
 ];
 
+/** The settings-space pages that belong to the signed-in user, not an org. */
+const USER_SETTINGS_PATHS = new Set(["/settings", "/connected-apps"]);
+
 /** Whether a path belongs to the settings space (its own sidebar). Uses a
  * segment boundary so a future sibling like `/orgstats` isn't misread. */
 function isSettingsPath(pathname: string): boolean {
   return (
-    pathname === "/settings" ||
+    USER_SETTINGS_PATHS.has(pathname) ||
     pathname === "/orgs" ||
     pathname.startsWith("/orgs/")
   );
@@ -132,14 +136,13 @@ function isSettingsPath(pathname: string): boolean {
 
 /** The org the settings sidebar should scope its org links to: the one in the
  * URL (`/orgs/:id/...`) when present, else the active org — so a deep-link or
- * refresh keeps the sidebar pointed at the org being viewed. On the pure
- * account page (`/settings`) there's no org in play, so we return null and the
- * org-scoped links drop out. */
+ * refresh keeps the sidebar pointed at the org being viewed. On a per-user page
+ * there's no org in play, so we return null and the org-scoped links drop out. */
 function settingsOrgId(
   pathname: string,
   activeOrgId: string | null,
 ): string | null {
-  if (pathname === "/settings") return null;
+  if (USER_SETTINGS_PATHS.has(pathname)) return null;
   return pathname.match(/^\/orgs\/([^/]+)(?:\/|$)/)?.[1] ?? activeOrgId;
 }
 
@@ -163,6 +166,8 @@ function settingsLinks(activeOrgId: string | null) {
         ]
       : []),
     { to: "/settings", label: "Account", icon: CircleUser },
+    // Per user, like Account: the AI clients acting for whoever is signed in.
+    { to: "/connected-apps", label: "Connected apps", icon: Plug },
   ];
 }
 
