@@ -37,7 +37,7 @@ const MANIFEST = {
   updated_at: "2026-06-01T10:00:00Z",
 };
 
-function stubFetch(role: string) {
+function stubFetch(role: string, manifestError = false) {
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), {
       status: 200,
@@ -52,7 +52,9 @@ function stubFetch(role: string) {
         case "/v1/orgs/org-1/projects":
           return json([{ id: PROJECT, org_id: "org-1", name: "demo-project" }]);
         case `/v1/projects/${PROJECT}/agents/manifest`:
-          return json([MANIFEST]);
+          return manifestError
+            ? new Response("boom", { status: 500 })
+            : json([MANIFEST]);
         case `/v1/projects/${PROJECT}/policy-files`:
           return json([
             {
@@ -101,8 +103,8 @@ function stubFetch(role: string) {
   );
 }
 
-function renderHub(name: string, role = "admin") {
-  stubFetch(role);
+function renderHub(name: string, role = "admin", manifestError = false) {
+  stubFetch(role, manifestError);
   return renderWithProviders(
     <Routes>
       <Route path="/agents/:name" element={<AgentHub />} />
@@ -153,5 +155,13 @@ describe("AgentHub", () => {
     expect(
       screen.getByRole("link", { name: /back to agents/i }),
     ).toBeInTheDocument();
+  });
+
+  it("shows a load error, not a missing-agent state, when the fetch fails", async () => {
+    renderHub("support_bot", "admin", true);
+    expect(
+      await screen.findByText(/Couldn't load this agent/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No agent named/)).not.toBeInTheDocument();
   });
 });
