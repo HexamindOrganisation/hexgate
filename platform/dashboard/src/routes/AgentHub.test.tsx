@@ -189,8 +189,10 @@ describe("AgentHub", () => {
 
   it("shows em-dashes, not fake zeros, when 24h activity fails to load", async () => {
     renderHub("support_bot", "admin", false, true);
-    expect(await screen.findByText("Calls · 24h")).toBeInTheDocument();
-    // Calls / Denied / Approvals all unknown.
+    expect(
+      await screen.findByText(/Couldn't load the last 24 hours/),
+    ).toBeInTheDocument();
+    // Calls / Denied / Approvals all unknown (not fake zeros).
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(3);
   });
 
