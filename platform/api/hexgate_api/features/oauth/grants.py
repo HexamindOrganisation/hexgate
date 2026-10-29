@@ -12,7 +12,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from mcp.shared.auth import OAuthToken
-from sqlalchemy import select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.oauth_tokens import ACCESS_TOKEN_TTL_SECONDS, mint_access_token
@@ -31,6 +31,10 @@ REFRESH_TOKEN_TTL = timedelta(days=30)
 MAX_LOGIN_AGE = timedelta(days=90)
 # A rotated-away token presented again this soon is a retry, not a theft.
 REFRESH_REUSE_WINDOW = timedelta(seconds=30)
+# A code no login names, and a dead login, are kept this long, then purged.
+CODE_RETENTION = timedelta(hours=1)
+REFRESH_TOKEN_RETENTION = timedelta(days=7)
+PURGE_BATCH = 1000
 # A refresh row's own state; a rotation copies every other column.
 _ROW_STATE = {
     "id",
@@ -287,6 +291,89 @@ async def _revoke_live(
             break
     await session.commit()
     return revoked
+
+
+async def live_grants(session: AsyncSession, user_id: str) -> list[OAuthRefreshToken]:
+    """The user's live logins, one row each (a family's current token), newest first."""
+    result = await session.exec(
+        select(OAuthRefreshToken)
+        .where(
+            OAuthRefreshToken.user_id == user_id,
+            OAuthRefreshToken.revoked_at.is_(None),
+            OAuthRefreshToken.expires_at > utcnow(),
+        )
+        .order_by(OAuthRefreshToken.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def purge_dead_rows(session: AsyncSession) -> None:
+    """Delete up to ``PURGE_BATCH`` refresh rows of dead logins, and as many
+    code rows nothing needs any more.
+
+    A login's rows go only once it is dead (no row live) and has been for
+    ``REFRESH_TOKEN_RETENTION``: while it lives, a rotated-away row is what
+    reveals a stolen token when presented again. A spent code stays while a
+    refresh row names it, so replaying it still revokes what it issued.
+    """
+    now = utcnow()
+    batch = (
+        (
+            await session.exec(
+                select(OAuthRefreshToken.id)
+                .where(OAuthRefreshToken.family_id.in_(_dead_logins(now)))
+                .limit(PURGE_BATCH)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if batch:
+        # A batch may cut a login's chain: unlink the rows that name the ones going.
+        await session.exec(
+            update(OAuthRefreshToken)
+            .where(OAuthRefreshToken.replaced_by_id.in_(batch))
+            .values(replaced_by_id=None)
+        )
+        await session.exec(
+            delete(OAuthRefreshToken).where(OAuthRefreshToken.id.in_(batch))
+        )
+    cutoff = now - CODE_RETENTION
+    issued = select(OAuthRefreshToken.authorization_code_id).where(
+        OAuthRefreshToken.authorization_code_id.is_not(None)
+    )
+    stale_codes = (
+        select(OAuthAuthorizationCode.id)
+        .where(
+            OAuthAuthorizationCode.expires_at < cutoff,
+            OAuthAuthorizationCode.id.not_in(issued),
+        )
+        .limit(PURGE_BATCH)
+    )
+    await session.exec(
+        delete(OAuthAuthorizationCode).where(OAuthAuthorizationCode.id.in_(stale_codes))
+    )
+    await session.commit()
+
+
+def _dead_logins(now: datetime):
+    """The family ids of logins that ended over ``REFRESH_TOKEN_RETENTION`` ago.
+
+    A row ends when it is revoked or expires, whichever is first; a login ends
+    with its last row, so a login with a live row never qualifies.
+    """
+    ended = case(
+        (
+            OAuthRefreshToken.revoked_at < OAuthRefreshToken.expires_at,
+            OAuthRefreshToken.revoked_at,
+        ),
+        else_=OAuthRefreshToken.expires_at,
+    )
+    return (
+        select(OAuthRefreshToken.family_id)
+        .group_by(OAuthRefreshToken.family_id)
+        .having(func.max(ended) < now - REFRESH_TOKEN_RETENTION)
+    )
 
 
 def _tokens(row: OAuthRefreshToken, refresh_token: str) -> OAuthToken:

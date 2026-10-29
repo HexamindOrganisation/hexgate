@@ -339,7 +339,8 @@ class OAuthAuthorizationCode(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
-    expires_at: datetime = Field(sa_type=DateTime(timezone=True))
+    # Indexed for the background purge.
+    expires_at: datetime = Field(sa_type=DateTime(timezone=True), index=True)
     used_at: Optional[datetime] = Field(default=None, sa_type=DateTime(timezone=True))
     # Set when the code is presented again after it was spent: it leaked. A
     # login the first redemption has not finished issuing is then refused.

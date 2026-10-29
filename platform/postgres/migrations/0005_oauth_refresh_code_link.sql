@@ -1,7 +1,8 @@
 -- Links each refresh token to the authorization code its login started from,
 -- and marks a code presented again after it was spent, so a second redemption
 -- of a spent code revokes the tokens that code issued, and refuses the ones it
--- has not finished issuing (RFC 6749 section 4.1.2).
+-- has not finished issuing (RFC 6749 section 4.1.2). Also indexes the codes'
+-- expires_at, for the background purge of stale codes.
 --
 -- Both tables shipped in #327, so deployed stacks already have them without
 -- these columns. NULL is correct for every row written before:
@@ -31,4 +32,6 @@ BEGIN
     RETURN;
   END IF;
   ALTER TABLE oauth_authorization_code ADD COLUMN IF NOT EXISTS replayed_at timestamptz;
+  CREATE INDEX IF NOT EXISTS ix_oauth_authorization_code_expires_at
+    ON oauth_authorization_code (expires_at);
 END $$;

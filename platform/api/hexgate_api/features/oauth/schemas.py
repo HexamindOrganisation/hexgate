@@ -1,6 +1,8 @@
-"""Wire shapes of the consent routes."""
+"""Wire shapes of the consent and grants routes."""
 
 from __future__ import annotations
+
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -43,3 +45,16 @@ class ConsentInfo(BaseModel):
     scopes: list[ConsentScope]
     # Every project in the user's orgs, for the user to tick.
     projects: list[ConsentProject]
+
+
+class Grant(BaseModel):
+    """One live login of a client, as the "Connected apps" page lists it."""
+
+    id: str  # the login's family id: stable across rotations
+    client_name: str  # the client's own claim, as on the consent page
+    client_id: str
+    scopes: list[ConsentScope]
+    # A project deleted since the consent is left out.
+    projects: list[ConsentProject]
+    created_at: datetime  # when the user consented
+    last_used_at: datetime | None  # the last refresh; None before the first

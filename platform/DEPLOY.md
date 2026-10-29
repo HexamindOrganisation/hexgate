@@ -348,7 +348,7 @@ running — see *Materialized views and the writers* below.
 | devtoken soft delete | `postgres/0001_devtoken_soft_delete.sql` |
 | control-plane actor columns | `postgres/0002_actor_columns.sql` |
 | actor trail on the compose file store | `postgres/0003_policy_file_actor_columns.sql` |
-| OAuth refresh tokens linked to their authorization code, and a replay mark on the code | `postgres/0005_oauth_refresh_code_link.sql` |
+| OAuth refresh tokens linked to their authorization code, a replay mark and an `expires_at` index on the code | `postgres/0005_oauth_refresh_code_link.sql` |
 | policy_decision `attributes` | `clickhouse/0001_add_policy_decision_attributes.sql` |
 | run attribution on decisions/usage | `clickhouse/0002_add_run_columns.sql` |
 | LLM message logging (`llm_message` table) | `clickhouse/0003_add_llm_message.sql` — required before the build that stores `hexgate.messages` |
