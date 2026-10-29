@@ -24,3 +24,12 @@ export function formatRelative(iso: string, now = Date.now()): string {
 export function formatAbsolute(iso: string): string {
   return new Date(iso).toLocaleString();
 }
+
+/** Human date-time for timestamps; echoes the raw string if it won't parse. */
+export function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
