@@ -1,5 +1,11 @@
 import { useMemo } from "react";
-import { Link, useParams } from "react-router-dom";
+import {
+  Link,
+  NavLink,
+  Outlet,
+  useOutletContext,
+  useParams,
+} from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Ban, ChevronRight, ScrollText, ShieldCheck } from "lucide-react";
 
@@ -155,16 +161,81 @@ export function AgentHub() {
     <div className="mx-auto max-w-[960px] space-y-4">
       <Breadcrumb name={agent.name} />
       <AgentHeader agent={agent} canManageBans={canManageBans} />
-      <AgentOverview
-        agent={agent}
-        activity={activity}
-        activityError={summary.isError && !summary.data}
-        subgraph={subgraph}
-        graphLoading={graphQuery.isLoading}
-        graphError={graphQuery.isError && !graph404}
+      <HubTabs resources={agent.manifest?.tools?.length ?? 0} />
+      <Outlet
+        context={
+          {
+            agent,
+            roleModes,
+            activity,
+            activityError: summary.isError && !summary.data,
+            subgraph,
+            graphLoading: graphQuery.isLoading,
+            graphError: graphQuery.isError && !graph404,
+          } satisfies HubContext
+        }
       />
-      <ManifestView agent={agent} roleModes={roleModes} />
     </div>
+  );
+}
+
+/** Shared state the hub computes once and its tabs read via the Outlet. */
+export interface HubContext {
+  agent: AgentManifestView;
+  roleModes?: (tool: string) => RoleMode[];
+  activity: Activity | null;
+  activityError: boolean;
+  subgraph: PolicyGraph | null;
+  graphLoading: boolean;
+  graphError: boolean;
+}
+
+/** The Overview tab — the agent's graph + KPI strip. */
+export function AgentOverviewTab() {
+  const ctx = useOutletContext<HubContext>();
+  return (
+    <AgentOverview
+      agent={ctx.agent}
+      activity={ctx.activity}
+      activityError={ctx.activityError}
+      subgraph={ctx.subgraph}
+      graphLoading={ctx.graphLoading}
+      graphError={ctx.graphError}
+    />
+  );
+}
+
+/** The Resources tab — the manifest's tools, skills and guards. */
+export function AgentResourcesTab() {
+  const ctx = useOutletContext<HubContext>();
+  return <ManifestView agent={ctx.agent} roleModes={ctx.roleModes} />;
+}
+
+function HubTabs({ resources }: { resources: number }) {
+  const tab =
+    "border-b-2 px-3 py-2 text-sm transition-colors -mb-px flex items-center gap-1.5";
+  const cls = ({ isActive }: { isActive: boolean }) =>
+    cn(
+      tab,
+      isActive
+        ? "border-action font-medium text-foreground"
+        : "border-transparent text-muted-foreground hover:text-foreground",
+    );
+  return (
+    <nav
+      aria-label="Agent sections"
+      className="flex gap-1 border-b border-border"
+    >
+      <NavLink to="." end className={cls}>
+        Overview
+      </NavLink>
+      <NavLink to="resources" className={cls}>
+        Resources
+        <span className="rounded bg-muted px-1.5 text-[11px] text-muted-foreground">
+          {resources}
+        </span>
+      </NavLink>
+    </nav>
   );
 }
 
