@@ -13,6 +13,8 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { toast } from "sonner";
+
 import type { OAuthGrant } from "@/lib/api";
 import { ConnectedAppsPage } from "@/routes/ConnectedApps";
 import { renderWithProviders } from "@/test/render";
@@ -87,13 +89,21 @@ function stubFetch({
   return deleted;
 }
 
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+}));
+
 /** The row of one grant, found by its client name. */
 function rowOf(clientName: string): HTMLElement {
   return screen.getByText(clientName).closest("li") as HTMLElement;
 }
 
 describe("ConnectedAppsPage", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    // The sonner mock is a vi.fn, which restoreAllMocks leaves as it was.
+    vi.clearAllMocks();
+  });
 
   it("lists each grant with its client, host, scopes and times", async () => {
     stubFetch({ grants: [CLAUDE, CURSOR] });
@@ -150,10 +160,16 @@ describe("ConnectedAppsPage", () => {
     // Nothing is sent until the dialog is confirmed.
     expect(deleted).toEqual([]);
     const dialog = await screen.findByRole("dialog");
+    // An issued access token outlives the revoke: neither the dialog nor the
+    // toast may promise an immediate logout.
+    expect(dialog).toHaveTextContent("Access ends within 10 minutes.");
     await user.click(within(dialog).getByRole("button", { name: "Revoke" }));
 
     await waitFor(() =>
       expect(screen.queryByText("Claude Code")).not.toBeInTheDocument(),
+    );
+    expect(toast.success).toHaveBeenCalledWith(
+      "Claude Code was logged out. Access ends within 10 minutes.",
     );
     expect(deleted).toEqual(["/v1/oauth/grants/fam-1"]);
     expect(screen.getByText("Cursor")).toBeInTheDocument();

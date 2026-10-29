@@ -11,6 +11,12 @@ import { ApiError, oauthGrantsApi, type OAuthGrant } from "@/lib/api";
 
 const GRANTS_KEY = ["oauth-grants"] as const;
 
+/** A revoke stops the refresh token only: an access token already issued is a
+ * signed JWT nobody checks against the login, so it stays valid until it
+ * expires. The figure is ACCESS_TOKEN_TTL_SECONDS (600) in platform/api's
+ * core/oauth_tokens.py; change both together. */
+const ACCESS_ENDS = "Access ends within 10 minutes.";
+
 /** The host the client's metadata lives on: unlike ``client_name``, which the
  * client writes about itself, this is where it actually comes from. The
  * hostname without the port, as the consent page showed it (consent-info's
@@ -114,7 +120,7 @@ function GrantRow({
  * mistake at consent is noticed here. Revoke logs that client out: its
  * refresh token stops working and it must ask for consent again. Access
  * tokens are not revocable one by one, so one already issued lives out its
- * short TTL (ACCESS_TOKEN_TTL_SECONDS in platform/api's core/oauth_tokens.py).
+ * TTL, which ACCESS_ENDS states.
  *
  * Per user, not per project: it reads no project scope.
  */
@@ -130,7 +136,9 @@ export function ConnectedAppsPage() {
     if (!confirmRevoke) return;
     try {
       await revokeGrant.mutateAsync(confirmRevoke.id);
-      toast.success(`${confirmRevoke.client_name} was logged out`);
+      toast.success(
+        `${confirmRevoke.client_name} was logged out. ${ACCESS_ENDS}`,
+      );
       setConfirmRevoke(null);
     } catch {
       toast.error(`Could not log out ${confirmRevoke.client_name}.`);
@@ -191,7 +199,7 @@ export function ConnectedAppsPage() {
         open={!!confirmRevoke}
         onOpenChange={(o) => !o && setConfirmRevoke(null)}
         title={`Revoke ${confirmRevoke?.client_name ?? ""}?`}
-        description="It can no longer renew its access and must ask you again to act for you. A token it already holds keeps working until it expires, within minutes."
+        description={`It can no longer renew its access and must ask you again to act for you. ${ACCESS_ENDS}`}
         confirmLabel="Revoke"
         onConfirm={revoke}
         pending={revokeGrant.isPending}
