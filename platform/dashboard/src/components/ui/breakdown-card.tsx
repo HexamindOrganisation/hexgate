@@ -7,7 +7,7 @@
  * it isn't reimplemented (and can't drift) per caller.
  */
 
-import { Fragment, type ReactNode } from "react";
+import { Fragment, type ReactNode, useState } from "react";
 import { Card } from "@/components/ui/card";
 import {
   Select,
@@ -72,6 +72,7 @@ export function BreakdownCardShell<
   emptyMessage,
   legend,
   columns = 2,
+  collapseAt,
 }: {
   dims: { id: Dim; label: string }[];
   dim: Dim;
@@ -90,7 +91,13 @@ export function BreakdownCardShell<
   legend: ReactNode;
   /** Bar grid columns; 1 when the card sits in a narrow column. */
   columns?: 1 | 2;
+  /** Show the first N rows, then a "Show all" that scrolls the rest. */
+  collapseAt?: number;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const collapsed = collapseAt != null && !expanded && rows.length > collapseAt;
+  const shown = collapsed ? rows.slice(0, collapseAt) : rows;
+  const hidden = rows.length - (collapseAt ?? rows.length);
   return (
     <Card className="flex flex-col p-6">
       <div className="mb-4 flex items-center justify-between">
@@ -120,10 +127,10 @@ export function BreakdownCardShell<
         </Select>
       </div>
       <div
-        className={`grid flex-1 gap-x-8 ${columns === 2 ? "grid-cols-2" : "grid-cols-1 content-start"}`}
+        className={`grid flex-1 gap-x-8 ${columns === 2 ? "grid-cols-2" : "grid-cols-1 content-start"} ${expanded ? "max-h-72 overflow-y-auto scrollbar-thin" : ""}`}
       >
         {rows.length ? (
-          rows.map((row) => {
+          shown.map((row) => {
             const active = !activeFilterValue || activeFilterValue === row.key;
             const onClick = () =>
               onFilterChange(activeFilterValue === row.key ? "" : row.key);
@@ -141,7 +148,22 @@ export function BreakdownCardShell<
       </div>
       <div className="mt-1 flex gap-3.5 border-t border-border pt-3 text-[11px] text-muted-foreground">
         {legend}
-        <span className="ml-auto">click a bar to filter →</span>
+        {collapseAt != null && rows.length > collapseAt && (
+          <button
+            type="button"
+            onClick={() => setExpanded((e) => !e)}
+            className="ml-auto font-medium text-primary underline-offset-2 hover:underline"
+          >
+            {expanded ? "Show fewer" : `Show all ${rows.length} · +${hidden}`}
+          </button>
+        )}
+        <span
+          className={
+            collapseAt != null && rows.length > collapseAt ? "" : "ml-auto"
+          }
+        >
+          click a bar to filter →
+        </span>
       </div>
     </Card>
   );
