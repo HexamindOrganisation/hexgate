@@ -43,9 +43,11 @@ export function AgentHub() {
   const summary = useAuditSummary24h(scope.projectId, { poll: true });
   const activity: Activity | null =
     agent && summary.data
-      ? (new Map(summary.data.by_agent.map((r) => [r.key, r])).get(
-          agent.name,
-        ) ?? { all: 0, deny: 0, needs_approval: 0 })
+      ? (summary.data.by_agent.find((r) => r.key === agent.name) ?? {
+          all: 0,
+          deny: 0,
+          needs_approval: 0,
+        })
       : null;
 
   // Roles x tools for this agent, as the engine tabulates them. Only projects
@@ -86,6 +88,18 @@ export function AgentHub() {
     return (
       <div className="mx-auto max-w-[960px] p-8 text-sm text-muted-foreground">
         Loading agent…
+      </div>
+    );
+  }
+
+  // A failed fetch is not a missing agent — keep the two distinct.
+  if (manifests.isError && !manifests.data) {
+    return (
+      <div className="mx-auto max-w-[960px] space-y-4">
+        <Breadcrumb name={name ?? ""} />
+        <Card className="grid place-items-center p-12 text-center text-sm text-muted-foreground">
+          Couldn't load this agent. Try refreshing the page.
+        </Card>
       </div>
     );
   }
@@ -137,6 +151,10 @@ function Breadcrumb({ name }: { name: string }) {
   );
 }
 
+/* NOTE: AgentHeader and the roleModes memo mirror Agents.tsx on purpose, for
+   now — H1b makes /agents list-only (dropping its inline card) and H2 replaces
+   this header with the graph-hero Overview, so a shared extraction here would
+   be reworked immediately. Kept parallel until then. */
 function AgentHeader({
   agent,
   activity,
