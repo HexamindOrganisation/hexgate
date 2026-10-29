@@ -1,5 +1,11 @@
 import { useMemo } from "react";
-import { Link, useParams } from "react-router-dom";
+import {
+  Link,
+  NavLink,
+  Outlet,
+  useOutletContext,
+  useParams,
+} from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Ban, ChevronRight, ScrollText, ShieldCheck } from "lucide-react";
 
@@ -15,7 +21,7 @@ import {
   usePolicyMatrix,
 } from "@/lib/policy_files";
 import { isModular } from "@/lib/file_tree";
-import { roleModesOf } from "@/lib/role-modes";
+import { roleModesOf, type RoleMode } from "@/lib/role-modes";
 import { useProjectScoped } from "@/lib/active";
 import { useCanManageBans } from "@/lib/bans";
 import { useAgentActivity24h } from "@/lib/audit-summary";
@@ -140,19 +146,77 @@ export function AgentHub() {
     <div className="mx-auto max-w-[960px] space-y-4">
       <Breadcrumb name={agent.name} />
       <AgentHeader agent={agent} canManageBans={canManageBans} />
-      <AgentOverview
-        agent={agent}
-        activity={activity}
-        activityError={summary.isError && !summary.data}
-        activityStale={summary.isError && !!summary.data}
-        subgraph={subgraph}
-        // The previous project's graph, kept while this one loads, isn't this
-        // agent's: show it as loading.
-        graphLoading={graphQuery.isLoading || graphQuery.isPlaceholderData}
-        graphError={graphError}
+      <HubTabs resources={agent.manifest?.tools?.length ?? 0} />
+      <Outlet
+        context={
+          {
+            agent,
+            roleModes,
+            activity,
+            activityError: summary.isError && !summary.data,
+            activityStale: summary.isError && !!summary.data,
+            subgraph,
+            // The previous project's graph, kept while this one loads, isn't
+            // this agent's: show it as loading.
+            graphLoading: graphQuery.isLoading || graphQuery.isPlaceholderData,
+            graphError,
+          } satisfies HubContext
+        }
       />
-      <ManifestView agent={agent} roleModes={roleModes} />
     </div>
+  );
+}
+
+/** Shared state the hub computes once and its tabs read via the Outlet. */
+export interface HubContext {
+  agent: AgentManifestView;
+  roleModes?: (tool: string) => RoleMode[];
+  activity: { all: number; deny: number; needs_approval: number } | null;
+  /** The 24h summary never loaded: "—" in the strip and a note. */
+  activityError: boolean;
+  /** A later poll failed: the last counts stay, marked as such. */
+  activityStale: boolean;
+  subgraph: PolicyGraph | null;
+  graphLoading: boolean;
+  graphError: GraphError | null;
+}
+
+/** The Overview tab — the agent's graph + KPI strip. */
+export function AgentOverviewTab() {
+  return <AgentOverview {...useOutletContext<HubContext>()} />;
+}
+
+/** The Resources tab — the manifest's tools, skills and guards. */
+export function AgentResourcesTab() {
+  const ctx = useOutletContext<HubContext>();
+  return <ManifestView agent={ctx.agent} roleModes={ctx.roleModes} />;
+}
+
+function HubTabs({ resources }: { resources: number }) {
+  const tab =
+    "border-b-2 px-3 py-2 text-sm transition-colors -mb-px flex items-center gap-1.5";
+  const cls = ({ isActive }: { isActive: boolean }) =>
+    cn(
+      tab,
+      isActive
+        ? "border-action font-medium text-foreground"
+        : "border-transparent text-muted-foreground hover:text-foreground",
+    );
+  return (
+    <nav
+      aria-label="Agent sections"
+      className="flex gap-1 border-b border-border"
+    >
+      <NavLink to="." end className={cls}>
+        Overview
+      </NavLink>
+      <NavLink to="resources" className={cls}>
+        Resources
+        <span className="rounded bg-muted px-1.5 text-[11px] text-muted-foreground">
+          {resources}
+        </span>
+      </NavLink>
+    </nav>
   );
 }
 
