@@ -12,6 +12,14 @@ import { useActive } from "@/lib/active";
 import { AgentHub } from "@/routes/AgentHub";
 import { makeQueryClient, renderWithProviders } from "@/test/render";
 
+// Stub the heavy graph (ReactFlow) — the hub only needs it to mount with the
+// agent's subgraph; PolicyFlow itself is tested in PolicyGraphDialog.test.
+vi.mock("@/components/policy_files/PolicyGraphDialog", () => ({
+  PolicyFlow: ({ graph }: { graph: { nodes: unknown[] } }) => (
+    <div data-testid="agent-graph">{graph.nodes.length} nodes</div>
+  ),
+}));
+
 const PROJECT = "p1";
 
 const MANIFEST = {
@@ -79,6 +87,35 @@ function stubFetch(role: string, manifestError = false) {
               support: { mode: "deny", constraint: null },
             },
             aliased_default: null,
+          });
+        case `/v1/projects/${PROJECT}/policy/graph`:
+          return json({
+            roles: ["support", "guest"],
+            nodes: [
+              { id: "agent:support_bot", kind: "agent", label: "support_bot" },
+              { id: "tool:refund", kind: "tool", label: "refund" },
+              { id: "role:support", kind: "role", label: "support" },
+            ],
+            edges: [
+              {
+                source: "role:support",
+                target: "agent:support_bot",
+                kind: "admission",
+                via: null,
+                verdict: "allow",
+                constraints: [],
+                roles: ["support"],
+              },
+              {
+                source: "agent:support_bot",
+                target: "tool:refund",
+                kind: "call",
+                via: null,
+                verdict: "allow",
+                constraints: [],
+                roles: [],
+              },
+            ],
           });
         case `/v1/projects/${PROJECT}/audit/summary`:
           return json({
@@ -165,6 +202,17 @@ describe("AgentHub", () => {
       { initialRoute: "/agents/support_bot", client },
     );
     expect(await screen.findByText(/Couldn't refresh/)).toBeInTheDocument();
+  });
+
+  it("shows the KPI strip and the agent's local graph", async () => {
+    renderHub("support_bot");
+    // KPI strip (the header no longer duplicates it).
+    expect(await screen.findByText("Calls · 24h")).toBeInTheDocument();
+    expect(screen.getByText("15")).toBeInTheDocument();
+    // The subgraph (agent + its role + tool) reaches the graph.
+    expect(await screen.findByTestId("agent-graph")).toHaveTextContent(
+      "3 nodes",
+    );
   });
 
   it("shows how each role treats the agent's tools (engine matrix)", async () => {
