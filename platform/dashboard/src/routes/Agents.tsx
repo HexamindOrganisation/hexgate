@@ -37,7 +37,7 @@ import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { auditUrl } from "@/lib/audit-filters";
 import { useAuditSummary24h } from "@/lib/audit-summary";
-import { pluralise } from "@/lib/format";
+import { formatDate, pluralise } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
@@ -197,7 +197,12 @@ export function AgentsPage() {
                 <div className="min-w-0 flex-1 basis-[320px]">
                   <div className="flex flex-wrap items-center gap-2.5">
                     <h2 className="font-mono text-title-sm font-semibold">
-                      {active.name}
+                      <Link
+                        to={`/agents/${encodeURIComponent(active.name)}`}
+                        className="hover:underline"
+                      >
+                        {active.name}
+                      </Link>
                     </h2>
                     <Badge variant="outline" className="font-mono text-[11px]">
                       {active.version !== null
@@ -336,7 +341,7 @@ export function AgentsPage() {
   );
 }
 
-function ManifestView({
+export function ManifestView({
   agent,
   roleModes,
 }: {
@@ -367,7 +372,7 @@ function ManifestView({
 }
 
 /** How each role treats one tool, from the composed policy. */
-interface RoleMode {
+export interface RoleMode {
   role: string;
   mode: PolicyMatrixCell["mode"] | undefined;
   /** The engine's condition text, when the cell is constrained. */
@@ -720,12 +725,4 @@ function SkillResourceDetails({
       )}
     </details>
   );
-}
-
-function formatDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
 }
