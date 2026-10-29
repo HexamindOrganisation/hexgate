@@ -559,7 +559,7 @@ function bypassWarnings(graph: PolicyGraph): BypassWarning[] {
   return out;
 }
 
-function PolicyFlow({ graph }: { graph: PolicyGraph }) {
+export function PolicyFlow({ graph }: { graph: PolicyGraph }) {
   const [selected, setSelected] = useState<PolicyGraphEdge | null>(null);
   // A hovered node/edge is a temporary preview; a *pinned* node (clicked) shows
   // the persistent transitive focus.
