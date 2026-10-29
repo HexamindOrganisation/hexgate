@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 import pytest
 from fastapi.testclient import TestClient
+from mcp.server.auth.provider import TokenError
 
 from hexgate_api.constants import DEFAULT_PROJECT_ID, DEFAULT_USER_ID
 from hexgate_api.core.oauth_tokens import verify_access_token
@@ -70,7 +71,7 @@ async def test_code_exchange_happy_path(consent_client: TestClient, engine) -> N
 
 
 async def test_when_code_redeemed_twice_then_invalid_grant(
-    consent_client: TestClient, engine
+    consent_client: TestClient, engine, caplog: pytest.LogCaptureFixture
 ) -> None:
     code = _login(consent_client)
     assert redeem(consent_client, code).status_code == 200
@@ -80,6 +81,26 @@ async def test_when_code_redeemed_twice_then_invalid_grant(
     # The replay means the code leaked: what it issued is revoked too.
     (refresh,) = await rows(engine, OAuthRefreshToken)
     assert refresh.revoked_at is not None
+    (record,) = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert record.getMessage().startswith("oauth code replay: code=")
+    assert code not in record.getMessage()  # the row's id, never the code
+    assert record.getMessage().endswith("revoked=1")
+
+
+async def test_when_code_replayed_before_first_redemption_issues_then_refused(
+    consent_client: TestClient, engine
+) -> None:
+    code = _login(consent_client)
+    provider = consent_client.app.state.oauth_provider
+    client = await provider.get_client(CLIENT_ID)
+    granted = await provider.load_authorization_code(client, code)
+    # The replay lands between the first redemption spending the code and
+    # issuing its tokens, when there is nothing yet to revoke.
+    assert await provider.load_authorization_code(client, code) is None
+    with pytest.raises(TokenError) as exc:
+        await provider.exchange_authorization_code(client, granted)
+    assert exc.value.error == "invalid_grant"
+    assert await rows(engine, OAuthRefreshToken) == []
 
 
 async def test_when_code_replayed_then_only_its_own_login_revoked(
