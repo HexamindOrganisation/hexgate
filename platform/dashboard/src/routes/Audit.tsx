@@ -115,7 +115,7 @@ const TONE: Record<AuditOutcome, { text: string; box: string }> = {
   },
 };
 
-function DetailDrawer({
+export function DetailDrawer({
   event,
   related,
   projectId,
@@ -128,7 +128,9 @@ function DetailDrawer({
   projectId: string | null;
   onClose: () => void;
   onSelect: (e: AuditDecisionRow) => void;
-  setF: SetAuditFilters;
+  /** The "Filter to…" footer; omit it (e.g. the agent hub) to hide the footer,
+   * since those actions only make sense against the full audit filter bar. */
+  setF?: SetAuditFilters;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -386,30 +388,32 @@ function DetailDrawer({
           </DrawerSection>
         </div>
 
-        <div className="flex gap-2 border-t border-border px-5 py-3">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => {
-              setF((p) => ({ ...p, agent: e.agent_name }));
-              onClose();
-            }}
-          >
-            <Filter className="size-3" />
-            Filter to agent
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => {
-              setF((p) => ({ ...p, tool: e.tool_name }));
-              onClose();
-            }}
-          >
-            <Filter className="size-3" />
-            Filter to tool
-          </Button>
-        </div>
+        {setF && (
+          <div className="flex gap-2 border-t border-border px-5 py-3">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setF((p) => ({ ...p, agent: e.agent_name }));
+                onClose();
+              }}
+            >
+              <Filter className="size-3" />
+              Filter to agent
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setF((p) => ({ ...p, tool: e.tool_name }));
+                onClose();
+              }}
+            >
+              <Filter className="size-3" />
+              Filter to tool
+            </Button>
+          </div>
+        )}
       </aside>
     </div>
   );
