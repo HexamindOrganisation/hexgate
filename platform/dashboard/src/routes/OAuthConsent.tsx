@@ -147,7 +147,9 @@ function ConsentForm({ info, search }: { info: ConsentInfo; search: string }) {
           <h2 className="text-sm font-medium">On these projects only</h2>
           {info.projects.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              You have no projects to give access to.
+              You have no projects yet, so there is nothing to give access to.
+              Create one in the dashboard, then start the login again from the
+              application.
             </p>
           ) : (
             <ul className="space-y-1 text-sm">

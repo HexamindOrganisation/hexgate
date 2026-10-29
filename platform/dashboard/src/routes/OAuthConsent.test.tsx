@@ -119,6 +119,19 @@ describe("OAuthConsentPage", () => {
     expectQueryChecked(fetchSpy);
   });
 
+  it("tells a user with no project to create one first", async () => {
+    stubFetch({
+      ...SIGNED_IN,
+      "GET /v1/oauth/consent-info": () => json({ ...INFO, projects: [] }),
+    });
+    renderApp(`/oauth/consent${QUERY}`);
+
+    expect(
+      await screen.findByText(/Create one in the dashboard/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+  });
+
   it("keeps Approve disabled until a project is ticked", async () => {
     stubFetch();
     renderApp(`/oauth/consent${QUERY}`);
