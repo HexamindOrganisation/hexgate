@@ -5,11 +5,16 @@
  */
 
 import { act, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes } from "react-router-dom";
 
 import { useActive } from "@/lib/active";
-import { AgentHub } from "@/routes/AgentHub";
+import {
+  AgentHub,
+  AgentOverviewTab,
+  AgentResourcesTab,
+} from "@/routes/AgentHub";
 import { renderWithProviders } from "@/test/render";
 
 // Stub the heavy graph (ReactFlow) — the hub only needs it to mount with the
@@ -154,17 +159,29 @@ function stubFetch(
 
 function renderHub(
   name: string,
-  role = "admin",
-  manifestError = false,
-  summaryError = false,
-  noAgentInGraph = false,
+  {
+    role = "admin",
+    manifestError = false,
+    summaryError = false,
+    noAgentInGraph = false,
+    tab = "",
+  }: {
+    role?: string;
+    manifestError?: boolean;
+    summaryError?: boolean;
+    noAgentInGraph?: boolean;
+    tab?: "" | "/resources";
+  } = {},
 ) {
   stubFetch(role, manifestError, summaryError, noAgentInGraph);
   return renderWithProviders(
     <Routes>
-      <Route path="/agents/:name" element={<AgentHub />} />
+      <Route path="/agents/:name" element={<AgentHub />}>
+        <Route index element={<AgentOverviewTab />} />
+        <Route path="resources" element={<AgentResourcesTab />} />
+      </Route>
     </Routes>,
-    { initialRoute: `/agents/${name}` },
+    { initialRoute: `/agents/${name}${tab}` },
   );
 }
 
@@ -199,8 +216,16 @@ describe("AgentHub", () => {
     );
   });
 
+  it("navigates from the Overview graph to the Resources tab", async () => {
+    renderHub("support_bot");
+    expect(await screen.findByTestId("agent-graph")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: /Resources/ }));
+    // The manifest's tools live on Resources now, not the Overview.
+    expect(await screen.findByText("refund")).toBeInTheDocument();
+  });
+
   it("shows em-dashes, not fake zeros, when 24h activity fails to load", async () => {
-    renderHub("support_bot", "admin", false, true);
+    renderHub("support_bot", { summaryError: true });
     expect(
       await screen.findByText(/Couldn't load the last 24 hours/),
     ).toBeInTheDocument();
@@ -209,14 +234,14 @@ describe("AgentHub", () => {
   });
 
   it("says the agent has nothing mapped when it isn't in the graph", async () => {
-    renderHub("support_bot", "admin", false, false, true);
+    renderHub("support_bot", { noAgentInGraph: true });
     expect(
       await screen.findByText(/No roles, tools or reach mapped/),
     ).toBeInTheDocument();
   });
 
   it("shows how each role treats the agent's tools (engine matrix)", async () => {
-    renderHub("support_bot");
+    renderHub("support_bot", { tab: "/resources" });
     expect(
       await screen.findByTitle("support: args.amount <= 50"),
     ).toHaveTextContent("support allow*");
@@ -226,7 +251,7 @@ describe("AgentHub", () => {
   });
 
   it("links Ban agent to the prefilled /bans route for an admin", async () => {
-    renderHub("support_bot", "admin");
+    renderHub("support_bot");
     const ban = await screen.findByRole("link", { name: /ban agent/i });
     expect(ban).toHaveAttribute("href", "/bans?ban_agent=support_bot");
   });
@@ -240,7 +265,7 @@ describe("AgentHub", () => {
   });
 
   it("shows a load error, not a missing-agent state, when the fetch fails", async () => {
-    renderHub("support_bot", "admin", true);
+    renderHub("support_bot", { manifestError: true });
     expect(
       await screen.findByText(/Couldn't load this agent/),
     ).toBeInTheDocument();
