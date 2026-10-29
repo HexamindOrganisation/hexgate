@@ -1,4 +1,5 @@
-"""The rows of a grant: the one-time authorization code, then the first tokens.
+"""The rows of a grant: the one-time authorization code, then the refresh
+tokens of the login it starts, rotated at each use.
 
 A code or refresh token is 32 random bytes, base64url; only its SHA-256 is
 stored, so a database read gives no one a usable token.
@@ -11,7 +12,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from mcp.shared.auth import OAuthToken
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.oauth_tokens import ACCESS_TOKEN_TTL_SECONDS, mint_access_token
@@ -26,6 +27,20 @@ from hexgate_api.settings import get_settings
 
 CODE_TTL = timedelta(seconds=60)
 REFRESH_TOKEN_TTL = timedelta(days=30)
+# However often it is refreshed, a login ends this long after the consent.
+MAX_LOGIN_AGE = timedelta(days=90)
+# A rotated-away token presented again this soon is a retry, not a theft.
+REFRESH_REUSE_WINDOW = timedelta(seconds=30)
+# A refresh row's own state; a rotation copies every other column.
+_ROW_STATE = {
+    "id",
+    "token_hash",
+    "last_used_at",
+    "expires_at",
+    "revoked_at",
+    "revoked_by_user_id",
+    "replaced_by_id",
+}
 
 
 def _hash(token: str) -> str:
@@ -34,6 +49,14 @@ def _hash(token: str) -> str:
 
 def _csv(values: list[str]) -> str:
     return ",".join(values)
+
+
+def scopes_of(row: OAuthAuthorizationCode | OAuthRefreshToken) -> list[str]:
+    return row.scopes_csv.split(",")
+
+
+def projects_of(row: OAuthAuthorizationCode | OAuthRefreshToken) -> list[str]:
+    return row.projects_csv.split(",")
 
 
 async def issue_code(
@@ -97,35 +120,189 @@ async def issue_tokens(
     scopes: list[str],
     projects: list[str],
     resource: str,
-) -> OAuthToken:
-    """Write the first refresh row of a new login and return it with an access token."""
-    settings = get_settings()
-    access_token = mint_access_token(
-        sub=user_id,
+    authorization_code_id: str,
+) -> OAuthToken | None:
+    """Write the first refresh row of a new login and return it with an access
+    token; None if the code was replayed since it was spent.
+
+    The check locks the code row, in the transaction that inserts the refresh
+    row: a replay marking the code waits for this commit, and then sees the
+    new row to revoke.
+    """
+    result = await session.exec(
+        select(OAuthAuthorizationCode.id)
+        .where(
+            OAuthAuthorizationCode.id == authorization_code_id,
+            OAuthAuthorizationCode.replayed_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if result.scalar_one_or_none() is None:
+        await session.rollback()
+        return None
+    refresh_token = secrets.token_urlsafe(32)
+    row_id = new_uuid_str()
+    row = OAuthRefreshToken(
+        id=row_id,
+        family_id=row_id,  # the first token of the login names its family
+        token_hash=_hash(refresh_token),
+        user_id=user_id,
         client_id=client_id,
+        client_name=client_name,
+        scopes_csv=_csv(scopes),
+        projects_csv=_csv(projects),
+        resource=resource,
+        authorization_code_id=authorization_code_id,
+        expires_at=utcnow() + REFRESH_TOKEN_TTL,
+    )
+    tokens = _tokens(row, refresh_token)  # before the insert: minting can refuse
+    session.add(row)
+    await session.commit()
+    return tokens
+
+
+def login_end(row: OAuthRefreshToken) -> datetime:
+    """When the login ``row`` belongs to ends, however often it is refreshed."""
+    return as_utc(row.created_at) + MAX_LOGIN_AGE
+
+
+def rotated_moments_ago(row: OAuthRefreshToken) -> bool:
+    """Whether ``row`` was replaced by a refresh within the reuse window (not
+    revoked with its whole login)."""
+    return row.replaced_by_id is not None and (
+        utcnow() - as_utc(row.revoked_at) < REFRESH_REUSE_WINDOW
+    )
+
+
+async def find_refresh_token(
+    session: AsyncSession, token: str
+) -> OAuthRefreshToken | None:
+    """The row of ``token``, revoked or not, or None if it is unknown."""
+    result = await session.exec(
+        select(OAuthRefreshToken).where(OAuthRefreshToken.token_hash == _hash(token))
+    )
+    return result.scalar_one_or_none()
+
+
+async def rotate_refresh_token(
+    session: AsyncSession, old: OAuthRefreshToken
+) -> OAuthToken | None:
+    """Revoke ``old`` and return the tokens of its successor, or None if ``old``
+    was revoked since it loaded (by a concurrent refresh, or with its login).
+
+    The successor copies every column but the token's own state, so the grant
+    (scopes, projects, the code it came from, when the user consented) carries
+    over. It is written first so the
+    old row's ``replaced_by_id`` names a row that exists; the conditional
+    UPDATE then decides, so of two concurrent refreshes only one commits.
+    """
+    now = utcnow()
+    refresh_token = secrets.token_urlsafe(32)
+    new = OAuthRefreshToken(
+        **old.model_dump(exclude=_ROW_STATE),
+        token_hash=_hash(refresh_token),
+        last_used_at=now,
+        expires_at=min(now + REFRESH_TOKEN_TTL, login_end(old)),
+    )
+    tokens = _tokens(new, refresh_token)
+    session.add(new)
+    await session.flush()
+    result = await session.exec(
+        update(OAuthRefreshToken)
+        .where(
+            OAuthRefreshToken.id == old.id,
+            OAuthRefreshToken.revoked_at.is_(None),
+        )
+        .values(revoked_at=now, replaced_by_id=new.id)
+        .returning(OAuthRefreshToken.id)
+    )
+    if result.scalar_one_or_none() is None:
+        await session.rollback()
+        return None
+    await session.commit()
+    return tokens
+
+
+async def revoke_family(
+    session: AsyncSession, family_id: str, *, user_id: str | None = None
+) -> int:
+    """Revoke every live token of a login; the number revoked.
+
+    Given ``user_id``, only that user's login, recorded as revoked by them;
+    without it, the platform revokes it (a reused token or code).
+    """
+    where = [OAuthRefreshToken.family_id == family_id]
+    if user_id is not None:
+        where.append(OAuthRefreshToken.user_id == user_id)
+    return await _revoke_live(session, where, by_user_id=user_id)
+
+
+async def revoke_replayed_code(
+    session: AsyncSession, code: str
+) -> tuple[OAuthAuthorizationCode | None, int]:
+    """Mark a spent code replayed and revoke what it issued: its row (None if
+    unknown or never spent) and the number of tokens revoked.
+
+    Called when a code fails to redeem, so a spent one is being presented a
+    second time, which means it leaked.
+    """
+    result = await session.exec(
+        update(OAuthAuthorizationCode)
+        .where(
+            OAuthAuthorizationCode.code_hash == _hash(code),
+            OAuthAuthorizationCode.used_at.is_not(None),
+        )
+        .values(replayed_at=utcnow())
+        .returning(OAuthAuthorizationCode)
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        await session.commit()
+        return None, 0
+    where = [OAuthRefreshToken.authorization_code_id == row.id]
+    return row, await _revoke_live(session, where)
+
+
+async def _revoke_live(
+    session: AsyncSession, where: list, *, by_user_id: str | None = None
+) -> int:
+    """Revoke the live refresh rows matching ``where``; the number revoked.
+
+    Repeated until a fresh statement sees none: on Postgres an UPDATE that
+    waited on a row a concurrent refresh was rotating skips that row once
+    revoked, and never saw the successor the refresh then committed.
+    """
+    live = [*where, OAuthRefreshToken.revoked_at.is_(None)]
+    revoked = 0
+    while True:
+        result = await session.exec(
+            update(OAuthRefreshToken)
+            .where(*live)
+            .values(revoked_at=utcnow(), revoked_by_user_id=by_user_id)
+            .returning(OAuthRefreshToken.id)
+        )
+        revoked += len(result.all())
+        remaining = await session.exec(select(OAuthRefreshToken.id).where(*live))
+        if remaining.first() is None:
+            break
+    await session.commit()
+    return revoked
+
+
+def _tokens(row: OAuthRefreshToken, refresh_token: str) -> OAuthToken:
+    """``refresh_token``, the token of ``row``, with an access token carrying
+    the row's scopes and projects."""
+    settings = get_settings()
+    scopes = scopes_of(row)
+    access_token = mint_access_token(
+        sub=row.user_id,
+        client_id=row.client_id,
         scopes=scopes,
-        projects=projects,
+        projects=projects_of(row),
         issuer=settings.public_url,
         # The MCP server forwards this token to the API, so it names both.
         audience=[settings.mcp_resource_url, settings.public_url],
     )
-    refresh_token = secrets.token_urlsafe(32)
-    row_id = new_uuid_str()
-    session.add(
-        OAuthRefreshToken(
-            id=row_id,
-            family_id=row_id,  # the first token of the login names its family
-            token_hash=_hash(refresh_token),
-            user_id=user_id,
-            client_id=client_id,
-            client_name=client_name,
-            scopes_csv=_csv(scopes),
-            projects_csv=_csv(projects),
-            resource=resource,
-            expires_at=utcnow() + REFRESH_TOKEN_TTL,
-        )
-    )
-    await session.commit()
     return OAuthToken(
         access_token=access_token,
         expires_in=ACCESS_TOKEN_TTL_SECONDS,

@@ -11,9 +11,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncEngine
-from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession
+from mcp.server.auth.provider import TokenError
 
 from hexgate_api.constants import DEFAULT_PROJECT_ID, DEFAULT_USER_ID
 from hexgate_api.core.oauth_tokens import verify_access_token
@@ -27,6 +25,7 @@ from tests.features.oauth.consent_flow import (
     code_of,
     consent,
     redeem,
+    rows,
 )
 
 
@@ -34,11 +33,6 @@ def _login(client: TestClient, **overrides: str) -> str:
     resp = consent(client, **overrides)
     assert resp.status_code == 200
     return code_of(resp)
-
-
-async def _rows(engine: AsyncEngine, model):
-    async with AsyncSession(engine) as session:
-        return list((await session.exec(select(model))).all())
 
 
 async def test_code_exchange_happy_path(consent_client: TestClient, engine) -> None:
@@ -60,7 +54,7 @@ async def test_code_exchange_happy_path(consent_client: TestClient, engine) -> N
     assert claims.projects == {DEFAULT_PROJECT_ID}
     assert claims.exp - claims.iat == 600
     assert jwt.get_unverified_header(body["access_token"])["typ"] == "at+jwt"
-    (refresh,) = await _rows(engine, OAuthRefreshToken)
+    (refresh,) = await rows(engine, OAuthRefreshToken)
     assert refresh.token_hash != body["refresh_token"]  # only the hash is stored
     assert refresh.family_id == refresh.id
     assert refresh.user_id == DEFAULT_USER_ID
@@ -72,19 +66,56 @@ async def test_code_exchange_happy_path(consent_client: TestClient, engine) -> N
     assert refresh.revoked_at is None
     lifetime = refresh.expires_at - refresh.created_at
     assert abs(lifetime - timedelta(days=30)) < timedelta(seconds=1)
-    (code,) = await _rows(engine, OAuthAuthorizationCode)
+    (code,) = await rows(engine, OAuthAuthorizationCode)
     assert code.used_at is not None
 
 
 async def test_when_code_redeemed_twice_then_invalid_grant(
-    consent_client: TestClient, engine
+    consent_client: TestClient, engine, caplog: pytest.LogCaptureFixture
 ) -> None:
     code = _login(consent_client)
     assert redeem(consent_client, code).status_code == 200
     resp = redeem(consent_client, code)
     assert resp.status_code == 400
     assert resp.json()["error"] == "invalid_grant"
-    assert len(await _rows(engine, OAuthRefreshToken)) == 1
+    # The replay means the code leaked: what it issued is revoked too.
+    (refresh,) = await rows(engine, OAuthRefreshToken)
+    assert refresh.revoked_at is not None
+    (record,) = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert record.getMessage().startswith("oauth code replay: code=")
+    assert code not in record.getMessage()  # the row's id, never the code
+    assert record.getMessage().endswith("revoked=1")
+
+
+async def test_when_code_replayed_before_first_redemption_issues_then_refused(
+    consent_client: TestClient, engine
+) -> None:
+    code = _login(consent_client)
+    provider = consent_client.app.state.oauth_provider
+    client = await provider.get_client(CLIENT_ID)
+    granted = await provider.load_authorization_code(client, code)
+    # The replay lands between the first redemption spending the code and
+    # issuing its tokens, when there is nothing yet to revoke.
+    assert await provider.load_authorization_code(client, code) is None
+    with pytest.raises(TokenError) as exc:
+        await provider.exchange_authorization_code(client, granted)
+    assert exc.value.error == "invalid_grant"
+    assert await rows(engine, OAuthRefreshToken) == []
+
+
+async def test_when_code_replayed_then_only_its_own_login_revoked(
+    consent_client: TestClient, engine
+) -> None:
+    first, second = _login(consent_client), _login(consent_client)
+    assert redeem(consent_client, first).status_code == 200
+    assert redeem(consent_client, second).status_code == 200
+    redeem(consent_client, first)
+    by_code = {
+        r.authorization_code_id: r for r in await rows(engine, OAuthRefreshToken)
+    }
+    codes = {r.code_hash: r.id for r in await rows(engine, OAuthAuthorizationCode)}
+    assert by_code[codes[grants._hash(first)]].revoked_at is not None
+    assert by_code[codes[grants._hash(second)]].revoked_at is None
 
 
 def test_when_code_unknown_then_invalid_grant(consent_client: TestClient) -> None:
@@ -171,19 +202,3 @@ def test_when_redirect_uri_normalises_equal_then_accepted(
 ) -> None:
     code = _login(consent_client, redirect_uri=at_consent)
     assert redeem(consent_client, code, redirect_uri=at_token).status_code == 200
-
-
-def test_when_refresh_token_presented_then_invalid_grant(
-    consent_client: TestClient,
-) -> None:
-    redeem_body = redeem(consent_client, _login(consent_client)).json()
-    resp = consent_client.post(
-        "/v1/oauth/token",
-        data={
-            "grant_type": "refresh_token",
-            "refresh_token": redeem_body["refresh_token"],
-            "client_id": CLIENT_ID,
-        },
-    )
-    assert resp.status_code == 400
-    assert resp.json()["error"] == "invalid_grant"

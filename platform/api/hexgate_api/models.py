@@ -341,6 +341,11 @@ class OAuthAuthorizationCode(SQLModel, table=True):
     )
     expires_at: datetime = Field(sa_type=DateTime(timezone=True))
     used_at: Optional[datetime] = Field(default=None, sa_type=DateTime(timezone=True))
+    # Set when the code is presented again after it was spent: it leaked. A
+    # login the first redemption has not finished issuing is then refused.
+    replayed_at: Optional[datetime] = Field(
+        default=None, sa_type=DateTime(timezone=True)
+    )
 
 
 class OAuthRefreshToken(SQLModel, table=True):
@@ -350,7 +355,8 @@ class OAuthRefreshToken(SQLModel, table=True):
     Each refresh writes a new row with the same ``family_id`` (the ``id`` of
     the login's first token) and the same ``scopes_csv`` / ``projects_csv``,
     and revokes the old one with ``replaced_by_id`` set. Reusing a revoked
-    token revokes the whole family in one update on ``family_id``.
+    token revokes every live row of the family, found by ``family_id``,
+    unless it is a retry moments after the token was replaced.
     """
 
     __tablename__ = "oauth_refresh_token"
@@ -374,6 +380,10 @@ class OAuthRefreshToken(SQLModel, table=True):
         default=None, sa_type=DateTime(timezone=True)
     )
     revoked_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
+    # The code the login started from, copied at each rotation: replaying a
+    # spent code revokes what it issued. No FK, so a code row can be deleted
+    # while this row lives on for weeks.
+    authorization_code_id: Optional[str] = Field(default=None, index=True)
     # Indexed: Postgres doesn't index a referencing FK, so every clean-up
     # DELETE would scan the table for rows pointing at the one removed.
     replaced_by_id: Optional[str] = Field(

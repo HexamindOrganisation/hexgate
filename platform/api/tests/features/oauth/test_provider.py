@@ -350,8 +350,17 @@ def test_oauth_routes_happy_path() -> None:
     # serve its issuer with a trailing slash and advertise client-secret auth.
     assert sorted(route.path for route in oauth_routes(build_oauth_provider())) == [
         "/v1/oauth/authorize",
+        "/v1/oauth/revoke",
         "/v1/oauth/token",
     ]
+
+
+async def test_when_metadata_served_then_its_endpoints_are_the_mounted_routes() -> None:
+    issuer = get_settings().public_url
+    metadata = await authorization_server_metadata()
+    mounted = {route.path for route in oauth_routes(build_oauth_provider())}
+    for key in ("authorization_endpoint", "token_endpoint", "revocation_endpoint"):
+        assert metadata[key].removeprefix(issuer) in mounted
 
 
 def test_when_sdk_routes_mounted_then_no_registration(client: TestClient) -> None:
