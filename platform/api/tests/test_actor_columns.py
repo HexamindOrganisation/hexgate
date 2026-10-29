@@ -81,8 +81,9 @@ COLUMNS_NEEDING_A_MIGRATION: set[tuple[str, str]] = {
     # existed on deployed stacks by the time #160 reached it -- migration 0003.
     ("policy_file", "created_by_user_id"),
     ("policy_file", "updated_by_user_id"),
-    # oauth_refresh_token shipped in #327; the code link came with refresh -- 0005.
+    # The oauth tables shipped in #327; the code link and replay mark came with refresh -- 0005.
     ("oauth_refresh_token", "authorization_code_id"),
+    ("oauth_authorization_code", "replayed_at"),
 }
 
 _ADD_COLUMN = re.compile(

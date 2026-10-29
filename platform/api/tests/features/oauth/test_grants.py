@@ -1,18 +1,13 @@
-"""The user's live logins at ``/v1/oauth/grants``, and the bounded clean-up
-each token exchange runs."""
+"""The user's live logins at ``/v1/oauth/grants``."""
 
 from __future__ import annotations
 
 from datetime import timedelta
 
-import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, update
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.constants import DEFAULT_PROJECT_ID
-from hexgate_api.features.oauth import grants, provider
-from hexgate_api.models import OAuthAuthorizationCode, OAuthRefreshToken, utcnow
+from hexgate_api.models import OAuthRefreshToken, utcnow
 from tests.features.oauth.consent_flow import (
     CLIENT_ID,
     OTHER_USER_ID,
@@ -125,78 +120,13 @@ def test_when_grants_called_with_oauth_token_then_403(
     assert _revoke_grant(consent_client, "x", headers).status_code == 403
 
 
-@pytest.mark.parametrize(
-    ("model", "column", "age", "kept"),
-    [
-        (OAuthAuthorizationCode, "used_at", timedelta(hours=1, seconds=1), 0),
-        (OAuthAuthorizationCode, "used_at", timedelta(minutes=59), 1),
-        (OAuthAuthorizationCode, "expires_at", timedelta(hours=1, seconds=1), 0),
-        (OAuthAuthorizationCode, "expires_at", timedelta(minutes=59), 1),
-        (OAuthRefreshToken, "revoked_at", timedelta(days=7, seconds=1), 0),
-        (OAuthRefreshToken, "revoked_at", timedelta(days=6), 1),
-        (OAuthRefreshToken, "expires_at", timedelta(days=7, seconds=1), 0),
-        (OAuthRefreshToken, "expires_at", timedelta(days=6), 1),
-    ],
-)
-async def test_when_row_past_retention_then_purged_at_next_exchange(
-    consent_client: TestClient, engine, model, column: str, age: timedelta, kept: int
-) -> None:
-    login(consent_client)
-    await set_all(engine, model, **{column: utcnow() - age})
-    login(consent_client)  # the purge runs before this login's rows are stale
-    assert len(await rows(engine, model)) == kept + 1
-
-
-async def test_when_refresh_exchanged_then_stale_rows_purged(
+async def test_when_grant_scope_left_the_registry_then_listed_by_name(
     consent_client: TestClient, engine
 ) -> None:
-    token = login(consent_client)["refresh_token"]
-    stale = utcnow() - timedelta(days=8)
-    await set_all(engine, OAuthAuthorizationCode, used_at=stale)
-    assert refresh(consent_client, token).status_code == 200
-    assert await rows(engine, OAuthAuthorizationCode) == []
-
-
-async def test_when_purge_fails_then_refresh_token_still_usable(
-    consent_client: TestClient, engine, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    token = login(consent_client)["refresh_token"]
-
-    async def fail(session):
-        raise RuntimeError("purge failed")
-
-    monkeypatch.setattr(provider, "purge_dead_rows", fail)
-    with pytest.raises(RuntimeError):
-        refresh(consent_client, token)
-    monkeypatch.setattr(provider, "purge_dead_rows", grants.purge_dead_rows)
-    # Nothing was rotated, so the client's retry is not taken for a reuse.
-    assert refresh(consent_client, token).status_code == 200
-
-
-async def test_when_purge_batch_full_then_rest_waits_and_chain_intact(
-    consent_client: TestClient, engine, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Foreign keys enforced, as on Postgres: SQLite ignores them by default
-    # (one connection: the engine's pool is static).
-    async with engine.connect() as conn:
-        await conn.exec_driver_sql("PRAGMA foreign_keys=ON")
-    token = login(consent_client)["refresh_token"]
-    for _ in range(2):
-        token = refresh(consent_client, token).json()["refresh_token"]
-    await set_all(engine, OAuthRefreshToken, revoked_at=utcnow() - timedelta(days=8))
-    # Rewritten newest-first, so a purge in table order would delete a row
-    # its predecessor's replaced_by_id still names.
-    chain = [
-        OAuthRefreshToken(**row.model_dump())
-        for row in await rows(engine, OAuthRefreshToken, OAuthRefreshToken.expires_at)
-    ]
-    async with AsyncSession(engine) as session:
-        await session.exec(update(OAuthRefreshToken).values(replaced_by_id=None))
-        await session.exec(delete(OAuthRefreshToken))
-        session.add_all(reversed(chain))
-        await session.commit()
-    monkeypatch.setattr(grants, "PURGE_BATCH", 1)
-    for left in (2, 1, 0):
-        async with AsyncSession(engine) as session:
-            await grants.purge_dead_rows(session)
-        assert len(await rows(engine, OAuthRefreshToken)) == left
+    login(consent_client)
+    await set_all(engine, OAuthRefreshToken, scopes_csv="policy:read,retired:scope")
+    (grant,) = _grants(consent_client).json()
+    assert grant["scopes"][1] == {
+        "name": "retired:scope",
+        "description": "retired:scope",
+    }

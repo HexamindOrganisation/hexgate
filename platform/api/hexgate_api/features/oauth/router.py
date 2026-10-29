@@ -186,7 +186,9 @@ async def api_consent_info(
 
 def _scopes(names: list[str]) -> list[ConsentScope]:
     return [
-        ConsentScope(name=name, description=OAUTH_SCOPE_DESCRIPTIONS[name])
+        # A grant's scopes were checked at consent; one since removed from the
+        # registry is shown by name rather than failing the whole list.
+        ConsentScope(name=name, description=OAUTH_SCOPE_DESCRIPTIONS.get(name, name))
         for name in names
     ]
 
@@ -233,7 +235,9 @@ async def api_revoke_grant(
     user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    """Log the client out: revoke the login's live token. 404 for another
-    user's grant, so a guessed id tells nothing about who owns it."""
+    """Log the client out: revoke the login's live token, so its next refresh
+    fails. Access tokens already issued stay valid until they expire, within
+    ``ACCESS_TOKEN_TTL_SECONDS``. 404 for another user's grant, so a guessed id
+    tells nothing about who owns it."""
     if not await revoke_family(session, grant_id, user_id=user.id):
         raise HTTPException(status_code=404, detail="grant not found")

@@ -6,11 +6,13 @@ standard errors; the provider answers what only the platform knows: it loads
 clients, sends an accepted login to the dashboard's consent page, and swaps
 the code the consent POST wrote (``router.py``) for the first tokens, then
 rotates the refresh token at each use. A token used twice means it leaked, so
-its whole login is revoked; a code redeemed twice revokes what it issued.
+its whole login is revoked (unless the second use is a retry moments after the
+first); a code redeemed twice revokes what it issued.
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlencode
@@ -40,7 +42,7 @@ from mcp.server.auth.settings import ClientRegistrationOptions
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from pydantic import AnyHttpUrl, AnyUrl
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from hexgate_api.constants import OAUTH_PREFIX
@@ -57,17 +59,19 @@ from hexgate_api.features.oauth.grants import (
     find_refresh_token,
     issue_tokens,
     projects_of,
-    purge_dead_rows,
     redeem_code,
     revoke_family,
     revoke_replayed_code,
     rotate_refresh_token,
+    rotated_moments_ago,
     scopes_of,
 )
 from hexgate_api.models import OAuthRefreshToken
 from hexgate_api.settings import get_settings
 
 CONSENT_PATH = "/oauth/consent"
+
+logger = logging.getLogger(__name__)
 
 
 class GrantedCode(AuthorizationCode):
@@ -150,7 +154,15 @@ class HexgateOAuthProvider(
         async with db.async_session_factory() as session:
             row = await redeem_code(session, authorization_code)
             if row is None:
-                await revoke_replayed_code(session, authorization_code)
+                spent, revoked = await revoke_replayed_code(session, authorization_code)
+                if spent is not None:
+                    logger.warning(
+                        "oauth code replay: code=%s client=%s user=%s revoked=%d",
+                        spent.id,
+                        spent.client_id,
+                        spent.user_id,
+                        revoked,
+                    )
                 return None
         return GrantedCode(
             id=row.id,
@@ -171,9 +183,7 @@ class HexgateOAuthProvider(
         self, client: OAuthClientInformationFull, authorization_code: GrantedCode
     ) -> OAuthToken:
         async with db.async_session_factory() as session:
-            # Before the write, so a failed purge never loses committed tokens.
-            await purge_dead_rows(session)
-            return await issue_tokens(
+            tokens = await issue_tokens(
                 session,
                 user_id=authorization_code.user_id,
                 client_id=client.client_id,
@@ -183,6 +193,9 @@ class HexgateOAuthProvider(
                 resource=authorization_code.resource,
                 authorization_code_id=authorization_code.id,
             )
+        if tokens is None:
+            raise TokenError("invalid_grant", "authorization code was replayed")
+        return tokens
 
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str
@@ -216,16 +229,44 @@ class HexgateOAuthProvider(
     ) -> OAuthToken:
         """Rotate the token. The new one carries the row's scopes whatever
         ``scopes`` asks: the MCP SDK has already refused a wider request, and
-        a grant is never narrowed piecemeal."""
+        a grant is never narrowed piecemeal.
+
+        A revoked token presented again revokes the whole login, since a
+        thief and the real client now hold the same family; except within
+        ``REFRESH_REUSE_WINDOW`` of its rotation, where it is far likelier the
+        client retrying a refresh whose response it lost, or a second process
+        sharing its credentials. That retry gets ``invalid_grant`` and the
+        login lives on: only hashes are stored, so the successor can't be
+        handed back.
+        """
         row = refresh_token.row
         async with db.async_session_factory() as session:
-            await purge_dead_rows(session)  # first, as for a code
             if row.revoked_at is None:
                 tokens = await rotate_refresh_token(session, row)
                 if tokens is not None:
                     return tokens
-            # Revoked, or revoked by a concurrent refresh since it loaded: a reuse.
-            await revoke_family(session, row.family_id)
+                # Revoked since it loaded: by a concurrent refresh, or with its login.
+                row = await find_refresh_token(session, refresh_token.token)
+            if rotated_moments_ago(row):
+                # WARNING, not INFO: INFO never reaches the container log (see
+                # features/usage/stats.py configure_usage_logging).
+                logger.warning(
+                    "oauth refresh retry within the reuse window: "
+                    "family=%s client=%s user=%s",
+                    row.family_id,
+                    row.client_id,
+                    row.user_id,
+                )
+                raise TokenError("invalid_grant", "refresh token was just rotated")
+            revoked = await revoke_family(session, row.family_id)
+        if revoked:
+            logger.warning(
+                "oauth refresh reuse: family=%s client=%s user=%s revoked=%d",
+                row.family_id,
+                row.client_id,
+                row.user_id,
+                revoked,
+            )
         raise TokenError("invalid_grant", "refresh token was already used")
 
     async def revoke_token(self, token: StoredRefreshToken) -> None:
@@ -256,7 +297,7 @@ def oauth_routes(provider: HexgateOAuthProvider) -> list[Route]:
     takes GET only (no HEAD), so the consent POST can have that path. Token and
     revocation carry no allow-any-origin CORS wrapper, so the app's
     ``CORSMiddleware`` alone decides which origins may call them; both answer
-    401 ``unauthorized_client`` for a ``client_id`` whose document doesn't load.
+    401 for a ``client_id`` whose document doesn't load.
     """
     settings = get_settings()
     (authorize,) = [
@@ -300,10 +341,10 @@ def _revocation_endpoint(
         try:
             client = await authenticator.authenticate_request(request)
         except AuthenticationError as exc:
-            return PydanticJSONResponse(
-                RevocationErrorResponse(
-                    error="unauthorized_client", error_description=exc.message
-                ),
+            # invalid_client, as RFC 6749 section 5.2 says; the MCP SDK's /token
+            # answers unauthorized_client for the same failure.
+            return JSONResponse(
+                {"error": "invalid_client", "error_description": exc.message},
                 status_code=401,
             )
         token = (await request.form()).get("token")
