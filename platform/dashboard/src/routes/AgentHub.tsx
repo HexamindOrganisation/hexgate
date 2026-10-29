@@ -154,7 +154,7 @@ export function AgentHub() {
       <AgentOverview
         agent={agent}
         activity={activity}
-        activityMissing={!summary.data}
+        activityError={summary.isError && !summary.data}
         subgraph={subgraph}
         graphLoading={graphQuery.isLoading}
         graphError={graphQuery.isError && !graph404}
@@ -183,21 +183,22 @@ function Breadcrumb({ name }: { name: string }) {
 function AgentOverview({
   agent,
   activity,
-  activityMissing,
+  activityError,
   subgraph,
   graphLoading,
   graphError,
 }: {
   agent: AgentManifestView;
   activity: Activity | null;
-  /** No 24h data (loading or errored) — show "—", not a fake 0. */
-  activityMissing: boolean;
+  /** The 24h summary failed (vs still loading) — surface it, don't fake 0s. */
+  activityError: boolean;
   subgraph: PolicyGraph | null;
   graphLoading: boolean;
   graphError: boolean;
 }) {
+  const missing = activity === null;
   const num = (n: number | undefined) =>
-    activityMissing ? "—" : (n ?? 0).toLocaleString();
+    missing ? "—" : (n ?? 0).toLocaleString();
   const tools = agent.manifest?.tools?.length ?? 0;
   const skills = agent.manifest?.skills?.length ?? 0;
   const kpis: { label: string; value: string; className?: string }[] = [
@@ -210,14 +211,29 @@ function AgentOverview({
     },
     { label: "Resources", value: `${tools + skills}` },
   ];
-  // Counts come from the graph (policy-resolved), so the caption agrees with
-  // what's drawn — not the raw manifest, which policy may deny or extend.
-  const reachedTools =
-    subgraph?.nodes.filter((n) => n.kind === "tool" || n.kind === "mcp")
-      .length ?? 0;
-  const reachedAgents =
-    subgraph?.nodes.filter((n) => n.kind === "agent" && n.label !== agent.name)
-      .length ?? 0;
+
+  // Caption counts come from the agent's OWN outbound edges in the graph, so
+  // "can reach" never includes a caller that reaches into it, and MCP servers
+  // aren't mislabelled as tools.
+  const kindById = new Map(subgraph?.nodes.map((n) => [n.id, n.kind]) ?? []);
+  const selfId = subgraph?.nodes.find(
+    (n) => n.kind === "agent" && n.label === agent.name,
+  )?.id;
+  const out = selfId
+    ? (subgraph?.edges.filter((e) => e.source === selfId) ?? [])
+    : [];
+  const reached = (kind: string) =>
+    new Set(
+      out.filter((e) => kindById.get(e.target) === kind).map((e) => e.target),
+    ).size;
+  const caption = [
+    reached("tool") && pluralise(reached("tool"), "tool"),
+    reached("mcp") && pluralise(reached("mcp"), "server"),
+    reached("agent") && pluralise(reached("agent"), "agent"),
+  ]
+    .filter(Boolean)
+    .join(", ");
+
   const hasGraph = !graphLoading && !!subgraph && subgraph.nodes.length > 1;
   return (
     <Card className="overflow-hidden p-0">
@@ -236,12 +252,14 @@ function AgentOverview({
           </div>
         ))}
       </div>
+      {activityError && (
+        <div className="border-b border-border px-4 py-2 text-meta text-deny">
+          Couldn't load the last 24 hours of activity.
+        </div>
+      )}
       <div className="px-4 py-2.5 text-meta text-muted-foreground">
         What <span className="font-mono text-foreground">{agent.name}</span> can
-        reach{hasGraph && ` — ${pluralise(reachedTools, "tool")}`}
-        {hasGraph &&
-          reachedAgents > 0 &&
-          `, ${pluralise(reachedAgents, "agent")}`}
+        reach{hasGraph && caption && ` — ${caption}`}
       </div>
       {graphLoading ? (
         <Placeholder>Loading graph…</Placeholder>
