@@ -95,7 +95,17 @@ export function BreakdownCardShell<
   collapseAt?: number;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const collapsed = collapseAt != null && !expanded && rows.length > collapseAt;
+  // Reset expansion when the dimension changes (the row set changes), so a
+  // long list expanded under one tab doesn't leak — uncollapsible — into a
+  // short one. A metric change only re-sorts the same rows, so it's kept.
+  const stateKey = dim;
+  const [prevKey, setPrevKey] = useState(stateKey);
+  if (stateKey !== prevKey) {
+    setPrevKey(stateKey);
+    setExpanded(false);
+  }
+  const overflowing = collapseAt != null && rows.length > collapseAt;
+  const collapsed = overflowing && !expanded;
   const shown = collapsed ? rows.slice(0, collapseAt) : rows;
   const hidden = rows.length - (collapseAt ?? rows.length);
   return (
@@ -127,7 +137,7 @@ export function BreakdownCardShell<
         </Select>
       </div>
       <div
-        className={`grid flex-1 gap-x-8 ${columns === 2 ? "grid-cols-2" : "grid-cols-1 content-start"} ${expanded ? "max-h-72 overflow-y-auto scrollbar-thin" : ""}`}
+        className={`grid flex-1 gap-x-8 ${columns === 2 ? "grid-cols-2" : "grid-cols-1 content-start"} ${overflowing && expanded ? "max-h-72 overflow-y-auto scrollbar-thin" : ""}`}
       >
         {rows.length ? (
           shown.map((row) => {
@@ -148,7 +158,7 @@ export function BreakdownCardShell<
       </div>
       <div className="mt-1 flex gap-3.5 border-t border-border pt-3 text-[11px] text-muted-foreground">
         {legend}
-        {collapseAt != null && rows.length > collapseAt && (
+        {overflowing && (
           <button
             type="button"
             onClick={() => setExpanded((e) => !e)}
@@ -157,11 +167,7 @@ export function BreakdownCardShell<
             {expanded ? "Show fewer" : `Show all ${rows.length} · +${hidden}`}
           </button>
         )}
-        <span
-          className={
-            collapseAt != null && rows.length > collapseAt ? "" : "ml-auto"
-          }
-        >
+        <span className={overflowing ? "" : "ml-auto"}>
           click a bar to filter →
         </span>
       </div>
