@@ -20,14 +20,16 @@ export function agentSubgraph(
     keep.add(e.source);
     keep.add(e.target);
   }
-  // Reached sub-agents keep their own outgoing edges, so they aren't drawn as
-  // dead-end leaves — you see what the agents this one hands off to can touch.
-  const subAgents = graph.nodes.filter(
-    (n) => n.kind === "agent" && n.id !== node.id && keep.has(n.id),
-  );
-  for (const sub of subAgents) {
+  // Agents THIS one reaches (its outbound reach targets) keep their own
+  // outgoing edges, so you see what a handoff can touch — but a caller that
+  // reaches INTO this agent does not drag its own tools in.
+  const kindById = new Map(graph.nodes.map((n) => [n.id, n.kind]));
+  const reaches = [...edges]
+    .filter((e) => e.source === node.id && kindById.get(e.target) === "agent")
+    .map((e) => e.target);
+  for (const sub of reaches) {
     for (const e of graph.edges) {
-      if (e.source === sub.id) {
+      if (e.source === sub) {
         edges.add(e);
         keep.add(e.target);
       }
