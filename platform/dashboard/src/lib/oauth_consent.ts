@@ -20,11 +20,16 @@ export function isConsentPath(path: string): boolean {
   return matchPath(CONSENT_PATH, path.split("?")[0]) !== null;
 }
 
-/** Remember ``path`` before leaving for Google; anything but the consent
- * page is ignored, so the restore can never send the user elsewhere. */
+/** Called as each sign-in starts, with where it returns to: the consent
+ * page is remembered, anything else clears the stash, so an abandoned
+ * Google sign-in can't take over a later one. Never stores another page,
+ * so the restore can never send the user elsewhere. */
 export function stashConsentReturn(path: string | undefined): void {
-  if (path && isConsentPath(path))
+  if (path && isConsentPath(path)) {
     withStorage((s) => s.setItem(RETURN_KEY, path));
+  } else {
+    clearConsentReturn();
+  }
 }
 
 /** Read on every signed-in render of every page: it must never throw. */
@@ -64,9 +69,12 @@ export function redirectUri(search: string): string {
 export function denyRedirect(search: string): string {
   const params = new URLSearchParams(search);
   const url = new URL(params.get("redirect_uri") ?? "");
-  url.searchParams.set("error", "access_denied");
+  const added = new URLSearchParams({ error: "access_denied" });
   const state = params.get("state");
-  if (state !== null) url.searchParams.set("state", state);
+  if (state !== null) added.set("state", state);
+  // Appended, so the client's own parameters are kept as they are, not
+  // re-serialised (URL still normalises host and percent-encoding).
+  url.search = (url.search ? `${url.search}&` : "?") + added.toString();
   return url.toString();
 }
 

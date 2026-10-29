@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   useMutation,
   useQuery,
+  useQueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
@@ -16,7 +17,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { oauthApi, type ConsentInfo } from "@/lib/api";
+import { oauthApi, UnauthenticatedError, type ConsentInfo } from "@/lib/api";
+import { USER_QUERY_KEY } from "@/lib/auth";
 import {
   denyRedirect,
   hasRepeatedParams,
@@ -40,6 +42,7 @@ export function OAuthConsentPage() {
     // A refused request stays refused: show the error at once.
     retry: false,
   });
+  useSignInAgainOn(info.error);
   const problem = blockingProblem(info, search);
 
   return (
@@ -73,6 +76,18 @@ export function OAuthConsentPage() {
   );
 }
 
+/** A session lost while the page is open: forget the cached user, so
+ * ProtectedRoute sends them to sign in with this page's full address (the
+ * MCP client's request) and back here. */
+function useSignInAgainOn(error: Error | null) {
+  const qc = useQueryClient();
+  useEffect(() => {
+    if (error instanceof UnauthenticatedError) {
+      qc.setQueryData(USER_QUERY_KEY, null);
+    }
+  }, [error, qc]);
+}
+
 /** Why the page offers neither Approve nor Deny, or null: an unchecked
  * request (its redirect_uri may be anything), a link whose parameters the
  * page and server could read differently, or a redirect it will not open. */
@@ -80,6 +95,8 @@ function blockingProblem(
   info: UseQueryResult<ConsentInfo>,
   search: string,
 ): string | null {
+  // A lost session: useSignInAgainOn is already sending them to sign in.
+  if (info.error instanceof UnauthenticatedError) return null;
   if (info.isError) {
     return `Could not check this authorization request: ${info.error.message}`;
   }
@@ -99,6 +116,7 @@ function ConsentForm({ info, search }: { info: ConsentInfo; search: string }) {
     mutationFn: () => oauthApi.consent(search, [...ticked]),
     onSuccess: ({ redirect_to }) => leaveFor(redirect_to),
   });
+  useSignInAgainOn(approve.error);
 
   function toggle(id: string) {
     setTicked((prev) => {
@@ -151,15 +169,17 @@ function ConsentForm({ info, search }: { info: ConsentInfo; search: string }) {
             </ul>
           )}
         </section>
-        {approve.isError && (
-          <Alert variant="destructive">
-            <AlertDescription>{approve.error.message}</AlertDescription>
-          </Alert>
-        )}
+        {approve.isError &&
+          !(approve.error instanceof UnauthenticatedError) && (
+            <Alert variant="destructive">
+              <AlertDescription>{approve.error.message}</AlertDescription>
+            </Alert>
+          )}
       </CardContent>
       <CardFooter className="justify-end gap-2">
         <Button
           variant="outline"
+          disabled={approve.isPending || approve.isSuccess}
           onClick={() => leaveFor(denyRedirect(search))}
         >
           Deny

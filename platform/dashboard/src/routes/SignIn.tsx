@@ -23,6 +23,7 @@ import {
   useLogin,
   useUser,
 } from "@/lib/auth";
+import { clearConsentReturn } from "@/lib/oauth_consent";
 
 const SignInSchema = z.object({
   email: z.string().email("Enter a valid email"),
@@ -57,6 +58,9 @@ export function SignInPage() {
   }
 
   async function onSubmit(values: SignInValues) {
+    // A password sign-in returns through router state; a stash an abandoned
+    // Google sign-in left must not take over.
+    clearConsentReturn();
     try {
       await login.mutateAsync(values);
       navigate(from ?? "/", { replace: true });

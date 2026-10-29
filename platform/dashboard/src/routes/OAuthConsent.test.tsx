@@ -7,8 +7,10 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes } from "react-router-dom";
+import { QueryClient } from "@tanstack/react-query";
 
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { USER_QUERY_KEY } from "@/lib/auth";
 import {
   leaveFor,
   pendingConsentReturn,
@@ -83,7 +85,7 @@ function expectNoChoice() {
 }
 
 /** The app's routes this flow crosses, each behind ProtectedRoute as in App. */
-function renderApp(route: string) {
+function renderApp(route: string, client?: QueryClient) {
   const guarded = (page: React.ReactNode) => (
     <ProtectedRoute>{page}</ProtectedRoute>
   );
@@ -93,7 +95,7 @@ function renderApp(route: string) {
       <Route path="/oauth/consent" element={guarded(<OAuthConsentPage />)} />
       <Route path="/agents" element={guarded(<p>agents page</p>)} />
     </Routes>,
-    { initialRoute: route },
+    { initialRoute: route, client },
   );
 }
 
@@ -155,6 +157,37 @@ describe("OAuthConsentPage", () => {
     ]);
   });
 
+  it("sends a user whose session lapsed before Approve to sign in", async () => {
+    let expired = false;
+    stubFetch({
+      "GET /v1/users/me": () => (expired ? json({}, 401) : json(ME)),
+      "GET /v1/oauth/consent-info": () => json(INFO),
+      "HEAD /v1/auth/google/authorize": () => json({}, 404),
+      "POST /v1/oauth/authorize": () => {
+        expired = true;
+        return json({ detail: "Unauthorized" }, 401);
+      },
+    });
+    renderApp(`/oauth/consent${QUERY}`);
+    await userEvent.click(await screen.findByLabelText(/Search/));
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    expect(await screen.findByLabelText("Email")).toBeInTheDocument();
+  });
+
+  it("disables Deny while Approve is in flight", async () => {
+    stubFetch({
+      ...SIGNED_IN,
+      "POST /v1/oauth/authorize": () =>
+        new Promise<Response>(() => {}) as never,
+    });
+    renderApp(`/oauth/consent${QUERY}`);
+    await userEvent.click(await screen.findByLabelText(/Search/));
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
+  });
+
   it("sends access_denied and the state to the redirect_uri on Deny", async () => {
     stubFetch();
     renderApp(`/oauth/consent${QUERY}`);
@@ -205,6 +238,34 @@ describe("OAuthConsentPage", () => {
 });
 
 describe("sign-in round trip", () => {
+  it("signs a user whose session lapsed back in with the full query", async () => {
+    let expired = true;
+    const fetchSpy = stubFetch({
+      "GET /v1/users/me": () => (expired ? json({}, 401) : json(ME)),
+      "GET /v1/oauth/consent-info": () =>
+        expired ? json({ detail: "Unauthorized" }, 401) : json(INFO),
+      "HEAD /v1/auth/google/authorize": () => json({}, 404),
+      "POST /v1/auth/cookie/login": () => {
+        expired = false;
+        return new Response(null, { status: 204 });
+      },
+    });
+    // The page was open while the cookie expired: useUser's cache says
+    // signed in, consent-info says 401.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    client.setQueryData(USER_QUERY_KEY, ME);
+    renderApp(`/oauth/consent${QUERY}`, client);
+
+    await userEvent.type(await screen.findByLabelText("Email"), ME.email);
+    await userEvent.type(screen.getByLabelText("Password"), "pw");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect(await screen.findByText("Claude Code")).toBeInTheDocument();
+    expectQueryChecked(fetchSpy);
+  });
+
   it("keeps a fresh consent request over a stale stashed one", async () => {
     stashConsentReturn("/oauth/consent?state=old");
     const fetchSpy = stubFetch();

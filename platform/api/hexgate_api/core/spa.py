@@ -152,5 +152,7 @@ def mount_spa(app: FastAPI) -> None:
             and candidate.is_file()
             and candidate.is_relative_to(dist_resolved)
         ):
-            return FileResponse(candidate)
+            # /index.html asked for by name is a page too.
+            page = candidate.suffix == ".html"
+            return FileResponse(candidate, headers=_PAGE_HEADERS if page else None)
         return FileResponse(dist / "index.html", headers=_PAGE_HEADERS)

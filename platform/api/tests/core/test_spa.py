@@ -69,7 +69,7 @@ def test_when_page_then_framing_refused_and_referrer_same_origin_only(
     tmp_path, monkeypatch
 ) -> None:
     client = TestClient(_with_build(tmp_path, monkeypatch))
-    for path in ("/", "/oauth/consent?client_id=x&state=s"):
+    for path in ("/", "/index.html", "/oauth/consent?client_id=x&state=s"):
         resp = client.get(path)
         assert resp.status_code == 200
         assert resp.headers["x-frame-options"] == "DENY"

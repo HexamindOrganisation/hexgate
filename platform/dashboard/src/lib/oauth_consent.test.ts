@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 
 import {
   clearConsentReturn,
+  denyRedirect,
   isConsentPath,
   isLeavableUrl,
   leaveFor,
@@ -30,6 +31,19 @@ it("never stashes or restores anything but the consent page", () => {
     "https://evil.example",
   );
   expect(pendingConsentReturn()).toBeNull();
+});
+
+it("lets a sign-in elsewhere clear a stash an abandoned one left", () => {
+  stashConsentReturn("/oauth/consent?state=old");
+  stashConsentReturn("/policies");
+  expect(pendingConsentReturn()).toBeNull();
+});
+
+it("appends the denial, leaving the client's own query as registered", () => {
+  const search = `?redirect_uri=${encodeURIComponent("https://app.example/cb?flag&x=a%20b")}&state=s`;
+  expect(denyRedirect(search)).toBe(
+    "https://app.example/cb?flag&x=a%20b&error=access_denied&state=s",
+  );
 });
 
 it("treats blocked storage as nothing stashed", () => {
