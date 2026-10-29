@@ -45,7 +45,12 @@ const MANIFEST = {
   updated_at: "2026-06-01T10:00:00Z",
 };
 
-function stubFetch(role: string, manifestError = false, summaryError = false) {
+function stubFetch(
+  role: string,
+  manifestError = false,
+  summaryError = false,
+  noAgentInGraph = false,
+) {
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), {
       status: 200,
@@ -89,6 +94,12 @@ function stubFetch(role: string, manifestError = false, summaryError = false) {
             aliased_default: null,
           });
         case `/v1/projects/${PROJECT}/policy/graph`:
+          if (noAgentInGraph)
+            return json({
+              roles: [],
+              nodes: [{ id: "agent:other", kind: "agent", label: "other" }],
+              edges: [],
+            });
           return json({
             roles: ["support", "guest"],
             nodes: [
@@ -146,8 +157,9 @@ function renderHub(
   role = "admin",
   manifestError = false,
   summaryError = false,
+  noAgentInGraph = false,
 ) {
-  stubFetch(role, manifestError, summaryError);
+  stubFetch(role, manifestError, summaryError, noAgentInGraph);
   return renderWithProviders(
     <Routes>
       <Route path="/agents/:name" element={<AgentHub />} />
@@ -194,6 +206,13 @@ describe("AgentHub", () => {
     ).toBeInTheDocument();
     // Calls / Denied / Approvals all unknown (not fake zeros).
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("says the agent has nothing mapped when it isn't in the graph", async () => {
+    renderHub("support_bot", "admin", false, false, true);
+    expect(
+      await screen.findByText(/No roles, tools or reach mapped/),
+    ).toBeInTheDocument();
   });
 
   it("shows how each role treats the agent's tools (engine matrix)", async () => {

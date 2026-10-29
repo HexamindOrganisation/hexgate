@@ -52,14 +52,18 @@ export function AgentHub() {
 
   // 24h activity — shares Home's cache entry.
   const summary = useAuditSummary24h(scope.projectId, { poll: true });
-  const activity: Activity | null =
-    agent && summary.data
-      ? (summary.data.by_agent.find((r) => r.key === agent.name) ?? {
-          all: 0,
-          deny: 0,
-          needs_approval: 0,
-        })
-      : null;
+  const summaryData = summary.data;
+  const activity: Activity | null = useMemo(
+    () =>
+      agent && summaryData
+        ? (summaryData.by_agent.find((r) => r.key === agent.name) ?? {
+            all: 0,
+            deny: 0,
+            needs_approval: 0,
+          })
+        : null,
+    [agent, summaryData],
+  );
 
   // Roles x tools for this agent, as the engine tabulates them. Only projects
   // with a policy.yaml compose; others have no matrix.
@@ -271,7 +275,7 @@ function AgentOverview({
         <Placeholder>Couldn't load the graph. Refresh to retry.</Placeholder>
       ) : agent.manifest === null ? (
         <Placeholder>Register the agent to see its graph.</Placeholder>
-      ) : subgraph && subgraph.nodes.length === 1 ? (
+      ) : subgraph && subgraph.nodes.length <= 1 ? (
         <Placeholder>
           No roles, tools or reach mapped to this agent yet.
         </Placeholder>
