@@ -184,7 +184,7 @@ export function BreakdownCard({
     let d = source.map(toDatum);
     if (sort === "denials")
       d = d.slice().sort((a, b) => b.deny - a.deny || b.total - a.total);
-    return d.slice(0, 10);
+    return d;
   }, [source, sort]);
   const max = Math.max(...data.map((d) => d.total), 1);
   const fkey = dim;
@@ -201,6 +201,7 @@ export function BreakdownCard({
       ]}
       onMetricChange={setSort}
       columns={1}
+      collapseAt={10}
       emptyMessage="No decisions match."
       legend={
         <>
