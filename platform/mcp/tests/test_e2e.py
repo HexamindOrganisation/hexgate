@@ -438,10 +438,6 @@ async def test_when_a_member_saves_then_the_api_refuses(stack: Stack, org: Org) 
     assert "admin or owner role required" in text(saved)
 
 
-@pytest.mark.skip(
-    reason="needs the refresh_token grant and /v1/oauth/revoke, which land with "
-    "the OAuth refresh branch (vl/feat/oauth_refresh); un-skip once it merges"
-)
 async def test_when_refreshed_then_revoked_then_the_next_refresh_fails(
     stack: Stack, org: Org
 ) -> None:
