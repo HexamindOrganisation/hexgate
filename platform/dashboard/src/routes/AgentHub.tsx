@@ -3,14 +3,20 @@ import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Ban, ChevronRight, ScrollText, ShieldCheck } from "lucide-react";
 
-import { api, type AgentManifestView } from "@/lib/api";
-import { usePolicyFiles, usePolicyMatrix } from "@/lib/policy_files";
+import { api, type AgentManifestView, type PolicyGraph } from "@/lib/api";
+import {
+  usePolicyFiles,
+  usePolicyGraph,
+  usePolicyMatrix,
+} from "@/lib/policy_files";
 import { ENTRY_FILE } from "@/lib/file_tree";
 import { useProjectScoped } from "@/lib/active";
 import { useCanManageBans } from "@/lib/bans";
 import { useAuditSummary24h } from "@/lib/audit-summary";
 import { auditUrl } from "@/lib/audit-filters";
-import { formatDate } from "@/lib/format";
+import { agentSubgraph } from "@/lib/agent-graph";
+import { formatDate, pluralise } from "@/lib/format";
+import { PolicyFlow } from "@/components/policy_files/PolicyGraphDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -78,6 +84,15 @@ export function AgentHub() {
       });
   }, [matrix]);
 
+  // The agent's local graph (its roles, tools and reached agents), filtered
+  // from the project graph — no backend change. Classic projects 404 (no
+  // graph), handled by the placeholder below.
+  const graph = usePolicyGraph(scope.projectId, undefined, !!agent).data;
+  const subgraph = useMemo(
+    () => (graph && agent ? agentSubgraph(graph, agent.name) : null),
+    [graph, agent],
+  );
+
   const canManageBans = useCanManageBans();
 
   if (scope.status === "no-project") {
@@ -125,12 +140,8 @@ export function AgentHub() {
   return (
     <div className="mx-auto max-w-[960px] space-y-4">
       <Breadcrumb name={agent.name} />
-      <AgentHeader
-        agent={agent}
-        activity={activity}
-        activityError={summary.isError && !summary.data}
-        canManageBans={canManageBans}
-      />
+      <AgentHeader agent={agent} canManageBans={canManageBans} />
+      <AgentOverview agent={agent} activity={activity} subgraph={subgraph} />
       <ManifestView agent={agent} roleModes={roleModes} />
     </div>
   );
@@ -151,19 +162,81 @@ function Breadcrumb({ name }: { name: string }) {
   );
 }
 
+/** Overview: the agent's graph as the centrepiece, with a KPI strip. */
+function AgentOverview({
+  agent,
+  activity,
+  subgraph,
+}: {
+  agent: AgentManifestView;
+  activity: Activity | null;
+  subgraph: PolicyGraph | null;
+}) {
+  const tools = agent.manifest?.tools?.length ?? 0;
+  const skills = agent.manifest?.skills?.length ?? 0;
+  const kpis: { label: string; value: string; className?: string }[] = [
+    { label: "Calls · 24h", value: (activity?.all ?? 0).toLocaleString() },
+    {
+      label: "Denied",
+      value: (activity?.deny ?? 0).toLocaleString(),
+      className: "text-deny",
+    },
+    {
+      label: "Approvals",
+      value: (activity?.needs_approval ?? 0).toLocaleString(),
+      className: "text-approval",
+    },
+    { label: "Resources", value: `${tools + skills}` },
+  ];
+  const hasGraph = !!subgraph && subgraph.nodes.length > 1;
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="grid grid-cols-2 gap-px border-b border-border bg-border sm:grid-cols-4">
+        {kpis.map((k) => (
+          <div key={k.label} className="bg-card px-4 py-3">
+            <div className="text-meta text-muted-foreground">{k.label}</div>
+            <div
+              className={cn(
+                "mt-0.5 text-[20px] font-semibold tabular-nums",
+                k.className,
+              )}
+            >
+              {k.value}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center justify-between px-4 py-2.5 text-meta text-muted-foreground">
+        <span>
+          What <span className="font-mono text-foreground">{agent.name}</span>{" "}
+          can reach — {pluralise(tools, "tool")}
+          {skills > 0 && `, ${pluralise(skills, "skill")}`}
+        </span>
+      </div>
+      {hasGraph ? (
+        <div className="h-[420px] border-t border-border">
+          <PolicyFlow graph={subgraph} />
+        </div>
+      ) : (
+        <div className="grid h-40 place-items-center border-t border-border px-6 text-center text-meta text-muted-foreground">
+          {agent.manifest === null
+            ? "Register the agent to see its graph."
+            : "No policy graph — add a policy.yaml to map roles, tools and reach."}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 /* NOTE: AgentHeader and the roleModes memo mirror Agents.tsx on purpose, for
    now — H1b makes /agents list-only (dropping its inline card) and H2 replaces
    this header with the graph-hero Overview, so a shared extraction here would
    be reworked immediately. Kept parallel until then. */
 function AgentHeader({
   agent,
-  activity,
-  activityError,
   canManageBans,
 }: {
   agent: AgentManifestView;
-  activity: Activity | null;
-  activityError: boolean;
   canManageBans: boolean;
 }) {
   return (
@@ -232,43 +305,6 @@ function AgentHeader({
           )}
         </div>
       </div>
-      {activityError ? (
-        <p className="mt-4 border-t border-border/60 pt-4 text-meta text-muted-foreground">
-          Couldn't load the last 24 hours of activity.
-        </p>
-      ) : (
-        activity && (
-          <div className="mt-4 grid grid-cols-3 border-t border-border/60 pt-4 text-meta">
-            {(
-              [
-                { label: "Calls · 24h", value: activity.all, className: "" },
-                {
-                  label: "Denied",
-                  value: activity.deny,
-                  className: "text-deny",
-                },
-                {
-                  label: "Sent for approval",
-                  value: activity.needs_approval,
-                  className: "text-approval",
-                },
-              ] satisfies { label: string; value: number; className: string }[]
-            ).map((stat) => (
-              <div key={stat.label}>
-                <div className="text-muted-foreground">{stat.label}</div>
-                <div
-                  className={cn(
-                    "mt-1 text-[20px] font-semibold tabular-nums",
-                    stat.className,
-                  )}
-                >
-                  {stat.value.toLocaleString()}
-                </div>
-              </div>
-            ))}
-          </div>
-        )
-      )}
     </Card>
   );
 }
