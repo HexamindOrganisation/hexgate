@@ -186,7 +186,7 @@ export function BreakdownCard({
       d = d.slice().sort((a, b) => b.deny - a.deny || b.total - a.total);
     return d;
   }, [source, sort]);
-  const max = Math.max(...data.map((d) => d.total), 1);
+  const max = data.reduce((m, d) => Math.max(m, d.total), 1);
   const fkey = dim;
 
   return (
