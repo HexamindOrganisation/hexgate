@@ -27,9 +27,6 @@ export function formatAbsolute(iso: string): string {
 
 /** Human date-time for timestamps; echoes the raw string if it won't parse. */
 export function formatDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
