@@ -254,7 +254,7 @@ function AgentOverview({
         <Placeholder>Couldn't load the graph. Refresh to retry.</Placeholder>
       ) : agent.manifest === null ? (
         <Placeholder>Register the agent to see its graph.</Placeholder>
-      ) : subgraph && subgraph.nodes.length === 1 ? (
+      ) : subgraph && subgraph.nodes.length <= 1 ? (
         <Placeholder>
           No roles, tools or reach mapped to this agent yet.
         </Placeholder>
