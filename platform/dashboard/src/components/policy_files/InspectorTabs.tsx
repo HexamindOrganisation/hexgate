@@ -456,7 +456,7 @@ function ViewSwitch({
 /** Tools x roles, as the engine tabulates them (server-side
  * `hexgate.security.matrix`), so a cell never reads a grant the engine won't
  * enforce: reserved keys deny when unlisted, role-wide constraints count. */
-function ResolvedGrid({
+export function ResolvedGrid({
   matrix,
   onPick,
 }: {
