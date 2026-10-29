@@ -1,6 +1,12 @@
 import { Route } from "react-router-dom";
 
-import { AgentHub, AgentOverviewTab, AgentResourcesTab } from "./AgentHub";
+import {
+  AgentDecisionsTab,
+  AgentHub,
+  AgentOverviewTab,
+  AgentPoliciesTab,
+  AgentResourcesTab,
+} from "./AgentHub";
 
 /** The hub and its tabs, mounted by App and the hub tests alike. */
 export function agentHubRoute() {
@@ -8,6 +14,8 @@ export function agentHubRoute() {
     <Route path="agents/:name" element={<AgentHub />}>
       <Route index element={<AgentOverviewTab />} />
       <Route path="resources" element={<AgentResourcesTab />} />
+      <Route path="policies" element={<AgentPoliciesTab />} />
+      <Route path="decisions" element={<AgentDecisionsTab />} />
     </Route>
   );
 }
