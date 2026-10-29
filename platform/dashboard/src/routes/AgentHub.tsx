@@ -3,7 +3,12 @@ import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Ban, ChevronRight, ScrollText, ShieldCheck } from "lucide-react";
 
-import { api, type AgentManifestView, type PolicyGraph } from "@/lib/api";
+import {
+  ApiError,
+  api,
+  type AgentManifestView,
+  type PolicyGraph,
+} from "@/lib/api";
 import {
   usePolicyFiles,
   usePolicyGraph,
@@ -87,7 +92,12 @@ export function AgentHub() {
   // The agent's local graph (its roles, tools and reached agents), filtered
   // from the project graph — no backend change. Classic projects 404 (no
   // graph), handled by the placeholder below.
-  const graph = usePolicyGraph(scope.projectId, undefined, !!agent).data;
+  const graphQuery = usePolicyGraph(scope.projectId, undefined, !!agent);
+  const graph = graphQuery.data;
+  // Classic (non-compose) projects 404 the graph endpoint — that's "no graph",
+  // not a failure; anything else is a real error.
+  const graph404 =
+    graphQuery.error instanceof ApiError && graphQuery.error.status === 404;
   const subgraph = useMemo(
     () => (graph && agent ? agentSubgraph(graph, agent.name) : null),
     [graph, agent],
@@ -141,7 +151,14 @@ export function AgentHub() {
     <div className="mx-auto max-w-[960px] space-y-4">
       <Breadcrumb name={agent.name} />
       <AgentHeader agent={agent} canManageBans={canManageBans} />
-      <AgentOverview agent={agent} activity={activity} subgraph={subgraph} />
+      <AgentOverview
+        agent={agent}
+        activity={activity}
+        activityMissing={!summary.data}
+        subgraph={subgraph}
+        graphLoading={graphQuery.isLoading}
+        graphError={graphQuery.isError && !graph404}
+      />
       <ManifestView agent={agent} roleModes={roleModes} />
     </div>
   );
@@ -166,29 +183,42 @@ function Breadcrumb({ name }: { name: string }) {
 function AgentOverview({
   agent,
   activity,
+  activityMissing,
   subgraph,
+  graphLoading,
+  graphError,
 }: {
   agent: AgentManifestView;
   activity: Activity | null;
+  /** No 24h data (loading or errored) — show "—", not a fake 0. */
+  activityMissing: boolean;
   subgraph: PolicyGraph | null;
+  graphLoading: boolean;
+  graphError: boolean;
 }) {
+  const num = (n: number | undefined) =>
+    activityMissing ? "—" : (n ?? 0).toLocaleString();
   const tools = agent.manifest?.tools?.length ?? 0;
   const skills = agent.manifest?.skills?.length ?? 0;
   const kpis: { label: string; value: string; className?: string }[] = [
-    { label: "Calls · 24h", value: (activity?.all ?? 0).toLocaleString() },
-    {
-      label: "Denied",
-      value: (activity?.deny ?? 0).toLocaleString(),
-      className: "text-deny",
-    },
+    { label: "Calls · 24h", value: num(activity?.all) },
+    { label: "Denied", value: num(activity?.deny), className: "text-deny" },
     {
       label: "Approvals",
-      value: (activity?.needs_approval ?? 0).toLocaleString(),
+      value: num(activity?.needs_approval),
       className: "text-approval",
     },
     { label: "Resources", value: `${tools + skills}` },
   ];
-  const hasGraph = !!subgraph && subgraph.nodes.length > 1;
+  // Counts come from the graph (policy-resolved), so the caption agrees with
+  // what's drawn — not the raw manifest, which policy may deny or extend.
+  const reachedTools =
+    subgraph?.nodes.filter((n) => n.kind === "tool" || n.kind === "mcp")
+      .length ?? 0;
+  const reachedAgents =
+    subgraph?.nodes.filter((n) => n.kind === "agent" && n.label !== agent.name)
+      .length ?? 0;
+  const hasGraph = !graphLoading && !!subgraph && subgraph.nodes.length > 1;
   return (
     <Card className="overflow-hidden p-0">
       <div className="grid grid-cols-2 gap-px border-b border-border bg-border sm:grid-cols-4">
@@ -206,25 +236,41 @@ function AgentOverview({
           </div>
         ))}
       </div>
-      <div className="flex items-center justify-between px-4 py-2.5 text-meta text-muted-foreground">
-        <span>
-          What <span className="font-mono text-foreground">{agent.name}</span>{" "}
-          can reach — {pluralise(tools, "tool")}
-          {skills > 0 && `, ${pluralise(skills, "skill")}`}
-        </span>
+      <div className="px-4 py-2.5 text-meta text-muted-foreground">
+        What <span className="font-mono text-foreground">{agent.name}</span> can
+        reach{hasGraph && ` — ${pluralise(reachedTools, "tool")}`}
+        {hasGraph &&
+          reachedAgents > 0 &&
+          `, ${pluralise(reachedAgents, "agent")}`}
       </div>
-      {hasGraph ? (
+      {graphLoading ? (
+        <Placeholder>Loading graph…</Placeholder>
+      ) : hasGraph ? (
         <div className="h-[420px] border-t border-border">
           <PolicyFlow graph={subgraph} />
         </div>
+      ) : graphError ? (
+        <Placeholder>Couldn't load the graph. Refresh to retry.</Placeholder>
+      ) : agent.manifest === null ? (
+        <Placeholder>Register the agent to see its graph.</Placeholder>
+      ) : subgraph && subgraph.nodes.length === 1 ? (
+        <Placeholder>
+          No roles, tools or reach mapped to this agent yet.
+        </Placeholder>
       ) : (
-        <div className="grid h-40 place-items-center border-t border-border px-6 text-center text-meta text-muted-foreground">
-          {agent.manifest === null
-            ? "Register the agent to see its graph."
-            : "No policy graph — add a policy.yaml to map roles, tools and reach."}
-        </div>
+        <Placeholder>
+          No policy graph — add a policy.yaml to map roles, tools and reach.
+        </Placeholder>
       )}
     </Card>
+  );
+}
+
+function Placeholder({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="grid h-40 place-items-center border-t border-border px-6 text-center text-meta text-muted-foreground">
+      {children}
+    </div>
   );
 }
 

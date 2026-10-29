@@ -45,7 +45,7 @@ const MANIFEST = {
   updated_at: "2026-06-01T10:00:00Z",
 };
 
-function stubFetch(role: string, manifestError = false) {
+function stubFetch(role: string, manifestError = false, summaryError = false) {
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), {
       status: 200,
@@ -118,6 +118,7 @@ function stubFetch(role: string, manifestError = false) {
             ],
           });
         case `/v1/projects/${PROJECT}/audit/summary`:
+          if (summaryError) return new Response("boom", { status: 500 });
           return json({
             totals: { all: 15, allow: 10, deny: 4, needs_approval: 1 },
             by_agent: [
@@ -140,8 +141,13 @@ function stubFetch(role: string, manifestError = false) {
   );
 }
 
-function renderHub(name: string, role = "admin", manifestError = false) {
-  stubFetch(role, manifestError);
+function renderHub(
+  name: string,
+  role = "admin",
+  manifestError = false,
+  summaryError = false,
+) {
+  stubFetch(role, manifestError, summaryError);
   return renderWithProviders(
     <Routes>
       <Route path="/agents/:name" element={<AgentHub />} />
@@ -179,6 +185,13 @@ describe("AgentHub", () => {
     expect(await screen.findByTestId("agent-graph")).toHaveTextContent(
       "3 nodes",
     );
+  });
+
+  it("shows em-dashes, not fake zeros, when 24h activity fails to load", async () => {
+    renderHub("support_bot", "admin", false, true);
+    expect(await screen.findByText("Calls · 24h")).toBeInTheDocument();
+    // Calls / Denied / Approvals all unknown.
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(3);
   });
 
   it("shows how each role treats the agent's tools (engine matrix)", async () => {
