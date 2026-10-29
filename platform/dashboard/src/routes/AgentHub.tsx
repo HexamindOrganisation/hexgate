@@ -161,7 +161,12 @@ export function AgentHub() {
     <div className="mx-auto max-w-[960px] space-y-4">
       <Breadcrumb name={agent.name} />
       <AgentHeader agent={agent} canManageBans={canManageBans} />
-      <HubTabs resources={agent.manifest?.tools?.length ?? 0} />
+      <HubTabs
+        resources={
+          (agent.manifest?.tools?.length ?? 0) +
+          (agent.manifest?.skills?.length ?? 0)
+        }
+      />
       <Outlet
         context={
           {
