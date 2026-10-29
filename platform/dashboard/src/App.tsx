@@ -5,8 +5,10 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AcceptInvitationPage } from "@/routes/AcceptInvitation";
 import { AgentsPage } from "@/routes/Agents";
 import {
+  AgentDecisionsTab,
   AgentHub,
   AgentOverviewTab,
+  AgentPoliciesTab,
   AgentResourcesTab,
 } from "@/routes/AgentHub";
 import { AiActPage } from "@/routes/AiAct";
@@ -68,6 +70,8 @@ export default function App() {
           <Route path="agents/:name" element={<AgentHub />}>
             <Route index element={<AgentOverviewTab />} />
             <Route path="resources" element={<AgentResourcesTab />} />
+            <Route path="policies" element={<AgentPoliciesTab />} />
+            <Route path="decisions" element={<AgentDecisionsTab />} />
           </Route>
           <Route path="policies" element={<PoliciesPage />} />
           <Route path="graph" element={<GraphPage />} />
