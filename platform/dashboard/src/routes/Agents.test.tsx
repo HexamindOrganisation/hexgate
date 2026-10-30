@@ -136,6 +136,44 @@ function stubFetch(role: string, manifest: unknown = MANIFEST) {
             },
             aliased_default: null,
           });
+        case `/v1/projects/${PROJECT}/policy/graph`:
+          // support_bot reaches downstream_bot and is reached by upstream_bot.
+          return json({
+            roles: [],
+            nodes: [
+              { id: "agent:support_bot", kind: "agent", label: "support_bot" },
+              {
+                id: "agent:downstream_bot",
+                kind: "agent",
+                label: "downstream_bot",
+              },
+              {
+                id: "agent:upstream_bot",
+                kind: "agent",
+                label: "upstream_bot",
+              },
+            ],
+            edges: [
+              {
+                source: "agent:support_bot",
+                target: "agent:downstream_bot",
+                kind: "call",
+                via: null,
+                verdict: "allow",
+                constraints: [],
+                roles: [],
+              },
+              {
+                source: "agent:upstream_bot",
+                target: "agent:support_bot",
+                kind: "call",
+                via: null,
+                verdict: "allow",
+                constraints: [],
+                roles: [],
+              },
+            ],
+          });
         case `/v1/projects/${PROJECT}/audit/summary`:
           return json({
             totals: { all: 15, allow: 10, deny: 4, needs_approval: 1 },
@@ -204,6 +242,17 @@ describe("AgentsPage — the agent list", () => {
     expect(within(row).getByText("calls 24h")).toBeInTheDocument();
     expect(within(row).getByText("4")).toBeInTheDocument();
     expect(within(row).getByText("denied")).toBeInTheDocument();
+  });
+
+  it("surfaces agent-to-agent delegation from the policy graph", async () => {
+    stubFetch("admin");
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    const row = await screen.findByRole("link", { name: "support_bot" });
+    // Outbound reach rides in the meta line; inbound is a "called by" chip.
+    expect(
+      await within(row).findByText(/reaches downstream_bot/),
+    ).toBeInTheDocument();
+    expect(within(row).getByText(/called by upstream_bot/)).toBeInTheDocument();
   });
 
   it("sends a legacy ?agent= deep link to the agent's hub", async () => {

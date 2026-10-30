@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PolicyGraph } from "@/lib/api";
-import { agentReachCounts, agentSubgraph } from "./agent-graph";
+import { agentReach, agentReachCounts, agentSubgraph } from "./agent-graph";
 
 const edge = (
   source: string,
@@ -188,5 +188,23 @@ describe("agentSubgraph", () => {
       edges: [edge("agent:*", "tool:refund", "call")],
     };
     expect(agentReachCounts(agentSubgraph(g, "locked")).tools).toBe(0);
+  });
+});
+
+describe("agentReach", () => {
+  it("separates outbound reach from inbound callers", () => {
+    // a reaches b and is reached by s.
+    expect(agentReach(G, "a")).toEqual({ reaches: ["b"], calledBy: ["s"] });
+    expect(agentReach(G, "b")).toEqual({ reaches: [], calledBy: ["a"] });
+    expect(agentReach(G, "s")).toEqual({ reaches: ["a"], calledBy: [] });
+  });
+
+  it("ignores tool edges — only agent↔agent counts as delegation", () => {
+    // x only calls a tool; it neither reaches nor is reached by an agent.
+    expect(agentReach(G, "x")).toEqual({ reaches: [], calledBy: [] });
+  });
+
+  it("is empty for an agent not in the graph", () => {
+    expect(agentReach(G, "ghost")).toEqual({ reaches: [], calledBy: [] });
   });
 });
