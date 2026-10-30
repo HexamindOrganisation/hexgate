@@ -39,6 +39,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from hexgate_api.core.db import get_session
 from hexgate_api.core.mailer import _redact_email, get_email_sender
 from hexgate_api.models import OAuthAccount, User
+from hexgate_api.settings import get_settings
 
 logger = logging.getLogger("hexgate.platform.auth")
 
@@ -110,11 +111,11 @@ _SESSION_TTL_SECONDS = 7 * 24 * 3600  # 7 days; rolling refresh comes later
 def _dashboard_url() -> str:
     """Base URL the verify/reset emails render their magic links against.
 
-    Env-overridable so production deployments can point at their hosted
-    dashboard while dev defaults to the Vite server on localhost:5173.
-    Trailing slash is stripped so f"{url}/path" always renders cleanly.
+    ``Settings.dashboard_url``, which production points at the hosted
+    dashboard and dev leaves at the Vite server on localhost:5173. Settings
+    strips the trailing slash, so f"{url}/path" always renders cleanly.
     """
-    return os.environ.get("HEXGATE_DASHBOARD_URL", "http://localhost:5173").rstrip("/")
+    return get_settings().dashboard_url
 
 
 def _cookie_secure() -> bool:

@@ -18,6 +18,7 @@ from hexgate.adapters._common import (
     prepare_run,
 )
 from hexgate.runtime import HexgateContext
+from hexgate.runtime.agent_usage import UsageScope
 from hexgate.security.bans import EMPTY_BAN_SET, BanGate, BanSet, ban_set_from_payload
 from hexgate.security.enforcer import UsageRefresh
 from hexgate.security.errors import AgentBannedError
@@ -26,6 +27,7 @@ from hexgate.security.errors import AgentBannedError
 # fast: run one after the other, the first party waits alone and breaks it.
 _BARRIER_TIMEOUT_S = 2.0
 _AGENT = "bot"
+_USAGE_SCOPE = UsageScope.agent(_AGENT)
 
 
 def test_propagate_kwargs_joins_roles_as_string() -> None:
@@ -230,29 +232,31 @@ class _UsageSource:
     ) -> None:
         self._barrier = barrier
         self._error = error
-        self.calls: list[tuple[str, frozenset[str]]] = []
+        self.calls: list[tuple[UsageScope, frozenset[str]]] = []
 
-    def refresh(self, agent: str, paths: frozenset[str]) -> None:
+    def refresh(self, scope: UsageScope, paths: frozenset[str]) -> None:
         if self._barrier is not None:
             self._barrier.wait()
         if self._error is not None:
             raise self._error
-        self.calls.append((agent, paths))
+        self.calls.append((scope, paths))
 
-    async def refresh_async(self, agent: str, paths: frozenset[str]) -> None:
-        await asyncio.to_thread(self.refresh, agent, paths)
+    async def refresh_async(self, scope: UsageScope, paths: frozenset[str]) -> None:
+        await asyncio.to_thread(self.refresh, scope, paths)
 
 
 _USAGE_PATHS = frozenset({"invocations_1h"})
 
 
 def _usage(source: _UsageSource) -> UsageRefresh:
-    return UsageRefresh(source, _AGENT, _USAGE_PATHS)  # type: ignore[arg-type]
+    return UsageRefresh(source, _USAGE_SCOPE, _USAGE_PATHS)  # type: ignore[arg-type]
 
 
 def _binding(usage: UsageRefresh) -> SimpleNamespace:
     """A binding whose enforcer wants ``usage`` before and after the refresh."""
-    return SimpleNamespace(enforcer=SimpleNamespace(usage_refresh=lambda: usage))
+    return SimpleNamespace(
+        enforcer=SimpleNamespace(usage_refreshes=lambda _context: (usage,))
+    )
 
 
 async def test_aprepare_run_without_gate_or_usage_awaits_the_refresh_directly(
@@ -284,7 +288,7 @@ async def test_aprepare_run_refreshes_usage_concurrently(with_gate: bool) -> Non
     )
 
     assert refresh.calls == 1
-    assert source.calls == [(_AGENT, _USAGE_PATHS)]
+    assert source.calls == [(_USAGE_SCOPE, _USAGE_PATHS)]
 
 
 @pytest.mark.parametrize("with_gate", [False, True])
@@ -299,7 +303,7 @@ def test_prepare_run_refreshes_usage_concurrently(with_gate: bool) -> None:
     prepare_run(refresh, gate, _context(), binding=_binding(_usage(source)))
 
     assert refresh.calls == 1
-    assert source.calls == [(_AGENT, _USAGE_PATHS)]
+    assert source.calls == [(_USAGE_SCOPE, _USAGE_PATHS)]
 
 
 async def test_a_failing_async_usage_refresh_does_not_fail_the_run(
@@ -388,8 +392,10 @@ class _SwappingBinding:
         self._usage = before
         self._after = after
 
-    def usage_refresh(self) -> UsageRefresh | None:
-        return self._usage
+    def usage_refreshes(
+        self, _context: HexgateContext | None
+    ) -> tuple[UsageRefresh, ...]:
+        return () if self._usage is None else (self._usage,)
 
     def refresh(self) -> None:
         self._usage = self._after
@@ -415,7 +421,7 @@ def _swapping(
     after: frozenset[str] | None,
 ) -> _SwappingBinding:
     def usage(paths: frozenset[str] | None) -> UsageRefresh | None:
-        return None if paths is None else UsageRefresh(source, _AGENT, paths)  # type: ignore[arg-type]
+        return None if paths is None else UsageRefresh(source, _USAGE_SCOPE, paths)  # type: ignore[arg-type]
 
     return _SwappingBinding(usage(before), usage(after))
 
@@ -456,3 +462,170 @@ def test_a_banned_run_skips_the_added_paths_refresh() -> None:
         prepare_run(binding.refresh, _banning_gate(), _context(), binding=binding)  # type: ignore[arg-type]
 
     assert source.calls == []
+
+
+# --- the context user's refresh -----------------------------------------------
+
+_USER_ID = "alice@example.com"
+_USER_SCOPE = UsageScope.user(_USER_ID)
+
+
+def _user_usage(source: _UsageSource) -> UsageRefresh:
+    return UsageRefresh(source, _USER_SCOPE, _USAGE_PATHS)  # type: ignore[arg-type]
+
+
+class _ScopedBinding:
+    """A binding whose enforcer answers ``usages`` for the run's own context only,
+    then ``after`` once the policy refresh has run."""
+
+    def __init__(
+        self,
+        context: HexgateContext,
+        usages: tuple[UsageRefresh, ...],
+        after: tuple[UsageRefresh, ...] | None = None,
+    ) -> None:
+        self.enforcer = self
+        self._context = context
+        self._usages = usages
+        self._after = usages if after is None else after
+
+    def usage_refreshes(
+        self, context: HexgateContext | None
+    ) -> tuple[UsageRefresh, ...]:
+        assert context is self._context, "the boundary must pass the run's context"
+        return self._usages
+
+    def refresh(self) -> None:
+        self._usages = self._after
+
+
+async def test_aprepare_run_refreshes_agent_and_user_concurrently() -> None:
+    barrier = _barrier(4)
+    refresh = _Refresh(barrier)
+    source = _UsageSource(barrier)
+    context = _context()
+    binding = _ScopedBinding(context, (_usage(source), _user_usage(source)))
+
+    await aprepare_run(
+        refresh.run_async(),
+        BanGate(_AGENT, _BanSource(barrier=barrier)),
+        context,
+        binding=binding,  # type: ignore[arg-type]
+    )
+
+    assert refresh.calls == 1
+    assert sorted(source.calls, key=str) == sorted(
+        [(_USAGE_SCOPE, _USAGE_PATHS), (_USER_SCOPE, _USAGE_PATHS)], key=str
+    )
+
+
+def test_prepare_run_refreshes_agent_and_user_concurrently() -> None:
+    barrier = _barrier(4)
+    refresh = _Refresh(barrier)
+    source = _UsageSource(barrier)
+    context = _context()
+    binding = _ScopedBinding(context, (_usage(source), _user_usage(source)))
+
+    prepare_run(
+        refresh,
+        BanGate(_AGENT, _BanSource(barrier=barrier)),
+        context,
+        binding=binding,  # type: ignore[arg-type]
+    )
+
+    assert refresh.calls == 1
+    assert sorted(source.calls, key=str) == sorted(
+        [(_USAGE_SCOPE, _USAGE_PATHS), (_USER_SCOPE, _USAGE_PATHS)], key=str
+    )
+
+
+async def test_aprepare_run_refreshes_a_user_without_an_agent_cap() -> None:
+    source = _UsageSource()
+    context = _context()
+    binding = _ScopedBinding(context, (_user_usage(source),))
+
+    await aprepare_run(_Refresh().run_async(), None, context, binding=binding)  # type: ignore[arg-type]
+
+    assert source.calls == [(_USER_SCOPE, _USAGE_PATHS)]
+
+
+def test_prepare_run_refreshes_a_user_without_an_agent_cap() -> None:
+    source = _UsageSource()
+    context = _context()
+    binding = _ScopedBinding(context, (_user_usage(source),))
+
+    prepare_run(_Refresh(), None, context, binding=binding)  # type: ignore[arg-type]
+
+    assert source.calls == [(_USER_SCOPE, _USAGE_PATHS)]
+
+
+def test_a_user_refresh_failure_logs_no_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    source = _UsageSource(error=RuntimeError(_USER_ID))
+    context = _context()
+    binding = _ScopedBinding(context, (_user_usage(source),))
+
+    with caplog.at_level(logging.WARNING, logger=_common.__name__):
+        prepare_run(_Refresh(), None, context, binding=binding)  # type: ignore[arg-type]
+
+    (record,) = caplog.records
+    assert record.exc_info is None
+    assert str(_USER_SCOPE) in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert _USER_ID not in caplog.text
+
+
+def test_an_agent_refresh_failure_still_logs_its_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    source = _UsageSource(error=RuntimeError("usage bug"))
+    context = _context()
+    binding = _ScopedBinding(context, (_usage(source),))
+
+    with caplog.at_level(logging.WARNING, logger=_common.__name__):
+        prepare_run(_Refresh(), None, context, binding=binding)  # type: ignore[arg-type]
+
+    (record,) = caplog.records
+    assert record.exc_info is not None
+    assert "usage bug" in caplog.text
+
+
+def test_the_paths_a_policy_refresh_adds_are_refreshed_per_scope() -> None:
+    source = _UsageSource()
+    context = _context()
+    agent = _usage(source)
+    binding = _ScopedBinding(context, (agent,), after=(agent, _user_usage(source)))
+
+    prepare_run(binding.refresh, None, context, binding=binding)  # type: ignore[arg-type]
+
+    assert source.calls == [(_USAGE_SCOPE, _USAGE_PATHS), (_USER_SCOPE, _USAGE_PATHS)]
+
+
+def _both_added(source: _UsageSource) -> _ScopedBinding:
+    return _ScopedBinding(_context(), (), after=(_usage(source), _user_usage(source)))
+
+
+async def test_aprepare_run_refreshes_the_added_scopes_concurrently() -> None:
+    source = _UsageSource(_barrier(2))
+    binding = _both_added(source)
+
+    async def refresh_policy() -> None:
+        binding.refresh()
+
+    await aprepare_run(refresh_policy(), None, binding._context, binding=binding)  # type: ignore[arg-type]
+
+    assert sorted(source.calls, key=str) == sorted(
+        [(_USAGE_SCOPE, _USAGE_PATHS), (_USER_SCOPE, _USAGE_PATHS)], key=str
+    )
+
+
+def test_prepare_run_refreshes_the_added_scopes_concurrently() -> None:
+    source = _UsageSource(_barrier(2))
+    binding = _both_added(source)
+
+    prepare_run(binding.refresh, None, binding._context, binding=binding)  # type: ignore[arg-type]
+
+    assert sorted(source.calls, key=str) == sorted(
+        [(_USAGE_SCOPE, _USAGE_PATHS), (_USER_SCOPE, _USAGE_PATHS)], key=str
+    )

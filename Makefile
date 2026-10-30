@@ -74,25 +74,25 @@ coverage-html: ## Coverage with a browsable HTML report under htmlcov/
 
 .PHONY: lint
 lint: ## Static check via ruff
-	$(UV) ruff check hexgate tests evals platform/scripts
+	$(UV) ruff check hexgate tests evals platform/scripts platform/mcp
 
 .PHONY: lint-fix
 lint-fix: ## Apply ruff autofixes
-	$(UV) ruff check --fix hexgate tests evals platform/scripts
+	$(UV) ruff check --fix hexgate tests evals platform/scripts platform/mcp
 
 .PHONY: fmt
-fmt: ## Format with ruff (SDK + evals + platform/api + platform/scripts)
-	$(UV) ruff format hexgate tests evals platform/api platform/scripts
+fmt: ## Format with ruff (SDK + evals + platform/api + platform/scripts + platform/mcp)
+	$(UV) ruff format hexgate tests evals platform/api platform/scripts platform/mcp
 
 .PHONY: fmt-check
 fmt-check: ## Check formatting without writing changes
-	$(UV) ruff format --check hexgate tests evals platform/api platform/scripts
+	$(UV) ruff format --check hexgate tests evals platform/api platform/scripts platform/mcp
 
 .PHONY: check
 check: lint fmt-check test ## Python CI parity: lint + fmt-check + test (no coverage overhead)
 
 .PHONY: check-all
-check-all: lint fmt-check coverage platform-api-check dashboard-lint dashboard-typecheck dashboard-fmt-check collector-check ## Full stack: lint + fmt + tests with coverage on all four surfaces
+check-all: lint fmt-check coverage platform-api-check dashboard-lint dashboard-typecheck dashboard-fmt-check collector-check mcp-check ## Full stack: lint + fmt + tests with coverage on all four surfaces, plus the MCP server's lint + tests
 	# Dashboard tests via the coverage script (vitest --coverage); same
 	# entry point CI uses so a green `check-all` proves the surfaces
 	# Codecov sees are the same surfaces a contributor saw locally.
@@ -102,6 +102,22 @@ check-all: lint fmt-check coverage platform-api-check dashboard-lint dashboard-t
 platform-api-check: ## Lint + test (with coverage) on the platform API
 	cd platform/api && uv run ruff check .
 	cd platform/api && uv run pytest --cov --cov-report=xml --cov-report=term tests/
+
+# -------- MCP server (platform/mcp, its own uv project) --------
+
+.PHONY: mcp-run
+mcp-run: ## Run the MCP server on :8080 against the platform API on localhost:8000
+	cd platform/mcp && uv run python -m hexgate_mcp
+
+.PHONY: mcp-test
+mcp-test: ## Run the MCP server test suite
+	cd platform/mcp && uv run pytest tests/
+
+.PHONY: mcp-check
+mcp-check: ## Lint + format check + test on the MCP server
+	cd platform/mcp && uv run ruff check .
+	cd platform/mcp && uv run ruff format --check .
+	$(MAKE) mcp-test
 
 # -------- Policy / M2 demo helpers --------
 
@@ -621,23 +637,29 @@ demo-notebook: ## Run the bundled BYOK demo locally (one process). Open http://l
 	  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 \
 	  python deploy/boot.py
 
+# A one-process platform showcase: wipe the demo's own SQLite world for a clean
+# run, then boot platform + dashboard + the notebook's live agent (boot.py).
+# $(1) = db stem under platform/api/, $(2) = the HEXGATE_NOTEBOOK value.
+define run-showcase
+	rm -f platform/api/$(1).db platform/api/$(1).db-wal platform/api/$(1).db-shm
+	PATH="$(CURDIR)/platform/api/.venv/bin:$$PATH" \
+	  DATABASE_URL="sqlite+aiosqlite:///$(CURDIR)/platform/api/$(1).db" \
+	  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 HEXGATE_SEED_AGENTS=skip \
+	  HEXGATE_NOTEBOOK="$(2)" \
+	  python deploy/boot.py
+endef
+
 .PHONY: demo-support
 demo-support: ## Run the compose support-bot showcase — platform + dashboard + live agent in one process. Open http://localhost:2718
-	rm -f platform/api/demo.db platform/api/demo.db-wal platform/api/demo.db-shm
-	PATH="$(CURDIR)/platform/api/.venv/bin:$$PATH" \
-	  DATABASE_URL="sqlite+aiosqlite:///$(CURDIR)/platform/api/demo.db" \
-	  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 HEXGATE_SEED_AGENTS=skip \
-	  HEXGATE_NOTEBOOK=deploy/compose_support_demo.py \
-	  python deploy/boot.py
+	$(call run-showcase,demo,deploy/compose_support_demo.py)
 
 .PHONY: demo-guards
 demo-guards: ## Guarded-agent platform demo (BYOK): flip a plugin on/off live. Open http://localhost:2718
-	rm -f platform/api/demo-guards.db platform/api/demo-guards.db-wal platform/api/demo-guards.db-shm
-	PATH="$(CURDIR)/platform/api/.venv/bin:$$PATH" \
-	  DATABASE_URL="sqlite+aiosqlite:///$(CURDIR)/platform/api/demo-guards.db" \
-	  HEXGATE_DEMO=1 HEXGATE_COOKIE_SECURE=0 HEXGATE_SEED_AGENTS=skip \
-	  HEXGATE_NOTEBOOK="$(CURDIR)/deploy/guards-demo/notebook.py" \
-	  python deploy/boot.py
+	$(call run-showcase,demo-guards,$(CURDIR)/deploy/guards-demo/notebook.py)
+
+.PHONY: demo-devops
+demo-devops: ## Run the 3-level DevOps showcase (developer -> release_lead -> deploy_bot) -- platform + dashboard + live agent. Open http://localhost:2718
+	$(call run-showcase,demo-devops,deploy/devops_demo.py)
 
 .PHONY: demo-smoke
 demo-smoke: ## Smoke-test the bundled demo with a mock LLM (no real key)

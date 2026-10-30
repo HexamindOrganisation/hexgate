@@ -7,11 +7,13 @@ single-role and byte-for-byte comparable.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Final, Protocol, runtime_checkable
 
+from hexgate.runtime.agent_usage import UsageScopeKind
 from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.tracing import semconv
 
@@ -40,12 +42,17 @@ class Verdict:
         engine); empty otherwise.
       * ``hint`` — machine-readable file-scope hint on a path denial
         (pydantic engine); ``None`` otherwise.
+      * ``failed_constraints`` — source of every constraint the call failed
+        (both engines).
     """
 
     outcome: DecisionOutcome
     reason: str = ""
     violations: tuple[str, ...] = ()
     hint: dict[str, Any] | None = None
+    # Source of every constraint the call failed, both engines. Unlike
+    # ``violations`` it is never rendered for the model.
+    failed_constraints: tuple[str, ...] = ()
 
     @property
     def allowed(self) -> bool:
@@ -117,6 +124,11 @@ class PolicyEngine(Protocol):
         reads it from its signed manifest, like the ``declares_*`` flags."""
         ...
 
+    def user_usage_paths(self) -> frozenset[str]:
+        """Every ``user_usage.*`` path (without the root) this policy references.
+        Empty means the enforcer reads no user namespace and counts no user."""
+        ...
+
 
 # Over the platform's ``DecisionEvent.reason`` max_length the audit event is
 # rejected outright, losing the record for the calls most worth keeping.
@@ -175,12 +187,6 @@ def _merge_denials(denials: Sequence[tuple[str | None, Verdict]]) -> Verdict:
     if all(other == first for other in verdicts[1:]):
         return first
 
-    violations: list[str] = []
-    for verdict in verdicts:
-        for violation in verdict.violations:
-            if violation not in violations:
-                violations.append(violation)
-
     named = [role for role, _ in denials if role is not None]
     header = f"denied for all roles [{', '.join(named)}]" if named else "denied"
     clauses = [
@@ -194,9 +200,15 @@ def _merge_denials(denials: Sequence[tuple[str | None, Verdict]]) -> Verdict:
     return Verdict(
         outcome=DecisionOutcome.DENY,
         reason=reason,
-        violations=tuple(violations),
+        violations=_union(verdict.violations for verdict in verdicts),
         hint=hint,
+        failed_constraints=_union(verdict.failed_constraints for verdict in verdicts),
     )
+
+
+def _union(seqs: Iterable[Sequence[str]]) -> tuple[str, ...]:
+    """Every distinct item across ``seqs``, in first-seen order."""
+    return tuple(dict.fromkeys(item for seq in seqs for item in seq))
 
 
 def _bounded_reason(header: str, clauses: Sequence[str]) -> str:
@@ -303,6 +315,8 @@ class RunAttribution:
 # A decision with no run scope behind it. Safe to share: the class is frozen.
 DETACHED_RUN: Final[RunAttribution] = RunAttribution()
 
+_NO_USAGE_STATES: Final[Mapping[UsageScopeKind, str]] = MappingProxyType({})
+
 
 @dataclass(frozen=True, slots=True)
 class Decision:
@@ -333,9 +347,14 @@ class Decision:
     # UUID, not caller data); absent from ``as_error_payload`` like
     # ``attributes`` — the model must not learn how close it is to its budget.
     run: RunAttribution = DETACHED_RUN
-    # How the agent_usage.* namespace was built (UsageState value); None when the
-    # policy references none. Audit-only, absent from as_error_payload like run.
-    usage_state: str | None = None
+    # How each usage namespace was built (UsageState value), by scope kind; a kind
+    # is absent when the policy references none of its paths. Audit- and app-only,
+    # absent from as_error_payload like run.
+    usage_states: Mapping[UsageScopeKind, str] = _NO_USAGE_STATES
+    # The usage scope kinds whose roots (agent_usage, user_usage) the failing
+    # constraints reference; empty unless a usage constraint failed. For the app, to
+    # tell a user over quota from an agent over quota; never for the model.
+    quota_scopes: frozenset[UsageScopeKind] = frozenset()
 
     @classmethod
     def from_verdict(
@@ -349,7 +368,8 @@ class Decision:
         arguments: dict[str, Any] | None = None,
         attributes: dict[str, Any] | None = None,
         run: RunAttribution = DETACHED_RUN,
-        usage_state: str | None = None,
+        usage_states: Mapping[UsageScopeKind, str] = _NO_USAGE_STATES,
+        quota_scopes: frozenset[UsageScopeKind] = frozenset(),
     ) -> "Decision":
         """Lift an engine :class:`Verdict` into a host-facing decision, stamping
         on the context the engine doesn't know."""
@@ -366,12 +386,18 @@ class Decision:
             arguments=arguments,
             attributes=attributes,
             run=run,
-            usage_state=usage_state,
+            usage_states=usage_states,
+            quota_scopes=quota_scopes,
         )
 
     @property
     def allowed(self) -> bool:
         return self.outcome is DecisionOutcome.ALLOW
+
+    @property
+    def usage_state(self) -> str | None:
+        """The agent scope's state: what ``sec_ai.usage_state`` carries."""
+        return self.usage_states.get(UsageScopeKind.AGENT)
 
     def as_error_payload(self) -> dict[str, Any]:
         """Default LLM-facing dict rendering. Adapters can build their own.

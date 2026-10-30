@@ -1,4 +1,4 @@
-"""Read path for agent usage windows: one ``usage_minute`` scan, memoized per worker."""
+"""Read path for usage windows: one rollup scan, memoized per worker."""
 
 from __future__ import annotations
 
@@ -19,8 +19,9 @@ from hexgate_api.core.clickhouse import verify_written_columns
 from hexgate_api.features.usage.paths import UsageMetric, UsageWindowSpec
 
 USAGE_MINUTE_TABLE: Final = "usage_minute"
+USAGE_MINUTE_USER_TABLE: Final = "usage_minute_user"
 # Code-owned SQL per metric. No request string ever reaches the SQL text.
-_METRIC_SQL: Final[Mapping[UsageMetric, str]] = MappingProxyType(
+METRIC_SQL: Final[Mapping[UsageMetric, str]] = MappingProxyType(
     {
         UsageMetric.INVOCATIONS: "invocations",
         UsageMetric.TOOL_CALLS: "tool_calls",
@@ -31,17 +32,14 @@ _METRIC_SQL: Final[Mapping[UsageMetric, str]] = MappingProxyType(
         UsageMetric.TOTAL_TOKENS: "input_tokens + output_tokens",
     }
 )
-_READ_COLUMNS: Final = [
-    "project_id",
-    "agent_name",
-    "minute",
+_METRIC_COLUMNS: Final = (
     "invocations",
     "tool_calls",
     "denials",
     "llm_calls",
     "input_tokens",
     "output_tokens",
-]
+)
 # The SDK gives up after its 2 s refresh_timeout; don't answer later than that.
 USAGE_READ_TIMEOUT_SECONDS: Final = 2
 # Server-side bound only. The route adds the matching client-side wait; the worker
@@ -62,13 +60,33 @@ _VALUE_ALIAS_PREFIX: Final = "v"
 
 
 @dataclass(frozen=True, slots=True)
+class UsageRollup:
+    """One per-minute usage table and the column its rows are keyed by."""
+
+    table: str
+    key_column: str
+
+    @property
+    def read_columns(self) -> list[str]:
+        return ["project_id", self.key_column, "minute", *_METRIC_COLUMNS]
+
+
+# Code-owned: table and key column are the only rollup names that reach SQL text.
+AGENT_ROLLUP: Final = UsageRollup(USAGE_MINUTE_TABLE, "agent_name")
+USER_ROLLUP: Final = UsageRollup(USAGE_MINUTE_USER_TABLE, "user_id")
+
+
+@dataclass(frozen=True, slots=True)
 class UsageReadout:
     as_of: datetime
     values: Mapping[UsageWindowSpec, int]
 
 
 def build_usage_query(
-    project_id: str, agent_name: str, specs: Sequence[UsageWindowSpec]
+    rollup: UsageRollup,
+    project_id: str,
+    key: str,
+    specs: Sequence[UsageWindowSpec],
 ) -> tuple[str, dict[str, object]]:
     """One ``sumIf`` column per spec, one parameter per distinct window, and a scan
     bounded by the largest. A window starts at ``toStartOfMinute(as_of - w)``, so the
@@ -78,8 +96,8 @@ def build_usage_query(
         for i, seconds in enumerate(dict.fromkeys(s.window_seconds for s in specs))
     }
     columns = ",\n".join(
-        f"    sumIf({_METRIC_SQL[spec.metric]}, "
-        f"{_window_start_filter(window_params[spec.window_seconds])}) "
+        f"    sumIf({METRIC_SQL[spec.metric]}, "
+        f"{window_start_filter(window_params[spec.window_seconds])}) "
         f"AS {_VALUE_ALIAS_PREFIX}{i}"
         for i, spec in enumerate(specs)
     )
@@ -88,29 +106,33 @@ def build_usage_query(
         "SELECT\n"
         "    as_of,\n"
         f"{columns}\n"
-        f"FROM {USAGE_MINUTE_TABLE}\n"
+        f"FROM {rollup.table}\n"
         "WHERE project_id = {project_id:String}\n"
-        "  AND agent_name = {agent_name:String}\n"
-        f"  AND {_window_start_filter(_SCAN_PARAM)}"
+        f"  AND {rollup.key_column} = {{{rollup.key_column}:String}}\n"
+        f"  AND {window_start_filter(_SCAN_PARAM)}"
     )
     params: dict[str, object] = {
         "project_id": project_id,
-        "agent_name": agent_name,
+        rollup.key_column: key,
         **{name: seconds for seconds, name in window_params.items()},
         _SCAN_PARAM: max(window_params),
     }
     return sql, params
 
 
-def _window_start_filter(param: str) -> str:
+def window_start_filter(param: str) -> str:
     return f"minute >= toStartOfMinute(as_of - toIntervalSecond({{{param}:UInt32}}))"
 
 
 def read_usage(
-    client: Client, project_id: str, agent_name: str, specs: Sequence[UsageWindowSpec]
+    client: Client,
+    rollup: UsageRollup,
+    project_id: str,
+    key: str,
+    specs: Sequence[UsageWindowSpec],
 ) -> UsageReadout:
     """Synchronous: the route runs it off the event loop."""
-    sql, params = build_usage_query(project_id, agent_name, specs)
+    sql, params = build_usage_query(rollup, project_id, key, specs)
     as_of, *values = client.query(
         sql, parameters=params, settings=QUERY_SETTINGS
     ).result_rows[0]
@@ -208,6 +230,33 @@ def get_usage_executor() -> ThreadPoolExecutor:
     )
 
 
+# User reads get their own pool and memo (README G9): a burst of cold users must
+# not queue agent reads behind it, nor evict their memo entries. 4 + 4 workers
+# matches clickhouse-connect's default HTTP pool of 8 (driver/httputil.py).
+USER_USAGE_READ_MAX_WORKERS: Final = 4
+_USER_USAGE_READ_THREAD_PREFIX: Final = "usage-read-user"
+
+
+@lru_cache
+def get_user_usage_memo() -> UsageMemo:
+    return UsageMemo(USAGE_MEMO_TTL_SECONDS, USAGE_MEMO_MAX_ENTRIES, time.monotonic)
+
+
+@lru_cache
+def get_user_usage_executor() -> ThreadPoolExecutor:
+    return ThreadPoolExecutor(
+        max_workers=USER_USAGE_READ_MAX_WORKERS,
+        thread_name_prefix=_USER_USAGE_READ_THREAD_PREFIX,
+    )
+
+
 def verify_schema(client: Client) -> None:
-    """Raise SchemaOutOfDate if usage_minute (migration 0005) is missing a read column."""
-    verify_written_columns(client, ((USAGE_MINUTE_TABLE, _READ_COLUMNS),))
+    """Raise SchemaOutOfDate if a usage rollup (migrations 0005, 0006) is missing a
+    read column."""
+    verify_written_columns(
+        client,
+        tuple(
+            (rollup.table, rollup.read_columns)
+            for rollup in (AGENT_ROLLUP, USER_ROLLUP)
+        ),
+    )

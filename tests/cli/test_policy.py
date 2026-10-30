@@ -30,6 +30,7 @@ from hexgate.cli.policy.main import (
 )
 from hexgate.security import analyzer
 from hexgate.security.analyzer import PolicyLint
+from hexgate.security.usage_inputs import AGENT_USAGE_ROOT, USER_USAGE_ROOT
 
 _OPA_AVAILABLE = shutil.which("opa") is not None
 needs_opa = pytest.mark.skipif(
@@ -1568,23 +1569,28 @@ def test_test_reports_an_unknown_run_path_in_the_policy_itself(
 
 
 # ---------------------------------------------------------------------------
-# `policy test --agent-usage` — dry-running a cross-run quota
+# `policy test --agent-usage` / `--user-usage` — dry-running a cross-run quota
 # ---------------------------------------------------------------------------
 
 
+_USAGE_ROOTS = (AGENT_USAGE_ROOT, USER_USAGE_ROOT)
 _USAGE_GATED_POLICY = """\
 version: 1
 admission:
   mode: allow
   constraints:
-    - agent_usage.invocations_1h < 100
+    - {root}.invocations_1h < 100
 """
 
 
-def _usage_gated(tmp_path: Path) -> str:
-    p = tmp_path / "usage.yaml"
-    p.write_text(_USAGE_GATED_POLICY, encoding="utf-8")
+def _usage_gated(tmp_path: Path, root: str) -> str:
+    p = tmp_path / f"{root}.yaml"
+    p.write_text(_USAGE_GATED_POLICY.format(root=root), encoding="utf-8")
     return str(p)
+
+
+def _usage_flag(root: str) -> str:
+    return f"--{root.replace('_', '-')}"
 
 
 def _test_admission(source: str, **flags: str) -> int:
@@ -1600,33 +1606,47 @@ def _test_admission(source: str, **flags: str) -> int:
     )
 
 
+@pytest.mark.parametrize("root", _USAGE_ROOTS)
 def test_test_defaults_to_a_fresh_process_rather_than_a_missing_namespace(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], root: str
 ) -> None:
-    assert _test_admission(_usage_gated(tmp_path)) == 0
+    assert _test_admission(_usage_gated(tmp_path, root)) == 0
     assert "ALLOW" in capsys.readouterr().out
 
 
-def test_test_agent_usage_fires_the_cap(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize("root", _USAGE_ROOTS)
+def test_test_usage_fires_the_cap(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], root: str
 ) -> None:
-    rc = _test_admission(_usage_gated(tmp_path), agent_usage='{"invocations_1h": 100}')
+    rc = _test_admission(
+        _usage_gated(tmp_path, root), **{root: '{"invocations_1h": 100}'}
+    )
 
     assert rc == 1
     out = capsys.readouterr().out
     assert "DENY" in out
-    assert "agent_usage.invocations_1h < 100" in out
+    assert f"{root}.invocations_1h < 100" in out
+
+
+def test_test_agent_usage_does_not_feed_user_usage(tmp_path: Path) -> None:
+    rc = _test_admission(
+        _usage_gated(tmp_path, USER_USAGE_ROOT),
+        **{AGENT_USAGE_ROOT: '{"invocations_1h": 100}'},
+    )
+
+    assert rc == 0
 
 
 @needs_opa
+@pytest.mark.parametrize("root", _USAGE_ROOTS)
 @pytest.mark.parametrize(("usage", "expected"), [("99", 0), ("100", 1)])
-def test_test_agent_usage_agrees_across_engines(
-    tmp_path: Path, usage: str, expected: int
+def test_test_usage_agrees_across_engines(
+    tmp_path: Path, root: str, usage: str, expected: int
 ) -> None:
-    source = _usage_gated(tmp_path)
+    source = _usage_gated(tmp_path, root)
     codes = [
         _test_admission(
-            source, agent_usage=f'{{"invocations_1h": {usage}}}', engine=engine
+            source, **{root: f'{{"invocations_1h": {usage}}}'}, engine=engine
         )
         for engine in ("pydantic", "wasm")
     ]
@@ -1634,26 +1654,34 @@ def test_test_agent_usage_agrees_across_engines(
     assert codes == [expected, expected]
 
 
+@pytest.mark.parametrize("root", _USAGE_ROOTS)
 @pytest.mark.parametrize(
     ("raw", "message"),
     [
-        ("not json", "--agent-usage is not valid JSON"),
-        ("[1]", "--agent-usage must be a JSON object (dict)"),
+        ("not json", "{flag} is not valid JSON"),
+        ("[1]", "{flag} must be a JSON object (dict)"),
         (
             '{"invocation_1h": 1}',
-            "--agent-usage has unknown agent_usage.* path(s) ['invocation_1h']",
+            "{flag} has unknown {root}.* path(s) ['invocation_1h']",
         ),
-        ('{"invocations_1h": "1"}', "--agent-usage has an invalid value"),
-        ('{"invocations_1h": -1}', "--agent-usage has an invalid value"),
+        (
+            '{"invocations_1h": "1"}',
+            "{flag} has an invalid value: {root}.invocations_1h",
+        ),
+        ('{"invocations_1h": -1}', "{flag} has an invalid value"),
     ],
     ids=["non-json", "non-object", "unknown-path", "wrong-type", "negative"],
 )
-def test_test_rejects_a_bad_agent_usage(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], raw: str, message: str
+def test_test_rejects_a_bad_usage(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    root: str,
+    raw: str,
+    message: str,
 ) -> None:
-    rc = _test_admission(_usage_gated(tmp_path), agent_usage=raw)
+    rc = _test_admission(_usage_gated(tmp_path, root), **{root: raw})
 
     out, err = capsys.readouterr()
     assert rc == 1
-    assert message in err
+    assert message.format(flag=_usage_flag(root), root=root) in err
     assert "DENY" not in out

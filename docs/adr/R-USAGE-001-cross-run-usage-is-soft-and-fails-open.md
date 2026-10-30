@@ -1,6 +1,6 @@
 # R-USAGE-001: Enforce cross-run usage as a soft quota that fails open by default
 
-**Status:** Accepted · 2026-10-12
+**Status:** Accepted · 2026-10-12 · amended 2026-10-21 (user term: R-USAGE-002)
 **Applies to:** `hexgate/runtime/agent_usage.py`, `hexgate/security/usage_source.py`,
 `hexgate/security/enforcer.py`, `hexgate/adapters/_common.py`,
 `hexgate/security/bundle.py`, `hexgate/security/policy_set.py`,
@@ -136,8 +136,9 @@ run.
   fetches the signing key. The run
   that picks up an agent's first usage cap pays that round trip after the policy
   fetch instead, not alongside it.
-- A future `user_usage.*` reuses this machinery and inherits this decision, plus a
-  trust question this record doesn't answer.
+- `user_usage.*` reuses this machinery and inherits this decision; R-USAGE-002 records
+  what it adds (the trust rule, anonymous callers, the project-wide scope,
+  `quota_scopes`).
 
 ## Rejected alternatives
 

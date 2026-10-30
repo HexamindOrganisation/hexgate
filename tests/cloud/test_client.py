@@ -8,7 +8,10 @@ without making any real network calls.
 from __future__ import annotations
 
 import base64
+import email.message
+import io
 import json
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -697,3 +700,105 @@ def test_raw_get_keeps_its_timeout_choice_without_an_override(
     client._raw_get("http://test/x", authorize=True, if_none_match=if_none_match)
 
     assert [timeout for _, timeout in calls] == [expected]
+
+
+# ---------------------------------------------------------------------------
+# HexgateClient.read_user_usage — the user goes in the body, never the URL
+# ---------------------------------------------------------------------------
+
+_USER_ID = "alice@example.com"
+_USER_USAGE_URL = "http://test/v1/usage/users:read"
+
+
+def test_read_user_usage_posts_the_user_in_the_body(
+    keys: tuple[bytes, bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _verified_client(keys)
+    calls = _record_urlopen(monkeypatch, b'{"as_of": "x", "values": {"a": 1}}')
+
+    payload = client.read_user_usage(_USER_ID, ["a", "b"])
+
+    assert payload == {"as_of": "x", "values": {"a": 1}}
+    request, _ = calls[0]
+    assert request.get_method() == "POST"
+    assert request.full_url == _USER_USAGE_URL
+    assert json.loads(request.data) == {"user_id": _USER_ID, "paths": ["a", "b"]}
+    assert request.get_header("Content-type") == "application/json"
+    assert request.get_header("Authorization", "").startswith("Bearer ")
+    assert "alice" not in request.full_url
+
+
+def test_read_user_usage_is_bounded_by_the_refresh_timeout(
+    keys: tuple[bytes, bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _verified_client(keys)
+    calls = _record_urlopen(monkeypatch)
+
+    client.read_user_usage(_USER_ID, ["a"])
+
+    assert [timeout for _, timeout in calls] == [_REFRESH_TIMEOUT]
+
+
+def test_read_user_usage_bounds_a_first_use_jwks_fetch_too(
+    keys: tuple[bytes, bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    priv, pub = keys
+    client = HexgateClient(
+        HexgateConfig(base_url="http://test", api_key=_envelope(priv)),
+        timeout=_TIMEOUT,
+        refresh_timeout=_REFRESH_TIMEOUT,
+    )
+    jwks = json.dumps({"keys": [{"x": _b64url(pub)}]}).encode()
+    calls: list[tuple[str, float]] = []
+
+    def fake_urlopen(request: Any, timeout: float) -> _Response:
+        calls.append((request.full_url, timeout))
+        return _Response(jwks if request.full_url.endswith(_JWKS_PATH) else b"{}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    client.read_user_usage(_USER_ID, ["a"])
+
+    assert [timeout for _, timeout in calls] == [_REFRESH_TIMEOUT] * 2
+    assert calls[0][0].endswith(_JWKS_PATH)
+
+
+def test_read_user_usage_verifies_key_before_http(
+    keys: tuple[bytes, bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    priv, pub = keys
+    tampered = _envelope(priv)[:-4] + "AAAA"
+    client = HexgateClient(
+        HexgateConfig(base_url="http://test", api_key=tampered, public_key=pub)
+    )
+    monkeypatch.setattr(
+        HexgateClient,
+        "_send",
+        lambda *a, **kw: pytest.fail("HTTP fired despite signature failure"),
+    )
+
+    with pytest.raises(HexgateError, match="signature does not chain"):
+        client.read_user_usage(_USER_ID, ["a"])
+
+
+def test_read_user_usage_raises_with_the_status(
+    keys: tuple[bytes, bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _verified_client(keys)
+
+    def fake_urlopen(request: Any, timeout: float) -> _Response:
+        raise urllib.error.HTTPError(
+            request.full_url,
+            503,
+            "unavailable",
+            email.message.Message(),
+            io.BytesIO(b"clickhouse down"),
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(HexgateError) as raised:
+        client.read_user_usage(_USER_ID, ["a"])
+
+    assert raised.value.status == 503
+    assert "alice" not in str(raised.value)

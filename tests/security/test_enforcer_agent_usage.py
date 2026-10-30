@@ -12,7 +12,13 @@ from typing import Any
 
 import pytest
 
-from hexgate.runtime.agent_usage import UsageLedgers, new_usage_ledger
+from hexgate.cloud.client import HexgateClient, HexgateConfig
+from hexgate.runtime.agent_usage import (
+    UsageLedgers,
+    UsageScope,
+    UsageScopeKind,
+    new_usage_ledger,
+)
 from hexgate.runtime.context import HexgateContext
 from hexgate.runtime.run_facts import get_run_facts, run_scope
 from hexgate.security import AGENT_RUN_TOOL, DecisionOutcome, Verdict, usage_source
@@ -22,12 +28,15 @@ from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.security.usage_source import (
     OnUnavailable,
     PlatformUsageSource,
+    ScopeKindSpec,
     UsageRefreshSettings,
     UsageState,
 )
 from hexgate.tracing import _senders
 
 _AGENT = "billing"
+_USER_ID = "alice"
+_SCOPE = UsageScope.agent(_AGENT)
 _START = 1_000_000.0
 _HOUR = 3_600.0
 _MINUTE = 60.0
@@ -117,7 +126,7 @@ def test_binding_a_usage_policy_enables_the_ledgers() -> None:
 
     PolicyEnforcer(_admission_cap(2), agent_name=_AGENT, ledgers=ledgers)
 
-    assert ledgers.enabled
+    assert ledgers.is_enabled(UsageScopeKind.AGENT)
 
 
 def test_binding_a_usage_free_policy_leaves_them_off() -> None:
@@ -125,7 +134,7 @@ def test_binding_a_usage_free_policy_leaves_them_off() -> None:
 
     PolicyEnforcer(_usage_free(), agent_name=_AGENT, ledgers=ledgers)
 
-    assert not ledgers.enabled
+    assert not ledgers.is_enabled(UsageScopeKind.AGENT)
 
 
 def test_swapping_in_a_usage_policy_enables_the_ledgers() -> None:
@@ -135,7 +144,7 @@ def test_swapping_in_a_usage_policy_enables_the_ledgers() -> None:
 
     enforcer.policy = _tool_cap(2)
 
-    assert ledgers.enabled
+    assert ledgers.is_enabled(UsageScopeKind.AGENT)
     assert enforcer.decide("refund", {}).allowed
 
 
@@ -262,7 +271,7 @@ def test_an_engine_without_usage_paths_still_decides() -> None:
 
     assert enforcer.decide("refund", {}).allowed
     assert engine.namespaces == [None]
-    assert not ledgers.enabled
+    assert not ledgers.is_enabled(UsageScopeKind.AGENT)
 
 
 def test_a_usage_free_engine_gets_no_namespace_and_no_ledger() -> None:
@@ -273,7 +282,7 @@ def test_a_usage_free_engine_gets_no_namespace_and_no_ledger() -> None:
     enforcer.decide("refund", {})
 
     assert engine.namespaces == [None]
-    assert ledgers.ledger_for(_AGENT) is None
+    assert ledgers.ledger_for(_SCOPE) is None
 
 
 def test_without_a_usage_source_a_decision_reads_local() -> None:
@@ -294,8 +303,10 @@ class _FakeFetcher:
     def __init__(self, values: Mapping[str, int] | None = None) -> None:
         self.values = dict(values or {})
         self.error: Exception | None = None
+        self.calls: list[str] = []
 
     def get_agent_usage(self, name: str, paths: Sequence[str]) -> Mapping[str, Any]:
+        self.calls.append(name)
         if self.error is not None:
             raise self.error
         return {
@@ -320,9 +331,19 @@ class _Platform:
     def __init__(self, values: Mapping[str, int] | None = None) -> None:
         self.clock = _FakeClock()
         self.fetcher = _FakeFetcher(values)
+        self.user_fetcher = _FakeFetcher(values)
         self.ledgers = _ledgers(self.clock)
         self.source = PlatformUsageSource(
-            self.fetcher, _InlineExecutor(), UsageRefreshSettings(), self.clock
+            {
+                UsageScopeKind.AGENT: ScopeKindSpec(
+                    self.fetcher.get_agent_usage, UsageRefreshSettings()
+                ),
+                UsageScopeKind.USER: ScopeKindSpec(
+                    self.user_fetcher.get_agent_usage, UsageRefreshSettings()
+                ),
+            },
+            _InlineExecutor(),
+            self.clock,
         )
 
     def enforcer(self, policy: Any) -> PolicyEnforcer:
@@ -334,8 +355,7 @@ class _Platform:
         )
 
     def boundary(self, enforcer: PolicyEnforcer) -> None:
-        usage = enforcer.usage_refresh()
-        assert usage is not None
+        (usage,) = enforcer.usage_refreshes(None)
         usage.run()
 
 
@@ -429,26 +449,56 @@ def test_the_fail_mode_is_read_from_the_engine(
 def test_no_usage_refresh_without_a_source() -> None:
     enforcer = PolicyEnforcer(_admission_cap(2), agent_name=_AGENT, ledgers=_ledgers())
 
-    assert enforcer.usage_refresh() is None
+    assert enforcer.usage_refreshes(None) == ()
 
 
 def test_no_usage_refresh_for_a_usage_free_policy() -> None:
-    assert _Platform().enforcer(_usage_free()).usage_refresh() is None
+    assert _Platform().enforcer(_usage_free()).usage_refreshes(None) == ()
 
 
 def test_the_usage_refresh_follows_the_bound_policy() -> None:
     platform = _Platform()
     enforcer = platform.enforcer(_admission_cap(2))
 
-    assert enforcer.usage_refresh() == UsageRefresh(
-        platform.source, _AGENT, _ADMISSION_PATHS
+    assert enforcer.usage_refreshes(None) == (
+        UsageRefresh(platform.source, _SCOPE, _ADMISSION_PATHS),
     )
 
     enforcer.policy = _tool_cap(2)
 
-    assert enforcer.usage_refresh() == UsageRefresh(
-        platform.source, _AGENT, frozenset({"tool_calls_5m"})
+    assert enforcer.usage_refreshes(None) == (
+        UsageRefresh(platform.source, _SCOPE, frozenset({"tool_calls_5m"})),
     )
+
+
+@pytest.mark.parametrize(
+    "context", [None, HexgateContext(user_id=""), HexgateContext(user_id="alice")]
+)
+def test_usage_refreshes_holds_the_agent_refresh(
+    context: HexgateContext | None,
+) -> None:
+    platform = _Platform()
+    enforcer = platform.enforcer(_admission_cap(2))
+
+    assert enforcer.usage_refreshes(context) == (
+        UsageRefresh(platform.source, _SCOPE, _ADMISSION_PATHS),
+    )
+
+
+def test_an_agent_usage_policy_enables_only_the_agent_scope() -> None:
+    """G3: an agent quota never turns on user ledgers or user fetches."""
+    platform = _Platform({_INVOCATIONS: 0})
+    enforcer = platform.enforcer(_admission_cap(2))
+
+    assert platform.ledgers.is_enabled(UsageScopeKind.AGENT)
+    assert not platform.ledgers.is_enabled(UsageScopeKind.USER)
+
+    with HexgateContext(user_id=_USER_ID).sync_scope():
+        platform.boundary(enforcer)
+        assert enforcer.decide(AGENT_RUN_TOOL, _ADMISSION_ARGS).allowed
+
+    assert platform.fetcher.calls == [_AGENT]
+    assert platform.user_fetcher.calls == []
 
 
 def test_the_own_run_is_left_out_through_the_source() -> None:
@@ -495,7 +545,7 @@ def _platform_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
 
     monkeypatch.setattr(usage_source, "_usage_sources", {})
     # Audit is not under test; a real sender would outlive the test.
-    monkeypatch.setattr(enforcer_mod, "configure", lambda _api_key: None)
+    monkeypatch.setattr(enforcer_mod, "configure", lambda *_a, **_k: None)
     for name in ("HEXGATE_API_KEY", "HEXGATE_LOCAL_POLICY", _senders._LOCAL_MODE_ENV):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
@@ -523,5 +573,79 @@ def test_build_enforcer_in_local_mode_has_none(
     _platform_env.setenv(_senders._LOCAL_MODE_ENV, "1")
 
     enforcer = build_enforcer(_usage_free(), agent_name=_AGENT, api_key=_KEY)
+
+    assert enforcer._usage_source is None
+
+
+_OTHER_URL = "https://other.example"
+
+
+def _other_platform_client() -> HexgateClient:
+    return HexgateClient(HexgateConfig(base_url=_OTHER_URL, api_key=_KEY))
+
+
+def _record_configure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str | None, str | None]]:
+    from hexgate.security import enforcer as enforcer_mod
+
+    calls: list[tuple[str | None, str | None]] = []
+
+    def _spy(api_key: str | None = None, base_url: str | None = None) -> None:
+        calls.append((api_key, base_url))
+
+    monkeypatch.setattr(enforcer_mod, "configure", _spy)
+    return calls
+
+
+def test_build_enforcer_with_a_client_reuses_it_for_usage(
+    _platform_env: pytest.MonkeyPatch,
+) -> None:
+    client = _other_platform_client()
+    _platform_env.setattr(
+        "hexgate.cloud.client.HexgateClient",
+        lambda *_a, **_k: pytest.fail("built a second client"),
+    )
+
+    enforcer = build_enforcer(_usage_free(), agent_name=_AGENT, client=client)
+
+    assert enforcer._usage_source is usage_source._usage_sources[(_KEY, _OTHER_URL)]
+
+
+def test_build_enforcer_client_wins_over_api_key(
+    _platform_env: pytest.MonkeyPatch,
+) -> None:
+    calls = _record_configure(_platform_env)
+
+    enforcer = build_enforcer(
+        _usage_free(),
+        agent_name=_AGENT,
+        api_key="other",
+        client=_other_platform_client(),
+    )
+
+    assert enforcer._usage_source is usage_source._usage_sources[(_KEY, _OTHER_URL)]
+    assert [key for key, _ in calls] == [_KEY]
+
+
+def test_build_enforcer_audits_to_the_client_base_url(
+    _platform_env: pytest.MonkeyPatch,
+) -> None:
+    calls = _record_configure(_platform_env)
+
+    build_enforcer(_usage_free(), agent_name=_AGENT, client=_other_platform_client())
+    build_enforcer(_usage_free(), agent_name=_AGENT, api_key=_KEY)
+
+    assert calls == [(_KEY, _OTHER_URL), (_KEY, None)]
+
+
+def test_build_enforcer_with_a_client_in_local_mode_has_none(
+    _platform_env: pytest.MonkeyPatch,
+) -> None:
+    _platform_env.setenv(_senders._LOCAL_MODE_ENV, "1")
+
+    enforcer = build_enforcer(
+        _usage_free(), agent_name=_AGENT, client=_other_platform_client()
+    )
 
     assert enforcer._usage_source is None

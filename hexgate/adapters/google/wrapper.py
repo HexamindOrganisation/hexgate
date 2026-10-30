@@ -53,7 +53,9 @@ def wrap_google_agent(
     tools = list(getattr(agent, "tools", []) or [])
 
     resolved = resolve_policy(agent_name, api_key=api_key, client=client)
-    enforcer = build_enforcer(resolved.engine, agent_name=agent_name, api_key=api_key)
+    enforcer = build_enforcer(
+        resolved.engine, agent_name=agent_name, api_key=api_key, client=client
+    )
     # No admission/reach warning here: the Google adapter enforces both — admission
     # at run entry, handoff reach + the depth cap at the runner's transfer plugin,
     # and agent-as-tool reach in wrap_tools below (an AgentTool is a real tool).
