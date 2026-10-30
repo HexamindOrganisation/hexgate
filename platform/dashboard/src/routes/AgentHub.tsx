@@ -40,6 +40,7 @@ import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { cn } from "@/lib/utils";
 import { DetailDrawer } from "./Audit";
 import { ManifestView, type RoleMode } from "./Agents";
+import { PlaygroundLive } from "./Playground";
 
 type Activity = { all: number; deny: number; needs_approval: number };
 
@@ -262,6 +263,27 @@ export function AgentDecisionsTab() {
   return <AgentDecisions agent={ctx.agent} />;
 }
 
+/** The Playground tab — chat embedded in the hub. The playground WS is
+ * project-scoped (one `hexgate serve` at a time), so it's live for whichever
+ * agent is serving; the tab frames it around this one. */
+export function AgentPlaygroundTab() {
+  const ctx = useOutletContext<HubContext>();
+  const { projectId } = useProjectScoped();
+  if (!projectId) return null;
+  return (
+    <div className="space-y-3">
+      <p className="text-meta text-muted-foreground">
+        The playground talks to whichever agent is running{" "}
+        <span className="font-mono text-foreground">hexgate serve</span> in this
+        project. Start{" "}
+        <span className="font-mono text-foreground">{ctx.agent.name}</span> to
+        test it here — the header shows which agent is live.
+      </p>
+      <PlaygroundLive projectId={projectId} embedded />
+    </div>
+  );
+}
+
 function HubTabs({ resources }: { resources: number }) {
   const tab =
     "border-b-2 px-3 py-2 text-sm transition-colors -mb-px flex items-center gap-1.5";
@@ -288,6 +310,9 @@ function HubTabs({ resources }: { resources: number }) {
       </NavLink>
       <NavLink to="policies" className={cls}>
         Policies
+      </NavLink>
+      <NavLink to="playground" className={cls}>
+        Playground
       </NavLink>
       <NavLink to="decisions" className={cls}>
         Decision log
