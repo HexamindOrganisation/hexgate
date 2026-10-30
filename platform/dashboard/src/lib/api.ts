@@ -9,10 +9,10 @@ const PUBLIC_AUTH_PATHS = [
   "/verify-email",
 ];
 
-/** Thrown by ``request`` when the backend returns 401, after the global
- * "redirect to /sign-in" side-effect has fired. Tests assert against the
- * error type; production code rarely catches it (the redirect already
- * happened). */
+/** Thrown by ``request`` when the backend returns 401, usually after the
+ * global "redirect to /sign-in" side-effect has fired, so production code
+ * rarely catches it. The OAuth consent calls opt out of that redirect and
+ * the consent page catches it, to sign in again without losing its query. */
 export class UnauthenticatedError extends Error {
   constructor(message = "not authenticated") {
     super(message);
@@ -60,11 +60,22 @@ function messageFromDetail(detail: unknown): string | null {
   return null;
 }
 
+/** The global 401 redirect, on an object so tests can watch it. */
+export const authRedirect = {
+  toSignIn(): void {
+    window.location.href = "/sign-in";
+  },
+};
+
 /** Shared transport: fires the request, applies the global 401 redirect and
  * turns every other non-2xx into an ``ApiError``. Returns the raw Response so
  * the JSON callers and the binary ones (the AI Act annex / PDF downloads)
  * go through one auth and error path. */
-async function send(path: string, init?: RequestInit): Promise<Response> {
+async function send(
+  path: string,
+  init?: RequestInit,
+  redirectOn401 = true,
+): Promise<Response> {
   const res = await fetch(path, {
     ...init,
     // ``include`` so the hexgate_session cookie rides on cross-origin
@@ -83,8 +94,8 @@ async function send(path: string, init?: RequestInit): Promise<Response> {
     const onAuthPage = PUBLIC_AUTH_PATHS.some((p) =>
       window.location.pathname.startsWith(p),
     );
-    if (!onAuthPage) {
-      window.location.href = "/sign-in";
+    if (redirectOn401 && !onAuthPage) {
+      authRedirect.toSignIn();
     }
     throw new UnauthenticatedError();
   }
@@ -104,8 +115,12 @@ async function send(path: string, init?: RequestInit): Promise<Response> {
   return res;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await send(path, init);
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  redirectOn401 = true,
+): Promise<T> {
+  const res = await send(path, init, redirectOn401);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
@@ -1037,4 +1052,37 @@ export const api = {
    * render failure is a 502 and leaves the signed bytes untouched. */
   downloadAiActReportPdf: (reportId: string, projectId: string) =>
     requestBlob(`/v1/projects/${projectId}/ai-act/reports/${reportId}.pdf`),
+};
+
+/** Mirror of platform/api features/oauth/schemas.py:ConsentInfo. */
+export interface ConsentInfo {
+  /** Written by whoever controls the client_id URL: a claim, not a fact. */
+  client_name: string | null;
+  client_host: string;
+  redirect_host: string;
+  scopes: { name: string; description: string }[];
+  projects: { id: string; name: string; org_id: string; org_name: string }[];
+}
+
+/** The consent routes take the MCP client's authorization request as it
+ * reached the page: ``search`` is the page's own query string. Neither
+ * redirects on a 401: a bare /sign-in would drop that query, so the consent
+ * page signs the user in again itself. */
+export const oauthApi = {
+  consentInfo: (search: string) =>
+    request<ConsentInfo>(`/v1/oauth/consent-info${search}`, undefined, false),
+
+  /** Records the consent; the response is the client's redirect with the code. */
+  consent: (search: string, projects: string[]) =>
+    request<{ redirect_to: string }>(
+      "/v1/oauth/authorize",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ...Object.fromEntries(new URLSearchParams(search)),
+          projects,
+        }),
+      },
+      false,
+    ),
 };

@@ -17,6 +17,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ApiError, UnauthenticatedError } from "./api";
+import { stashConsentReturn } from "./oauth_consent";
 import { resetPlayground } from "./playground";
 
 /** Public shape of a User. Mirrors UserRead on the backend
@@ -294,7 +295,7 @@ export function useRequestVerify() {
  * (the /authorize route 404s when HEXGATE_GOOGLE_CLIENT_ID is unset) —
  * callers hide the Google button when this returns null on mount.
  */
-export async function startGoogleSignIn(): Promise<void> {
+export async function startGoogleSignIn(returnTo?: string): Promise<void> {
   const res = await fetch(
     "/v1/auth/google/authorize?scopes=openid&scopes=email",
     {
@@ -314,6 +315,9 @@ export async function startGoogleSignIn(): Promise<void> {
   const { authorization_url } = (await res.json()) as {
     authorization_url: string;
   };
+  // Leaving the dashboard drops router state: keep the consent page's
+  // address for ProtectedRoute to restore.
+  stashConsentReturn(returnTo);
   window.location.href = authorization_url;
 }
 

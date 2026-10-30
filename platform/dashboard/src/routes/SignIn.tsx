@@ -23,6 +23,7 @@ import {
   useLogin,
   useUser,
 } from "@/lib/auth";
+import { clearConsentReturn } from "@/lib/oauth_consent";
 
 const SignInSchema = z.object({
   email: z.string().email("Enter a valid email"),
@@ -35,6 +36,7 @@ export function SignInPage() {
   const { user, loading } = useUser();
   const navigate = useNavigate();
   const location = useLocation();
+  const from = (location.state as { from?: string } | null)?.from;
   const login = useLogin();
   const [googleAvailable, setGoogleAvailable] = useState(false);
 
@@ -52,15 +54,16 @@ export function SignInPage() {
   // If a session already exists, bounce to wherever the user was trying
   // to reach (preserved by ProtectedRoute) — or the dashboard root.
   if (!loading && user) {
-    const target = (location.state as { from?: string } | null)?.from ?? "/";
-    return <Navigate to={target} replace />;
+    return <Navigate to={from ?? "/"} replace />;
   }
 
   async function onSubmit(values: SignInValues) {
+    // A password sign-in returns through router state; a stash an abandoned
+    // Google sign-in left must not take over.
+    clearConsentReturn();
     try {
       await login.mutateAsync(values);
-      const target = (location.state as { from?: string } | null)?.from ?? "/";
-      navigate(target, { replace: true });
+      navigate(from ?? "/", { replace: true });
     } catch {
       // Error surfaces via login.error below — no toast needed.
     }
@@ -162,7 +165,7 @@ export function SignInPage() {
                   type="button"
                   variant="outline"
                   className="w-full"
-                  onClick={() => startGoogleSignIn().catch(() => undefined)}
+                  onClick={() => startGoogleSignIn(from).catch(() => undefined)}
                 >
                   Continue with Google
                 </Button>

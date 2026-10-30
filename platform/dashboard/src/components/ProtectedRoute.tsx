@@ -1,13 +1,19 @@
+import { useEffect } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 
 import { useUser } from "@/lib/auth";
+import {
+  clearConsentReturn,
+  isConsentPath,
+  pendingConsentReturn,
+} from "@/lib/oauth_consent";
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
 }
 
 /**
- * Wraps the authenticated dashboard. Three states:
+ * Wraps the authenticated dashboard. Four states:
  *
  *   - loading (initial /users/me round-trip in flight): renders a thin
  *     placeholder. Keeps the UI from flashing the sign-in screen when
@@ -17,10 +23,20 @@ interface ProtectedRouteProps {
  *     path in the location state so the post-sign-in handler can bounce
  *     them back. ``replace`` so the history doesn't accumulate
  *     /sign-in entries when the user clicks back.
+ *   - signed in, back from a Google sign-in begun on the OAuth consent
+ *     page: redirects to that page, whose address was stashed in
+ *     sessionStorage (see lib/oauth_consent.ts).
  */
 export function ProtectedRoute({ children }: ProtectedRouteProps) {
   const { user, loading } = useUser();
   const location = useLocation();
+  // Back from a Google sign-in that started on the consent page: that
+  // sign-in left the dashboard, so only the stashed address remembers it.
+  // Used once: the first signed-in render reads it, the effect drops it.
+  const consent = user ? pendingConsentReturn() : null;
+  useEffect(() => {
+    if (user) clearConsentReturn();
+  }, [user]);
 
   if (loading) {
     return (
@@ -38,6 +54,10 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
         state={{ from: location.pathname + location.search }}
       />
     );
+  }
+
+  if (consent && !isConsentPath(location.pathname)) {
+    return <Navigate to={consent} replace />;
   }
 
   return <>{children}</>;
