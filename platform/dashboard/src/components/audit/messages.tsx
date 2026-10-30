@@ -330,7 +330,7 @@ function CollapsedTurns({ turns, label }: { turns: Turn[]; label: string }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[11.5px] text-muted-foreground hover:bg-accent"
+        className="flex w-full items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-caption text-muted-foreground hover:bg-accent"
       >
         <Icon className="size-3.5" />
         {turns.length} {label}

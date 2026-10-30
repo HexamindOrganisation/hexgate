@@ -211,7 +211,7 @@ function InventoryPanel({ projectId }: { projectId: string }) {
                         Unavailable
                       </Badge>
                     ) : entry?.complete ? (
-                      <Badge variant="allow">Complete</Badge>
+                      <Badge variant="success">Complete</Badge>
                     ) : (
                       <div className="flex flex-col gap-1">
                         <Badge variant="outline">Incomplete</Badge>
