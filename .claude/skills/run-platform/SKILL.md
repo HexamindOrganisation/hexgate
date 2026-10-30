@@ -1,6 +1,6 @@
 ---
 name: run-platform
-description: Spin up a local hexgate platform instance (FastAPI platform-api + React dashboard + MCP server, optionally the full OTLP pipeline) — check prerequisites first (uv, pnpm, Docker, Go, free ports), start the servers in the background, and hand back the dashboard URL, the first-boot admin email and password, and register the local MCP server with Claude Code (`claude mcp add`) so the user only restarts and authenticates. Use when asked to run, start, spin up, or demo the platform/dashboard/MCP server locally, or to get a login for a local instance; "without MCP" or "dashboard only" skips the MCP server. Local dev machine only, not staging or prod (those are deploy stacks, see platform/DEPLOY.md).
+description: Spin up a local hexgate platform instance (FastAPI platform-api + React dashboard + MCP server, optionally the full OTLP pipeline) — check prerequisites first (uv, pnpm, Docker, Go, free ports), start the servers in the background, and hand back the dashboard URL, the first-boot admin email and password, and register the local MCP server with Claude Code (`claude mcp add`) so the user only opens a new session and authenticates. Use when asked to run, start, spin up, or demo the platform/dashboard/MCP server locally, or to get a login for a local instance; "without MCP" or "dashboard only" skips the MCP server. Local dev machine only, not staging or prod (those are deploy stacks, see platform/DEPLOY.md).
 ---
 
 # Run the hexgate platform locally
@@ -247,12 +247,31 @@ Failure modes:
 
 ## 6. Report
 
-Give the user:
-- the dashboard URL that `instance.sh dash` printed (normally `http://localhost:5173`);
-- the email and password, and that they should rotate the password in account settings;
-- the MCP server, beside the URL and credentials: `http://localhost:8080/mcp`, whether step 5 added the `hexgate` registration or found it already there, and the user's steps (a new Claude Code session in another terminal while this one stays open, unless the registration predates this session; then `/mcp` → hexgate → Authenticate and a first prompt). Leave it out only when the user opted out of the MCP server;
-- the log directory, `/tmp/hexgate-<checkout name>`;
-- how to stop the instance: stop the background tasks, or run `.claude/skills/run-platform/instance.sh stop`, which stops this checkout's API, dashboard, MCP server, collector and enricher and nothing else.
+Reply with exactly this block, filled in, and nothing else: no sentence
+before or after it.
+
+```
+Hexgate platform · <light|full> mode · logs <dir>
+  Dashboard  http://localhost:5173    admin@hexgate.dev / <password or "unchanged">
+  API        http://localhost:8000    (<SQLite|Postgres>)
+  Pipeline   collector :4317/:4318 · enricher running        ← full mode only
+  MCP        http://localhost:8080/mcp   registered as `hexgate` (<added|found>)
+Next  open a NEW terminal: claude → /mcp → hexgate → Authenticate → "List my Hexgate projects"
+Stop  .claude/skills/run-platform/instance.sh stop
+Notes <one line per anomaly, e.g. "enricher restarted once (Postgres init deadlock)">; omit the line when there is none
+```
+
+Rules:
+- Name the mode once, in the header line.
+- `Dashboard` is the URL `instance.sh dash` printed. The password is the one the
+  login check accepted, or `unchanged` when the database was already seeded and
+  the user keeps their saved one.
+- Leave out the `Pipeline` line in light mode, and the `MCP` and `Next` lines
+  when the user opted out of the MCP server.
+- Add `(keep this session open, it owns the servers)` to the `Next` line only
+  when step 5 added the registration in this run.
+- Don't mention stale FIRST-BOOT blocks unless the password line depends on
+  them.
 
 The password is a local dev credential, so printing it in chat is fine. Never do
 this against a staging or prod stack.
