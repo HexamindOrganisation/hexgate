@@ -41,3 +41,32 @@ export function agentSubgraph(
     roles: graph.roles,
   };
 }
+
+/** One agent's delegation neighbours in the project graph: the agents it
+ * reaches (agent-as-tool, outbound) and the agents that reach it (inbound,
+ * i.e. it is their sub-agent). Returns deduped labels in graph order; empty
+ * when the agent isn't in the graph. Edges are classed by endpoint kind, not
+ * edge kind, so an agent-as-tool reach lowered to a call still counts. */
+export function agentReach(
+  graph: PolicyGraph,
+  agentName: string,
+): { reaches: string[]; calledBy: string[] } {
+  const self = graph.nodes.find(
+    (n) => n.kind === "agent" && n.label === agentName,
+  );
+  if (!self) return { reaches: [], calledBy: [] };
+  const agentLabel = new Map(
+    graph.nodes.filter((n) => n.kind === "agent").map((n) => [n.id, n.label]),
+  );
+  const reaches = new Set<string>();
+  const calledBy = new Set<string>();
+  for (const e of graph.edges) {
+    if (e.source === self.id && agentLabel.has(e.target)) {
+      reaches.add(agentLabel.get(e.target)!);
+    }
+    if (e.target === self.id && agentLabel.has(e.source)) {
+      calledBy.add(agentLabel.get(e.source)!);
+    }
+  }
+  return { reaches: [...reaches], calledBy: [...calledBy] };
+}

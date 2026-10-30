@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { MATRIX_MODE_TONE } from "@/lib/policy_files";
+import { agentReach } from "@/lib/agent-graph";
+import { MATRIX_MODE_TONE, usePolicyGraph } from "@/lib/policy_files";
 import {
   BookOpen,
   ChevronRight,
@@ -37,7 +38,8 @@ import { cn } from "@/lib/utils";
  * One row per registered agent; each opens its hub at /agents/:name,
  * where the manifest, graph, resolved policy and decisions live. A row
  * carries just enough to choose between agents: registration status,
- * model / framework, tool & skill counts, and 24h call / denial volume.
+ * model / framework, tool & skill counts, agent-to-agent delegation
+ * (reaches / called by), and 24h call / denial volume.
  *
  * Editing happens elsewhere: policy authoring in /policies, manifest
  * registration through the SDK's ``hexgate register``. The manifest
@@ -58,6 +60,21 @@ export function AgentsPage() {
     () => new Map(summary.data?.by_agent.map((r) => [r.key, r])),
     [summary.data],
   );
+  // Agent-to-agent delegation, from the policy graph: who each agent reaches
+  // (as an agent-as-tool) and who reaches it. Absent on classic projects with
+  // no composed graph — the rows just omit the delegation line then.
+  const graph = usePolicyGraph(scope.projectId);
+  const reachByAgent = useMemo(() => {
+    // Ignore placeholder data from a prior project/role (keepPreviousData):
+    // omit delegation rather than join the wrong project's graph to these
+    // agents until the fresh graph lands.
+    const g = graph.isPlaceholderData ? undefined : graph.data;
+    const m = new Map<string, ReturnType<typeof agentReach>>();
+    if (g)
+      for (const a of manifests.data ?? [])
+        m.set(a.name, agentReach(g, a.name));
+    return m;
+  }, [graph.data, graph.isPlaceholderData, manifests.data]);
   // null until the summary lands; an agent absent from it had no calls.
   const activityOf = (name: string) =>
     summary.data
@@ -174,12 +191,17 @@ export function AgentsPage() {
               const tools = a.manifest?.tools?.length ?? 0;
               const skills = a.manifest?.skills?.length ?? 0;
               const model = a.manifest?.model?.trim();
+              const reach = reachByAgent.get(a.name);
               // Everything after the model, so a missing model never leaves a
-              // dangling leading "· ".
+              // dangling leading "· ". Outbound delegation ("reaches") rides
+              // here; inbound ("called by") is a chip by the name instead.
               const facts = [
                 a.manifest?.framework?.trim(),
                 pluralise(tools, "tool"),
                 skills > 0 ? pluralise(skills, "skill") : null,
+                reach?.reaches.length
+                  ? `reaches ${reach.reaches.join(", ")}`
+                  : null,
               ]
                 .filter(Boolean)
                 .join(" · ");
@@ -209,6 +231,11 @@ export function AgentsPage() {
                           ? `v${a.version}`
                           : "not registered"}
                       </Badge>
+                      {reach && reach.calledBy.length > 0 && (
+                        <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-caption font-medium text-primary">
+                          called by {reach.calledBy.join(", ")}
+                        </span>
+                      )}
                     </div>
                     <div className="mt-0.5 truncate text-meta text-muted-foreground">
                       {registered ? (
