@@ -190,9 +190,14 @@ export function PlaygroundLive({
     <AccentScope
       className={cn(
         "relative flex flex-col overflow-hidden bg-background",
-        // Embedded in a hub tab: a bounded, bordered panel. Standalone: the
-        // full-screen surface that breaks out of the page padding.
-        embedded ? "h-[640px] rounded-xl border border-border" : "h-screen",
+        // Embedded in a hub tab: a bounded, bordered panel (shrinks on short
+        // viewports). Standalone: the full-screen surface that breaks out of
+        // the page padding. The --pg-* vars cap the approval pile and empty
+        // state relative to whichever surface this is, so a tall viewport's
+        // 45vh can't overflow the ~640px panel and clip the composer.
+        embedded
+          ? "h-[min(640px,72vh)] rounded-xl border border-border [--pg-approvals-cap:min(14rem,30vh)] [--pg-empty-min:12rem]"
+          : "h-screen [--pg-approvals-cap:45vh] [--pg-empty-min:50vh]",
         !present && !embedded && "-mx-8 -my-6",
       )}
     >
@@ -464,7 +469,7 @@ function DecisionSummary({ decisions }: { decisions: ToolCall[] }) {
 
 function EmptyState({ online }: { online: boolean }) {
   return (
-    <div className="grid min-h-[50vh] place-items-center text-center">
+    <div className="grid min-h-[var(--pg-empty-min,50vh)] place-items-center text-center">
       <div className="max-w-sm space-y-2">
         <div className="mx-auto grid size-12 place-items-center rounded-2xl bg-primary/10 text-primary">
           <Bot className="size-6" />
@@ -782,7 +787,7 @@ function ApprovalPromptStack({ pending, onDecide }: ApprovalPromptStackProps) {
       {/* Cap the pile so N concurrent approvals can't grow past the viewport and
           push the composer (and lower Approve/Deny buttons) out of reach — the
           header stays pinned, the cards scroll. */}
-      <div className="max-h-[45vh] space-y-2 overflow-y-auto scrollbar-thin">
+      <div className="max-h-[var(--pg-approvals-cap,45vh)] space-y-2 overflow-y-auto scrollbar-thin">
         {pending.map((req) => (
           <ApprovalPromptCard
             key={req.decision_id}
