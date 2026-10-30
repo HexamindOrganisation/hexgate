@@ -51,7 +51,13 @@ export function AgentsPage() {
     enabled: !!scope.projectId,
   });
   // 24h activity per agent; shares Home's cache entry.
-  const { activityOf } = useAgentActivity24h(scope.projectId);
+  const { summary, activityOf } = useAgentActivity24h(scope.projectId);
+  // An errored summary shows "—" so it reads apart from a genuine 0 calls.
+  const summaryFailed = summary.isError && !summary.data;
+
+  if (scope.status === "no-project") {
+    return <NoProjectEmptyState resource="agents" />;
+  }
 
   // The agent detail now lives in its own hub at /agents/:name. A legacy
   // deep link — /agents?agent=support_bot, e.g. a bookmark or a link from
@@ -59,10 +65,6 @@ export function AgentsPage() {
   const deepLink = searchParams.get("agent");
   if (deepLink) {
     return <Navigate replace to={`/agents/${encodeURIComponent(deepLink)}`} />;
-  }
-
-  if (scope.status === "no-project") {
-    return <NoProjectEmptyState resource="agents" />;
   }
 
   const agents = manifests.data ?? [];
@@ -154,11 +156,11 @@ export function AgentsPage() {
                       )}
                     </div>
                   </div>
-                  {registered && activity && (
+                  {registered && (activity || summaryFailed) && (
                     <div className="hidden shrink-0 gap-5 text-right sm:flex">
                       <div>
                         <div className="text-[15px] font-semibold tabular-nums">
-                          {activity.all.toLocaleString()}
+                          {activity ? activity.all.toLocaleString() : "—"}
                         </div>
                         <div className="text-caption text-muted-foreground">
                           calls 24h
@@ -168,12 +170,12 @@ export function AgentsPage() {
                         <div
                           className={cn(
                             "text-[15px] font-semibold tabular-nums",
-                            activity.deny > 0
+                            activity && activity.deny > 0
                               ? "text-deny"
                               : "text-muted-foreground",
                           )}
                         >
-                          {activity.deny.toLocaleString()}
+                          {activity ? activity.deny.toLocaleString() : "—"}
                         </div>
                         <div className="text-caption text-muted-foreground">
                           denied
