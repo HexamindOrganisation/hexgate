@@ -14,7 +14,7 @@ import {
 import { TopUsersCard } from "@/components/usage/top-users";
 import { useUsageFilters } from "@/lib/usage-filters";
 import { PageHeader } from "@/components/ui/page-header";
-import { fmtTokens } from "@/lib/format";
+import { fmtTokens, pluralise } from "@/lib/format";
 
 export function UsagePage() {
   const projectScope = useProjectScoped();
@@ -94,8 +94,7 @@ export function UsagePage() {
               <span className="font-semibold text-foreground">
                 {fmtTokens(totals.total_tokens)} tokens
               </span>{" "}
-              over {totals.calls.toLocaleString()} model{" "}
-              {totals.calls === 1 ? "call" : "calls"}{" "}
+              over {pluralise(totals.calls, "model call")}{" "}
               {rangePhrase(f.range, f.start_date)}
               {scopeFiltered ? (
                 " matching these filters"
