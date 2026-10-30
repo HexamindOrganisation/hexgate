@@ -1,21 +1,14 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { MATRIX_MODE_TONE } from "@/lib/policy_files";
 import {
-  MATRIX_MODE_TONE,
-  usePolicyFiles,
-  usePolicyMatrix,
-} from "@/lib/policy_files";
-import { ENTRY_FILE } from "@/lib/file_tree";
-import { useAgentSelection } from "@/lib/agent_param";
-import {
-  Ban,
   BookOpen,
-  ScrollText,
+  ChevronRight,
   FileText,
   ShieldCheck,
   Wrench,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
 import {
   api,
   type AgentManifestView,
@@ -27,80 +20,39 @@ import {
   type ToolDefinition,
 } from "@/lib/api";
 import { useProjectScoped } from "@/lib/active";
-import { useCanManageBans } from "@/lib/bans";
 import { Badge } from "@/components/ui/badge";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { DocsLink } from "@/components/DocsLink";
 import { DOC_PATHS } from "@/lib/docs";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
-import { auditUrl } from "@/lib/audit-filters";
 import { useAuditSummary24h } from "@/lib/audit-summary";
-import { formatDate, pluralise } from "@/lib/format";
+import { pluralise } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
- * /agents — read-only manifest view.
+ * /agents — the agent list, the workspace's landing for agents.
  *
- * Renders each agent's *registered* manifest, reconstructed from the
- * JSON snapshot stored on the latest AgentVersion row in Postgres (not
- * from the legacy agent.yaml text). When an Agent row exists but no
- * version has been registered yet (e.g. YAML-seeded fixtures), the view
- * degrades to an empty-state telling the user to register first.
+ * One row per registered agent; each opens its hub at /agents/:name,
+ * where the manifest, graph, resolved policy and decisions live. A row
+ * carries just enough to choose between agents: registration status,
+ * model / framework, tool & skill counts, and 24h call / denial volume.
  *
- * Editing happens elsewhere: policy authoring lives in /policies,
- * manifest registration goes through the SDK's ``hexgate register``.
+ * Editing happens elsewhere: policy authoring in /policies, manifest
+ * registration through the SDK's ``hexgate register``. The manifest
+ * renderer itself (ManifestView, below) is shared with the hub's
+ * Resources tab.
  */
 export function AgentsPage() {
   const scope = useProjectScoped();
+  const [searchParams] = useSearchParams();
   const manifests = useQuery({
     queryKey: ["agent-manifests", scope.projectId],
     queryFn: () => api.listAgentManifests(scope.projectId as string),
     enabled: !!scope.projectId,
   });
-  // ?agent= drives selection so a link from /policies (or a shared URL
-  // /agents?agent=support_bot) lands on the right agent. Falls back to
-  // the first agent when the URL is unset or references a stale name.
-  // resetOn=projectId means the URL clears on a real project change,
-  // but NOT on the initial mount — so /agents?agent=beta from an
-  // incoming link isn't stomped before the user sees it.
-  const { selected: selectedName, set: setSelected } = useAgentSelection(
-    manifests.data,
-    { resetOn: scope.projectId },
-  );
-
-  const active = manifests.data?.find((m) => m.name === selectedName);
   // 24h activity per agent; shares Home's cache entry.
   const summary = useAuditSummary24h(scope.projectId, { poll: true });
-  // Roles x tools for the selected agent, as the engine tabulates them.
-  // Only projects with a policy.yaml compose; others have no matrix.
-  const policyFiles = usePolicyFiles(scope.projectId);
-  const modular = !!policyFiles.data?.some((f) => f.name === ENTRY_FILE);
-  // Manifest tools the policy doesn't list get the engine's fallback too.
-  const toolNames = useMemo(
-    () => active?.manifest?.tools?.map((t) => t.name) ?? [],
-    [active],
-  );
-  const matrix = usePolicyMatrix(
-    scope.projectId,
-    active?.name ?? "",
-    modular && !!active,
-    toolNames,
-  ).data;
-  const roleModes = useMemo(() => {
-    if (!matrix) return undefined;
-    return (tool: string): RoleMode[] =>
-      matrix.roles.map((role) => {
-        const cell = matrix.cells[tool]?.[role];
-        return {
-          role,
-          mode: cell?.mode,
-          constraint: cell?.constraint ?? null,
-          defaulted: !matrix.tools.includes(tool),
-        };
-      });
-  }, [matrix]);
   const byAgent = useMemo(
     () => new Map(summary.data?.by_agent.map((r) => [r.key, r])),
     [summary.data],
@@ -110,12 +62,20 @@ export function AgentsPage() {
     summary.data
       ? (byAgent.get(name) ?? { all: 0, deny: 0, needs_approval: 0 })
       : null;
-  const activeActivity = active ? activityOf(active.name) : null;
-  const canManageBans = useCanManageBans();
+
+  // The agent detail now lives in its own hub at /agents/:name. A legacy
+  // deep link — /agents?agent=support_bot, e.g. a bookmark or a link from
+  // Home — redirects into the hub so no inbound URL breaks.
+  const deepLink = searchParams.get("agent");
+  if (deepLink) {
+    return <Navigate replace to={`/agents/${encodeURIComponent(deepLink)}`} />;
+  }
 
   if (scope.status === "no-project") {
     return <NoProjectEmptyState resource="agents" />;
   }
+
+  const agents = manifests.data ?? [];
 
   return (
     <div className="mx-auto max-w-[1240px]">
@@ -123,9 +83,9 @@ export function AgentsPage() {
         title="Agents"
         description={
           <>
-            Manifests registered from the SDK with{" "}
+            Every agent registered with{" "}
             <span className="font-mono text-foreground">hexgate register</span>.
-            Read-only here; policy lives in Policies.
+            Open one for its graph, resources, policy and decisions.
           </>
         }
         actions={
@@ -133,210 +93,119 @@ export function AgentsPage() {
         }
       />
 
-      <div className="grid items-start gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-        <Card className="overflow-hidden p-0">
-          <nav aria-label="Agents" className="flex flex-col">
-            {manifests.isPending ? (
-              <div className="px-4 py-5 text-meta text-muted-foreground">
-                Loading agents…
-              </div>
-            ) : manifests.isError && !manifests.data ? (
-              <div className="px-4 py-5 text-meta text-muted-foreground">
-                Couldn't load agents.
-              </div>
-            ) : (manifests.data ?? []).length ? (
-              (manifests.data ?? []).map((a) => {
-                const calls = activityOf(a.name)?.all;
-                const on = a.name === selectedName;
-                return (
-                  <button
-                    key={a.name}
-                    type="button"
-                    aria-current={on || undefined}
-                    onClick={() => setSelected(a.name)}
+      <Card className="overflow-hidden p-0">
+        <nav aria-label="Agents" className="flex flex-col">
+          {manifests.isPending ? (
+            <div className="px-4 py-5 text-meta text-muted-foreground">
+              Loading agents…
+            </div>
+          ) : manifests.isError && !manifests.data ? (
+            <div className="px-4 py-5 text-meta text-muted-foreground">
+              Couldn't load agents.
+            </div>
+          ) : agents.length ? (
+            agents.map((a) => {
+              const activity = activityOf(a.name);
+              const registered = !!a.manifest;
+              const tools = a.manifest?.tools?.length ?? 0;
+              const skills = a.manifest?.skills?.length ?? 0;
+              const model = a.manifest?.model?.trim();
+              // Everything after the model, so a missing model never leaves a
+              // dangling leading "· ".
+              const facts = [
+                a.manifest?.framework?.trim(),
+                pluralise(tools, "tool"),
+                skills > 0 ? pluralise(skills, "skill") : null,
+              ]
+                .filter(Boolean)
+                .join(" · ");
+              return (
+                <Link
+                  key={a.name}
+                  to={`/agents/${encodeURIComponent(a.name)}`}
+                  aria-label={a.name}
+                  className="group flex items-center gap-3 border-t border-border/60 px-4 py-3.5 transition-colors first:border-t-0 hover:bg-accent/50"
+                >
+                  <span
                     className={cn(
-                      "flex flex-col gap-1 border-t border-border/60 px-4 py-3 text-left transition-colors first:border-t-0 hover:bg-accent/50",
-                      on && "bg-primary/10 hover:bg-primary/10",
+                      "size-1.5 shrink-0 rounded-full",
+                      registered ? "bg-success" : "bg-muted-foreground/40",
                     )}
-                  >
-                    <span className="flex min-w-0 items-center gap-2 font-mono text-[13px] font-medium">
-                      <span
-                        className={cn(
-                          "size-1.5 shrink-0 rounded-full",
-                          a.manifest ? "bg-success" : "bg-muted-foreground/40",
-                        )}
-                      />
-                      <span className="truncate">{a.name}</span>
-                    </span>
-                    <span className="pl-3.5 text-meta text-muted-foreground">
-                      {a.manifest
-                        ? pluralise(a.manifest.tools?.length ?? 0, "tool")
-                        : "not registered"}
-                      {calls !== undefined &&
-                        ` · ${pluralise(calls, "call")} in 24h`}
-                    </span>
-                  </button>
-                );
-              })
-            ) : (
-              <div className="px-4 py-5 text-meta text-muted-foreground">
-                No agents yet. Register one with{" "}
-                <span className="font-mono text-foreground">
-                  hexgate register
-                </span>
-                .
-              </div>
-            )}
-          </nav>
-        </Card>
-
-        {active ? (
-          <div className="space-y-4">
-            <Card className="p-5">
-              <div className="flex flex-wrap items-start gap-4">
-                <div className="min-w-0 flex-1 basis-[320px]">
-                  <div className="flex flex-wrap items-center gap-2.5">
-                    <h2 className="font-mono text-title-sm font-semibold">
-                      <Link
-                        to={`/agents/${encodeURIComponent(active.name)}`}
-                        className="hover:underline"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="truncate font-mono text-[13px] font-medium">
+                        {a.name}
+                      </span>
+                      <Badge
+                        variant="outline"
+                        className="font-mono text-[11px]"
                       >
-                        {active.name}
-                      </Link>
-                    </h2>
-                    <Badge variant="outline" className="font-mono text-[11px]">
-                      {active.version !== null
-                        ? `v${active.version}`
-                        : "not registered"}
-                    </Badge>
-                  </div>
-                  {active.manifest?.description?.trim() && (
-                    <p className="mt-1.5 max-w-[640px] text-sm text-muted-foreground">
-                      {active.manifest.description.trim()}
-                    </p>
-                  )}
-                  <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-meta text-muted-foreground">
-                    <div>
-                      <dt className="inline">Model </dt>
-                      <dd className="inline font-mono text-foreground">
-                        {active.manifest?.model?.trim() || "—"}
-                      </dd>
+                        {a.version !== null
+                          ? `v${a.version}`
+                          : "not registered"}
+                      </Badge>
                     </div>
-                    <div>
-                      <dt className="inline">Framework </dt>
-                      <dd className="inline font-mono text-foreground">
-                        {active.manifest?.framework?.trim() || "—"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="inline">Updated </dt>
-                      <dd className="inline text-foreground">
-                        {formatDate(active.updated_at)}
-                      </dd>
-                    </div>
-                  </dl>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    asChild
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5"
-                  >
-                    <Link
-                      to={`/policies?agent=${encodeURIComponent(active.name)}`}
-                    >
-                      <ShieldCheck className="size-3.5" />
-                      Edit policy
-                    </Link>
-                  </Button>
-                  <Button
-                    asChild
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5"
-                  >
-                    <Link to={auditUrl({ agent: active.name, range: "24h" })}>
-                      <ScrollText className="size-3.5" />
-                      View decisions
-                    </Link>
-                  </Button>
-                  {canManageBans && (
-                    <Button
-                      asChild
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                    >
-                      <Link
-                        to={`/bans?ban_agent=${encodeURIComponent(active.name)}`}
-                      >
-                        <Ban className="size-3.5" />
-                        Ban agent
-                      </Link>
-                    </Button>
-                  )}
-                </div>
-              </div>
-              {summary.isError && !summary.data ? (
-                <p className="mt-4 border-t border-border/60 pt-4 text-meta text-muted-foreground">
-                  Couldn't load the last 24 hours of activity.
-                </p>
-              ) : (
-                activeActivity && (
-                  <div className="mt-4 grid grid-cols-3 border-t border-border/60 pt-4 text-meta">
-                    {(
-                      [
-                        {
-                          label: "Calls · 24h",
-                          value: activeActivity.all,
-                          className: "",
-                        },
-                        {
-                          label: "Denied",
-                          value: activeActivity.deny,
-                          className: "text-deny",
-                        },
-                        {
-                          label: "Sent for approval",
-                          value: activeActivity.needs_approval,
-                          className: "text-approval",
-                        },
-                      ] satisfies {
-                        label: string;
-                        value: number;
-                        className: string;
-                      }[]
-                    ).map((stat) => (
-                      <div key={stat.label}>
-                        <div className="text-muted-foreground">
-                          {stat.label}
-                        </div>
-                        <div
-                          className={cn(
-                            "mt-1 text-[20px] font-semibold tabular-nums",
-                            stat.className,
+                    <div className="mt-0.5 truncate text-meta text-muted-foreground">
+                      {registered ? (
+                        <>
+                          {model && (
+                            <span className="font-mono text-foreground">
+                              {model}
+                            </span>
                           )}
-                        >
-                          {stat.value.toLocaleString()}
+                          {model ? ` · ${facts}` : facts}
+                        </>
+                      ) : (
+                        <>
+                          not registered · run{" "}
+                          <span className="font-mono">hexgate register</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  {registered && activity && (
+                    <div className="hidden shrink-0 gap-5 text-right sm:flex">
+                      <div>
+                        <div className="text-[15px] font-semibold tabular-nums">
+                          {activity.all.toLocaleString()}
+                        </div>
+                        <div className="text-caption text-muted-foreground">
+                          calls 24h
                         </div>
                       </div>
-                    ))}
-                  </div>
-                )
-              )}
-            </Card>
-            <ManifestView agent={active} roleModes={roleModes} />
-          </div>
-        ) : (
-          manifests.isSuccess &&
-          manifests.data.length > 0 && (
-            <Card className="grid place-items-center p-12 text-sm text-muted-foreground">
-              No agents to inspect.
-            </Card>
-          )
-        )}
-      </div>
+                      <div>
+                        <div
+                          className={cn(
+                            "text-[15px] font-semibold tabular-nums",
+                            activity.deny > 0
+                              ? "text-deny"
+                              : "text-muted-foreground",
+                          )}
+                        >
+                          {activity.deny.toLocaleString()}
+                        </div>
+                        <div className="text-caption text-muted-foreground">
+                          denied
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
+                </Link>
+              );
+            })
+          ) : (
+            <div className="px-4 py-5 text-meta text-muted-foreground">
+              No agents yet. Register one with{" "}
+              <span className="font-mono text-foreground">
+                hexgate register
+              </span>
+              .
+            </div>
+          )}
+        </nav>
+      </Card>
     </div>
   );
 }
