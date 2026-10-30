@@ -6,11 +6,20 @@
 #   make platform-up STAGE=prod      # -p hexgate-prod    --env-file platform/.env.prod
 #   make platform-up STAGE=staging   # -p hexgate-staging --env-file platform/.env.staging
 #
-# Two services bind host ports, both loopback-only: the api (HEXGATE_HTTP_PORT:
-# 7000 prod / 7200 staging) and the collector's OTLP/HTTP receiver
-# (HEXGATE_OTLP_PORT: 7001 / 7201). The box's existing reverse proxy owns
+# Three services bind host ports, all loopback-only: the api (HEXGATE_HTTP_PORT:
+# 7000 prod / 7200 staging), the collector's OTLP/HTTP receiver
+# (HEXGATE_OTLP_PORT: 7001 / 7201) and the MCP server (HEXGATE_MCP_PORT:
+# 7002 / 7202). The box's existing reverse proxy owns
 # 80/443 + TLS and routes to them by hostname and path (see platform/DEPLOY.md).
 # Secrets/per-deploy values live in .env.<env>.
+
+# The OAuth token issuer and the MCP resource URL. One definition, merged into
+# both the api and mcp environments, so the two services cannot disagree: a
+# token minted with one `iss` or `aud` is refused by a verifier holding the
+# other. Both services refuse a trailing slash on HEXGATE_PUBLIC_URL at boot.
+x-oauth-urls: &oauth-urls
+  HEXGATE_PUBLIC_URL: ${HEXGATE_PUBLIC_URL:?HEXGATE_PUBLIC_URL missing - add it to the /hexgate/<stage> secret, then make platform-env-pull STAGE=<stage> (DEPLOY.md section 6)}
+  HEXGATE_MCP_RESOURCE_URL: ${HEXGATE_MCP_RESOURCE_URL:?HEXGATE_MCP_RESOURCE_URL missing - add it to the /hexgate/<stage> secret, then make platform-env-pull STAGE=<stage> (DEPLOY.md section 6)}
 
 services:
   postgres:
@@ -91,6 +100,8 @@ services:
       HEXGATE_POSTGRES_PORT: "5432"
       # Persistent keystore — losing it invalidates every token/session/bundle.
       HEXGATE_KEYSTORE_PATH: /keys
+      # The OAuth token `iss` and audiences, shared with the mcp service.
+      <<: *oauth-urls
     volumes:
       - hexgate-keys:/keys
     depends_on:
@@ -334,6 +345,35 @@ services:
       # runs postgres-init first). On api-init, not api: see that service.
       api-init:
         condition: service_completed_successfully
+
+  mcp:
+    # The MCP server: stateless, it holds no key and no database. It verifies
+    # each caller's OAuth token against the api's JWKS and forwards it to the
+    # api unchanged, so the api's own checks stay the security boundary.
+    # Built from the repo root: the image copies docs/policy/ for the
+    # policy_reference tool.
+    image: ${REGISTRY:-hexgate}/hexgate-mcp:${TAG:-latest}
+    build:
+      context: ..
+      dockerfile: platform/mcp/Dockerfile
+    platform: linux/amd64
+    restart: unless-stopped
+    ports:
+      # Loopback only, same contract as the api: the box's reverse proxy routes
+      # /mcp and its protected-resource metadata on the api hostname here.
+      - "127.0.0.1:${HEXGATE_MCP_PORT:?HEXGATE_MCP_PORT missing - add it to the /hexgate/<stage> secret, then make platform-env-pull STAGE=<stage> (DEPLOY.md section 6)}:8080"
+    # No env_file: the server needs none of the stage's secrets.
+    environment:
+      # API calls and the JWKS fetch stay on the compose network.
+      HEXGATE_MCP_API_URL: http://api:8000
+      <<: *oauth-urls
+    # No hexgate-keys volume: tokens are checked against the api's public key,
+    # fetched from /.well-known/jwks.json.
+    depends_on:
+      # The JWKS comes from the api, so the first token check needs it up.
+      api:
+        condition: service_healthy
+    # Liveness from the image's HEALTHCHECK (/health).
 
 volumes:
   pg-data:

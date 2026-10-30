@@ -7,34 +7,39 @@ ClickHouse, Redpanda, keystore, and network. Each env's **api** serves both the
 JSON API (`/v1/*`) and that env's dashboard SPA same-origin, listening plain
 HTTP on a **loopback port** (prod `7000`, staging `7200`). Its **collector**
 (OTLP/HTTP receiver for the SDK's spans) listens on a second loopback port
-(prod `7001`, staging `7201`). There is no separate edge container — the SPA
+(prod `7001`, staging `7201`), and its **MCP server** (what Claude Code and
+other MCP clients connect to) on a third (prod `7002`, staging `7202`). There
+is no separate edge container — the SPA
 is baked into the API image and served by it.
 
 The box **already runs a reverse proxy** that owns 80/443 and terminates TLS.
 Hexgate does not ship its own front proxy — you point the existing one at the
-two loopback ports by hostname.
+three loopback ports by hostname and path.
 
 ```
                             one machine (one IP)
  Internet ──:443──▶  the box's existing reverse proxy — TLS
    app.hexgate.ai          │  Host: app.hexgate.ai          → 127.0.0.1:7000
                            │    path /v1/traces             → 127.0.0.1:7001
+                           │    path /mcp (+ its metadata)  → 127.0.0.1:7002
    app.staging.hexgate.ai  │  Host: app.staging.hexgate.ai  → 127.0.0.1:7200
                            │    path /v1/traces             → 127.0.0.1:7201
+                           │    path /mcp (+ its metadata)  → 127.0.0.1:7202
                   ┌───────┴───────────────┐    ┌───────────────────────┐
                   │ hexgate-prod          │    │ hexgate-staging       │
                   │  api→pg,ch            │    │  api→pg,ch            │
                   │  collector→redpanda   │    │  collector→redpanda   │
                   │  enricher: redpanda→ch│    │  enricher: redpanda→ch│
+                  │  mcp→api              │    │  mcp→api              │
                   └───────────────────────┘    └───────────────────────┘
 ```
 
 The reverse proxy must be able to reach the host loopback (it's host-installed
 or runs with host networking). A bridged proxy container can't see
-`127.0.0.1:7000` — in that case change BOTH the `api` and `collector` port
+`127.0.0.1:7000` — in that case change the `api`, `collector` AND `mcp` port
 bindings in the compose to publish on a shared Docker network or a
 non-loopback port instead (republishing only the api leaves every
-`/v1/traces` POST 502ing while `/v1/*` works).
+`/v1/traces` POST and every MCP call 502ing while `/v1/*` works).
 
 Images build **on the box** — no registry. amd64 throughout (the API bundles
 the amd64-only OPA binary; the image also runs a Node build stage to bundle the
@@ -50,8 +55,8 @@ app.hexgate.ai          A   <box-IP>
 app.staging.hexgate.ai  A   <box-IP>
 ```
 
-**80 and 443** are owned by the box's reverse proxy. The 7000/7200 (api) and
-7001/7201 (collector) ports stay loopback — never exposed.
+**80 and 443** are owned by the box's reverse proxy. The 7000/7200 (api),
+7001/7201 (collector) and 7002/7202 (mcp) ports stay loopback — never exposed.
 
 ## 2. Layout (two checkouts)
 
@@ -88,8 +93,8 @@ Then add two routes to the box's reverse proxy (one-time), so each hostname
 terminates TLS and proxies to its loopback port:
 
 ```
-app.hexgate.ai          → 127.0.0.1:7000   (except path /v1/traces → 127.0.0.1:7001)
-app.staging.hexgate.ai  → 127.0.0.1:7200   (except path /v1/traces → 127.0.0.1:7201)
+app.hexgate.ai          → 127.0.0.1:7000   (except path /v1/traces → 127.0.0.1:7001, and the MCP paths → 127.0.0.1:7002)
+app.staging.hexgate.ai  → 127.0.0.1:7200   (except path /v1/traces → 127.0.0.1:7201, and the MCP paths → 127.0.0.1:7202)
 ```
 
 The `/v1/traces` path routes to the stage's `HEXGATE_OTLP_PORT` — the
@@ -139,9 +144,113 @@ limit and needs nothing.
 
 (In Caddy this is two `reverse_proxy` site blocks; in nginx, two `server`
 blocks with `proxy_pass`. Forward `X-Forwarded-Proto: https` — the API trusts
-it, via uvicorn `--proxy-headers`, for correct https OAuth callbacks. `/v1`
-includes WebSocket endpoints, so the proxy must pass upgrades — Caddy does this
-automatically; nginx needs the `Upgrade`/`Connection` headers set.)
+it, via uvicorn `--proxy-headers`, for correct https OAuth callbacks — and, in
+nginx, `proxy_set_header Host $host` (Caddy passes the client's Host already).
+`/v1` includes WebSocket endpoints, so the proxy must pass upgrades — Caddy
+does this automatically; nginx needs the `Upgrade`/`Connection` headers set.)
+
+**The MCP routes.** Two paths on the api hostname go to the stage's
+`HEXGATE_MCP_PORT` instead of the hostname's catch-all:
+
+- `/mcp`, as a **prefix** (nginx `location ^~ /mcp`, not `location = /mcp`;
+  Caddy `handle /mcp*`): the MCP server redirects `/mcp/` to `/mcp`, and an exact
+  match would hand `/mcp/` to the api instead.
+- `/.well-known/oauth-protected-resource/mcp`, the MCP server's own metadata.
+  This is the document an MCP client reads first, after the 401 from `/mcp`;
+  it names the api as the authorization server.
+
+The other two discovery documents, `/.well-known/oauth-authorization-server`
+and `/.well-known/jwks.json`, are the api's and stay on the catch-all. The MCP
+server fetches the JWKS from `http://api:8000` on the compose network, never
+through the proxy. Without either route the api answers in the MCP server's
+place (the metadata path with a JSON 404), and the client's connect or
+discovery fails. `HEXGATE_PUBLIC_URL` and `HEXGATE_MCP_RESOURCE_URL` (section
+6) must name this same hostname: a client that
+connects to `https://app.hexgate.ai/mcp` is only given a token for the
+resource URL the MCP server advertises.
+
+**Rate-limit the unauthenticated OAuth and MCP paths.** The api has no request
+rate limiting of its own, and the `/.well-known/` discovery documents, `/mcp`
+and the OAuth endpoints under `/v1/oauth/` answer callers that carry no
+credentials, by design: discovery, the login redirect and the token exchange
+come before any token exists. `/v1/oauth/authorize` and `/v1/oauth/token` also
+make the api fetch the client's metadata document from the host the caller
+names (on a cache miss, which a new hostname always is), so an unthrottled
+caller can keep the api's DNS lookups and outbound fetches busy with one
+distinct hostname per request. Limit each of these paths per client IP at the
+proxy. In nginx, a zone at `http` level (e.g.
+`/etc/nginx/conf.d/hexgate-ratelimit.conf`, once for both stages):
+
+```nginx
+limit_req_zone $binary_remote_addr zone=hexgate_oauth:10m rate=5r/s;
+limit_req_zone $binary_remote_addr zone=hexgate_mcp:10m rate=20r/s;
+```
+
+then, in each stage's `server` block (ports shown for prod; on staging use 7202
+for 7002 and 7200 for 7000, or staging's MCP and OAuth traffic reaches prod).
+`limit_req_status` goes here rather than at `http` level, where it would also
+change the status of any other site's limits on the box:
+
+```nginx
+limit_req_status 429;
+location ^~ /mcp {
+    limit_req zone=hexgate_mcp burst=40 nodelay;
+    client_max_body_size 1m;
+    proxy_pass http://127.0.0.1:7002;
+    proxy_buffering off;    # MCP replies may stream as server-sent events
+}
+location = /.well-known/oauth-protected-resource/mcp {
+    limit_req zone=hexgate_oauth burst=20 nodelay;
+    proxy_pass http://127.0.0.1:7002;
+}
+location = /.well-known/oauth-authorization-server {
+    limit_req zone=hexgate_oauth burst=20 nodelay;
+    proxy_pass http://127.0.0.1:7000;
+}
+location = /.well-known/jwks.json {
+    limit_req zone=hexgate_oauth burst=20 nodelay;
+    proxy_pass http://127.0.0.1:7000;
+}
+location ^~ /v1/oauth/ {
+    limit_req zone=hexgate_oauth burst=20 nodelay;
+    client_max_body_size 1m;
+    proxy_pass http://127.0.0.1:7000;
+}
+```
+
+nginx takes an exact `=` match first, then the longest prefix, and `^~` stops
+it from trying regex locations after that, so these blocks win over `location
+/` and over any `location ~ …` the server already has (a common `location ~ /\.
+{ deny all; }` would otherwise refuse the discovery documents) wherever they
+sit in the file. The three `/.well-known/` routes are exact matches, the only
+such paths the api and the MCP server serve, so any other `/.well-known/`
+handling the server already has (an ACME challenge, a `security.txt`) keeps
+working. The `/v1/oauth/` one also covers the two calls the dashboard's consent
+page makes (`GET /v1/oauth/consent-info` and the consent `POST
+/v1/oauth/authorize`); a login makes each once, far under the limit. The 1 MiB
+body cap holds `/mcp` and `/v1/oauth/` to what they carry (a JSON-RPC call with
+at most a policy draft, the consent JSON, the token form) rather than the prod
+box's `http`-level 100M. Put every `proxy_set_header` at `server` level and
+none inside a `location`, this server's `location /` included: a `location`
+that sets any header of its own inherits none of the `server`'s. That covers
+`X-Forwarded-Proto`, `Host $host` and the WebSocket `Upgrade`/`Connection` pair
+(above). For `/mcp`, `Host $host` matters: the MCP server's `/mcp/` → `/mcp`
+redirect is built from the Host it receives (uvicorn's proxy headers correct
+the scheme, not the host), so without it the redirect points at
+`127.0.0.1:7002`.
+
+A login is about eight requests on these paths (the first `/mcp` call's 401,
+the two metadata documents, `/authorize`, the consent page's two `/v1/oauth`
+calls, `/token`, the retried `/mcp` call), well inside the burst; each tool
+call after that is one `/mcp` request. A caller over the limit gets `429`.
+`$binary_remote_addr` is the client's address only because nothing sits in
+front of this proxy; put a CDN or load balancer in front of it and the key
+becomes that hop's address, throttling every user as one. Caddy has no rate
+limiter built in: it needs the `caddy-ratelimit` module (`xcaddy build --with
+github.com/mholt/caddy-ratelimit`) and its `rate_limit` directive, keyed on
+`{remote_host}`, in the same five routes; being a third-party handler, it also
+needs `order rate_limit before reverse_proxy` in the global options (or each
+route wrapped in `route { }`).
 
 ## 4. Launch — env stacks, then wire up the proxy
 
@@ -150,7 +259,7 @@ automatically; nginx needs the `Upgrade`/`Connection` headers set.)
 make platform-up STAGE=prod
 # /srv/hexgate-staging
 make platform-up STAGE=staging
-# then reload the box's reverse proxy so it routes to 7000/7200 (+ /v1/traces → 7001/7201)
+# then reload the box's reverse proxy so it routes to 7000/7200 (+ /v1/traces → 7001/7201, MCP paths → 7002/7202)
 ```
 
 Bring the env stacks up before the proxy routes them, so TLS issuance doesn't
@@ -172,6 +281,15 @@ curl -sf https://app.staging.hexgate.ai/v1/health
 # unauthenticated POST); a JSON 404 means the api's SPA catch-all did, i.e. the
 # path route is missing or ordered after the hostname's catch-all.
 curl -s -o /dev/null -w '%{http_code}\n' -X POST https://app.hexgate.ai/v1/traces   # → 401
+# The MCP routes: /mcp answers 401 (no token) from the MCP server, and its
+# metadata is JSON naming this hostname. A 502 means the mcp container is not
+# up (docker compose ps / logs); a 404 or 405 means the api answered, i.e. the
+# location is missing or mistyped. Run the same three against
+# app.staging.hexgate.ai: metadata naming the prod hostname there means the
+# staging server block points at prod's ports.
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://app.hexgate.ai/mcp        # → 401
+curl -s https://app.hexgate.ai/.well-known/oauth-protected-resource/mcp           # → {"resource":"https://app.hexgate.ai/mcp",…}
+curl -s https://app.hexgate.ai/.well-known/oauth-authorization-server             # → {"issuer":"https://app.hexgate.ai",…}
 ```
 
 Then prove the pipeline behind the front door. From a laptop with the repo
@@ -293,6 +411,16 @@ far that did this:
 | Release | Key | Value |
 |---|---|---|
 | OTLP pipeline (collector/redpanda/enricher) | `HEXGATE_OTLP_PORT` | `7001` prod, `7201` staging |
+| MCP server | `HEXGATE_MCP_PORT` | `7002` prod, `7202` staging |
+| MCP server | `HEXGATE_PUBLIC_URL` | `https://app.hexgate.ai` prod, `https://app.staging.hexgate.ai` staging — no trailing slash (the api and mcp refuse to boot with one) |
+| MCP server | `HEXGATE_MCP_RESOURCE_URL` | `https://app.hexgate.ai/mcp` prod, `https://app.staging.hexgate.ai/mcp` staging |
+
+The MCP server release also changes the box's reverse proxy, which
+`platform-up` does not touch. In the same upgrade, apply section 3's "The MCP
+routes" and "Rate-limit" blocks as written there, once per stage with that
+stage's ports, then `nginx -t && systemctl reload nginx` and run section 4's
+MCP checks against both hostnames. Until then the api answers `/mcp` in the MCP
+server's place and the OAuth paths run with no per-IP limit.
 
 **When a release adds a Postgres column** — `init_db()` is `create_all`, which
 creates missing tables but never adds columns to an existing one, so the schema
