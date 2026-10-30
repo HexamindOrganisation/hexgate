@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # Preflight for running the hexgate platform locally (macOS or Linux).
-#   preflight.sh          # light mode: platform-api (SQLite) + dashboard
+#   preflight.sh          # light mode: platform-api (SQLite) + dashboard + MCP server
 #   preflight.sh --full   # full mode: + Postgres, Redpanda, ClickHouse, collector, enricher
+#   preflight.sh --no-mcp # either mode without the MCP server (skips the :8080 check)
 # Prints one line per check and exits 1 if anything required is missing.
 set -u
-full=0; [ "${1:-}" = "--full" ] && full=1
+full=0; mcp=1
+for a in "$@"; do
+  case $a in --full) full=1;; --no-mcp) mcp=0;; esac
+done
 fail=0
 ok()   { printf '  ok    %s\n' "$1"; }
 miss() { printf '  MISS  %s  (%s)\n' "$1" "$2"; fail=1; }
@@ -75,10 +79,10 @@ listener() {
 }
 
 echo "ports:"
-# 8000 API, 5173 dashboard; full mode adds the collector (4317/4318) and the
+# 8000 API, 5173 dashboard, 8080 MCP server; full mode adds the collector (4317/4318) and the
 # host ports platform/docker-compose.yml maps: Postgres 5433, ClickHouse
 # 8124/9001, Redpanda 9092.
-ports="8000 5173"; [ $full = 1 ] && ports="$ports 4317 4318 5433 8124 9001 9092"
+ports="8000 5173"; [ $mcp = 1 ] && ports="$ports 8080"; [ $full = 1 ] && ports="$ports 4317 4318 5433 8124 9001 9092"
 if ! command -v lsof >/dev/null 2>&1 && ! command -v ss >/dev/null 2>&1; then
   warn "ports not checked" "needs lsof or ss: $(hint 'lsof ships with macOS' 'install lsof or iproute2')"
 else
