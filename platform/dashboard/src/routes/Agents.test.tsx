@@ -183,6 +183,19 @@ describe("AgentsPage — the agent list", () => {
     expect(link).toHaveAttribute("href", "/agents/support_bot");
   });
 
+  it("leads with a portfolio KPI strip from the 24h summary", async () => {
+    stubFetch("admin");
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    // Await a summary-derived value (the labels render before it loads):
+    // 4 of 15 denied → the rate rides on the Denied tile.
+    expect(await screen.findByText(/26\.7%/)).toBeInTheDocument();
+    // Strip labels are distinct from the row's lowercase "calls 24h"/"denied".
+    expect(screen.getByText("Calls · 24h")).toBeInTheDocument();
+    expect(screen.getByText("across all agents")).toBeInTheDocument();
+    expect(screen.getByText("Denied · 24h")).toBeInTheDocument();
+    expect(screen.getByText("Pending approvals")).toBeInTheDocument();
+  });
+
   it("shows each agent's 24h call and denial volume on its row", async () => {
     stubFetch("admin");
     renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
