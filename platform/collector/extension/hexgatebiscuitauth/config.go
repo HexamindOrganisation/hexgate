@@ -43,8 +43,8 @@ import (
 	"go.opentelemetry.io/collector/config/configopaque"
 )
 
-// Defaults for the revocation cache. The 15-30s poll window comes from the
-// design doc; 20s sits in the middle of it.
+// Defaults for the revocation cache. A revoked token should stop working
+// within 15-30s; a 20s poll sits in the middle of that window.
 //
 // max_staleness bounds only how long a snapshot may go UN-REFRESHED, so a value
 // under the length of routine control-plane maintenance turns a database blip

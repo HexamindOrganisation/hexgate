@@ -395,8 +395,8 @@ def test_the_platform_term_is_counted() -> None:
 
 
 def test_an_unreachable_platform_reads_ledger_only_and_admits() -> None:
-    """G3: a platform outage never denies by default. A PolicySet has no fail-mode
-    method until 6b, so this also pins the enforcer's allow fallback."""
+    """A platform outage never denies by default: the policy sets no
+    ``on_unavailable``, so it reads as allow."""
     platform = _Platform()
     platform.fetcher.error = RuntimeError("platform down")
     enforcer = platform.enforcer(_admission_cap(2))
@@ -409,7 +409,7 @@ def test_an_unreachable_platform_reads_ledger_only_and_admits() -> None:
 
 
 def test_a_path_added_by_a_policy_swap_reads_partial_and_does_not_deny() -> None:
-    """G4 / F5: the snapshot predates the new path, which must not deny the call."""
+    """The snapshot predates the new path, which must not deny the call."""
     platform = _Platform({_INVOCATIONS: 0})
     enforcer = platform.enforcer(_admission_cap(5))
     platform.boundary(enforcer)
@@ -486,7 +486,7 @@ def test_usage_refreshes_holds_the_agent_refresh(
 
 
 def test_an_agent_usage_policy_enables_only_the_agent_scope() -> None:
-    """G3: an agent quota never turns on user ledgers or user fetches."""
+    """An agent quota never turns on user ledgers or user fetches."""
     platform = _Platform({_INVOCATIONS: 0})
     enforcer = platform.enforcer(_admission_cap(2))
 

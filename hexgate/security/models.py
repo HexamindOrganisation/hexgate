@@ -399,7 +399,7 @@ class AgentPolicy(BaseModel):
     # decision, so they are read via `effective_guards`.
     guards: dict[str, GuardRule] = Field(default_factory=dict)
     # Agent-wide, resolved to one value across roles by PolicySet. None means the
-    # author said nothing, which reads as OnUnavailable.ALLOW (G3).
+    # author said nothing, which reads as OnUnavailable.ALLOW.
     usage: UsagePolicy | None = None
 
     @field_validator("constraints")
@@ -575,5 +575,5 @@ class AgentPolicy(BaseModel):
         return {name: rule.enabled for name, rule in self.guards.items()}
 
     def usage_on_unavailable(self) -> OnUnavailable:
-        """This role's fail mode for both usage roots; ``allow`` when unset (G3)."""
+        """This role's fail mode for both usage roots; ``allow`` when unset."""
         return self.usage.on_unavailable if self.usage else OnUnavailable.ALLOW

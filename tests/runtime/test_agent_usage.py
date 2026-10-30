@@ -2,7 +2,7 @@
 
 Every failure here is silent — a window reading low fails a quota open, a missing
 key fails it closed — so these tests pin the rounding, retention and registry
-semantics the ``agent_usage.*`` namespace and PR 6 build on.
+semantics the ``agent_usage.*`` namespace and the platform usage term build on.
 """
 
 from __future__ import annotations
@@ -345,7 +345,7 @@ def test_usage_scope_is_a_value_and_prints_its_kind() -> None:
 
 
 def test_a_user_scope_prints_a_fingerprint_not_its_key() -> None:
-    """G10: a user key is often an email, and every usage log line prints a scope."""
+    """A user key is often an email, and every usage log line prints a scope."""
     scope = UsageScope.user("alice@example.com")
 
     assert re.fullmatch(r"user #[0-9a-f]{12}", str(scope))
@@ -678,7 +678,7 @@ def test_the_combined_namespace_adds_local_usage_to_each_platform_value() -> Non
 def test_the_cut_off_reaches_back_by_the_ingest_margin(
     recorded_before_fetch: float, expected: int
 ) -> None:
-    """G7: an own event still in the pipeline at fetch time is counted locally."""
+    """An own event still in the pipeline at fetch time is counted locally."""
     ledger = _ledger_at(
         _FakeClock(),
         (_FETCHED_AT - recorded_before_fetch, {UsageMetric.INVOCATIONS: 1}),

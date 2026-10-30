@@ -119,8 +119,8 @@ def _usage(client, project_id: str) -> tuple:
 async def test_a_redelivered_poll_is_not_summed_twice_into_usage_minute(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """F1 end to end: a view sums every inserted copy, so the cross-poll
-    dedup is what keeps a redelivered span from counting twice. Needs
+    """Double counting end to end: a view sums every inserted copy, so the
+    cross-poll dedup is what keeps a redelivered span from counting twice. Needs
     migration 0005 on the local volume (`make clickhouse-migrate`)."""
     from hexgate_api.core.clickhouse import get_clickhouse
 

@@ -1,4 +1,4 @@
-"""The usage path grammar, and its parity with the SDK's path registries (G5)."""
+"""The usage path grammar, and its parity with the SDK's path registries."""
 
 from __future__ import annotations
 
@@ -127,7 +127,7 @@ def test_every_sdk_metric_is_a_platform_metric() -> None:
 
 
 def test_every_sdk_path_is_accepted() -> None:
-    """G5: a path the SDK lints as valid but the endpoint rejects, or reads over a
+    """A path the SDK lints as valid but the endpoint rejects, or reads over a
     different window, would be wrong for every policy using it."""
     for name, sdk_path in agent_usage.AGENT_USAGE_PATHS.items():
         spec = parse_usage_path(name)
@@ -135,13 +135,13 @@ def test_every_sdk_path_is_accepted() -> None:
         assert spec.window_seconds == sdk_path.window_seconds, name
 
 
-# Keyed on the root U2 cannot ship without, not on its registry's name: once the
+# Keyed on the user_usage root, not on its registry's name: once the
 # root exists, a missing or renamed USER_USAGE_PATHS fails here instead of skipping.
 @pytest.mark.skipif(
-    USER_USAGE_ROOT not in constraints.PATH_ROOTS, reason="needs U2 (user_usage root)"
+    USER_USAGE_ROOT not in constraints.PATH_ROOTS, reason="needs the user_usage root"
 )
 def test_every_sdk_user_path_is_accepted() -> None:
-    """G5 for user_usage.*: the same grammar serves both roots."""
+    """Parity for user_usage.*: one grammar serves both roots."""
     for name, sdk_path in agent_usage.USER_USAGE_PATHS.items():
         spec = parse_usage_path(name)
         assert spec.metric == sdk_path.metric, name

@@ -8,7 +8,7 @@ import type { AuditWindow } from "@/lib/api";
  * create/revoke lands on the target's next run, and a run already in progress
  * is not interrupted. Hence an event ("the next run"), not a duration. Used
  * with the preposition "on" ("takes effect on the next run"). If the SDK later
- * grows a background poll/TTL (plan §4.6), revisit this wording.
+ * grows a background poll/TTL, revisit this wording.
  */
 export const PROPAGATION_HINT = "the next run";
 

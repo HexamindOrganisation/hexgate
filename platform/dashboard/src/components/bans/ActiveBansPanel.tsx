@@ -11,12 +11,12 @@ import { PROPAGATION_HINT } from "./constants";
 import { formatAbsolute, formatRelative } from "./format";
 
 /**
- * Region B (§9.3) — the primary panel. Lists the project's active bans.
+ * Region B — the primary panel. Lists the project's active bans.
  *
  * Reads a danger surface: a subtle destructive left border + a shield
  * header, without being alarming when the table is empty. Revoke is
  * admin-only (`canManage`) and destructively styled; the confirm step
- * uses the shared ConfirmDialog (§9.5).
+ * uses the shared ConfirmDialog.
  */
 export function ActiveBansPanel({
   projectId,

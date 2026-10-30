@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("hexgate.security.usage_source")
 
 # Above the 5-15 s span pipeline lag, so own events not yet ingested when the
-# snapshot is fetched are still counted locally (gate G7).
+# snapshot is fetched are still counted locally.
 USAGE_INGEST_MARGIN_SECONDS: Final[float] = 30.0
 
 _MIN_REFRESH_ENV: Final = "HEXGATE_USAGE_REFRESH_SECONDS"
@@ -107,7 +107,7 @@ class UsageState(StrEnum):
 
     FRESH = "fresh"  # snapshot younger than sync_after, every path in it
     STALE = "stale"  # last-good older than sync_after, under max_staleness
-    PARTIAL = "partial"  # usable snapshot, some paths missing from it (F5)
+    PARTIAL = "partial"  # usable snapshot, some paths missing from it
     UNAVAILABLE = "unavailable"  # no snapshot, or older than max_staleness
     LOCAL = "local"  # no platform: local mode, local policy or no key
 
@@ -424,7 +424,7 @@ class PlatformUsageSource:
         )
         if missing:
             # Under DENY a missing path stays absent, so only its constraints fail
-            # closed; the rest of the policy keeps working (F5).
+            # closed; the rest of the policy keeps working.
             namespace |= (
                 _fallback(ledger, missing, on_unavailable, current_run_age) or {}
             )
@@ -467,7 +467,7 @@ class PlatformUsageSource:
         age = self._clock() - snapshot.fetched_at
         if age >= settings.sync_after_seconds:
             return _Tier.SYNC
-        # A new path never blocks the run: it reads ledger-only until this lands (F5).
+        # A new path never blocks the run: it reads ledger-only until this lands.
         if not paths <= snapshot.values.keys() or age >= settings.min_refresh_seconds:
             return _Tier.BACKGROUND
         return _Tier.NONE
@@ -641,7 +641,7 @@ def _fallback(
     current_run_age: float | None,
 ) -> dict[str, int] | None:
     """The values for ``paths`` the platform could not supply: ledger-only by
-    default (G3), nothing under DENY."""
+    default, nothing under DENY."""
     if on_unavailable is OnUnavailable.DENY:
         return None
     return ledger_namespace(ledger, paths, current_run_age=current_run_age)

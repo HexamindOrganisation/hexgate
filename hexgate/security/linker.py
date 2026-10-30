@@ -9,9 +9,8 @@ Composition lives here, at the model layer. The output is an ordinary
 strings the DSL already parses, so the pydantic-vs-WASM **parity gate applies to
 the resolved policy for free** — the engines never see the stack.
 
-Rules (see ``policy-modules-plan.md``): **fences intersect, grants union, denies
-win.** Per ``(tool, args)`` the most restrictive layer wins:
-``deny > approval_required > allow > implicit-deny``.
+Rules: **fences intersect, grants union, denies win.** Per ``(tool, args)`` the
+most restrictive layer wins: ``deny > approval_required > allow > implicit-deny``.
 
 - **Boundary** — caps + hard denies. An unconditional deny is absolute. A
   ``default_policy: deny`` boundary is a *ceiling*: a tool it doesn't list is

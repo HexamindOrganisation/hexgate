@@ -1,5 +1,5 @@
-"""HTTP contract of GET /v1/agents/{name}/usage — the server half of PR 6's wire
-contract — of POST /v1/usage/users:read, the server half of U5's, and of the
+"""HTTP contract of GET /v1/agents/{name}/usage and POST /v1/usage/users:read —
+the server halves of the SDK's usage wire contracts — and of the
 dashboard's GET /v1/projects/{id}/usage/top-users. Fixtures
 mirror tests/features/bans/test_bans.py."""
 
@@ -562,7 +562,7 @@ def test_the_user_read_runs_on_the_user_pool(
 def test_a_blocked_user_pool_never_delays_an_agent_read(
     client: TestClient, fake_clickhouse: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """G9: a burst of cold users must not queue agent reads behind it."""
+    """A burst of cold users must not queue agent reads behind it."""
     monkeypatch.setattr(usage_router, "USAGE_READ_TIMEOUT_SECONDS", _SHORT_TIMEOUT)
     released = threading.Event()
     result = fake_clickhouse.query.return_value
@@ -730,7 +730,7 @@ def test_a_failed_top_users_read_is_503_and_logs_no_message(
     fake_clickhouse: MagicMock,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """G10: a ClickHouse message can quote a bound value."""
+    """A ClickHouse message can quote a bound value."""
     quoted = "value quoted by clickhouse"
     fake_clickhouse.query.side_effect = DatabaseError(quoted)
 
@@ -764,7 +764,7 @@ def test_an_unreachable_clickhouse_on_top_users_is_the_same_usage_503(
 def test_top_users_never_touches_the_sdk_user_pool_or_stats(
     dashboard: TestClient, fake_clickhouse: MagicMock
 ) -> None:
-    """G9: dashboard tabs must not queue SDK user reads or move their read rate."""
+    """Dashboard tabs must not queue SDK user reads or move their read rate."""
     threads: list[str] = []
     result = fake_clickhouse.query.return_value
 

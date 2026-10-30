@@ -473,7 +473,7 @@ def test_build_runtime_from_spec_attaches_decision_observer(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The spec path threads decision_observer through the same in-place
-    injector C2 wired up for registered agents. Without this, chat with
+    injector registered agents use. Without this, chat with
     --agent module:attr would silently drop the observer and the REPL
     would render no decision panels."""
     spec = _write_fake_agent_module(tmp_path, name="fake_spec_mod_b")

@@ -58,7 +58,7 @@ export function useLeaveOrg() {
 }
 
 // ---------------------------------------------------------------------------
-// Full members API — used by the /orgs/:id/members page (Step 3)
+// Full members API — used by the /orgs/:id/members page
 // ---------------------------------------------------------------------------
 
 /** Mirror of platform/api/schemas.py:MemberRead. ``joined_at`` is the

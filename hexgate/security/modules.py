@@ -4,7 +4,7 @@ A *module* is an :class:`~hexgate.security.models.AgentPolicy` fragment given an
 identity (``name``), a tier (``kind``), an origin (``source``), and a content
 hash. Modules compose — via :mod:`hexgate.security.linker` — into one effective
 policy per agent, which then compiles to Rego/WASM exactly as a single policy
-does today. See ``policy-modules-plan.md``.
+does today.
 
 Everything here is SDK-side: devs load, link, and lint modules locally with no
 platform. ``content_hash`` is the content-identity half of versioning (cheap, no

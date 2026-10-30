@@ -197,8 +197,8 @@ async def test_when_two_projects_share_an_event_id_then_both_are_inserted(
 async def test_when_a_span_is_redelivered_in_a_later_poll_then_inserted_once(
     make_job,
 ) -> None:
-    """F1's main source: a produce retry lands the copy in a later poll, where
-    the per-poll set can't see it. The cross-poll cache must."""
+    """The main source of double counts: a produce retry lands the copy in a
+    later poll, where the per-poll set can't see it. The cross-poll cache must."""
     job, clickhouse, consumer, producer, calls = make_job()
     attrs = decision_attrs()
 
