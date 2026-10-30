@@ -11,6 +11,19 @@ import { ApiError, oauthGrantsApi, type OAuthGrant } from "@/lib/api";
 
 const GRANTS_KEY = ["oauth-grants"] as const;
 
+/** The detail of the API's own 404 on a revoke: no live login of yours has
+ * that id. Any other 404 (a missing route, a proxy) is a failure, never a
+ * logout. */
+const GRANT_GONE = "grant not found";
+
+function isGrantGone(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    err.status === 404 &&
+    (err.detail as { detail?: unknown } | null)?.detail === GRANT_GONE
+  );
+}
+
 /** A revoke stops the refresh token only: an access token already issued is a
  * signed JWT nobody checks against the login, so it stays valid until it
  * expires. The figure is ACCESS_TOKEN_TTL_SECONDS (600) in platform/api's
@@ -19,8 +32,9 @@ const ACCESS_ENDS = "Access ends within 10 minutes.";
 
 /** The host the client's metadata lives on: unlike ``client_name``, which the
  * client writes about itself, this is where it actually comes from. The
- * hostname without the port, as the consent page showed it (consent-info's
- * ``client_host`` in platform/api's oauth router). */
+ * hostname without the port, like consent-info's ``client_host``; an IDN or
+ * IPv6 host can still read differently from the consent page (the browser
+ * gives punycode and brackets). */
 function clientHost(clientId: string): string {
   try {
     return new URL(clientId).hostname;
@@ -36,9 +50,9 @@ function useRevokeGrant() {
       try {
         await oauthGrantsApi.revoke(grantId);
       } catch (err) {
-        // 404: the login is already gone (revoked in another tab, or the
-        // client logged itself out), which is what the user asked for.
-        if (!(err instanceof ApiError && err.status === 404)) throw err;
+        // The login is already gone (revoked in another tab, or the client
+        // logged itself out), which is what the user asked for.
+        if (!isGrantGone(err)) throw err;
       }
     },
     // Refetch on failure too, so the list shows what the server holds.
@@ -160,11 +174,25 @@ export function ConnectedAppsPage() {
       </header>
 
       <div className="overflow-hidden rounded-lg border border-border bg-card">
+        {/* A refetch failed after a list loaded: keep that list, which is
+            still what the user acts on, and say it may be stale. */}
+        {grantsQuery.isRefetchError && (
+          <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-2.5 text-xs text-destructive">
+            Could not refresh; showing the last loaded list.
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => grantsQuery.refetch()}
+            >
+              Try again
+            </Button>
+          </div>
+        )}
         {grantsQuery.isLoading ? (
           <div className="p-12 text-center text-sm text-muted-foreground">
             Loading…
           </div>
-        ) : grantsQuery.isError ? (
+        ) : grantsQuery.isLoadingError ? (
           <div className="flex flex-col items-center gap-3 p-12 text-center text-sm">
             <div className="text-destructive">
               Could not load your connected apps.

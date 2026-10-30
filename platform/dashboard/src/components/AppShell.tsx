@@ -124,9 +124,16 @@ const workspaceLinks = [
 /** The settings-space pages that belong to the signed-in user, not an org. */
 const USER_SETTINGS_PATHS = new Set(["/settings", "/connected-apps"]);
 
+/** `pathname` without a trailing slash, so `/settings/` (a bookmark, a
+ * hand-typed link) is read like the `/settings` the router renders for it. */
+function trimSlash(pathname: string): string {
+  return pathname.replace(/(.)\/+$/, "$1");
+}
+
 /** Whether a path belongs to the settings space (its own sidebar). Uses a
  * segment boundary so a future sibling like `/orgstats` isn't misread. */
-function isSettingsPath(pathname: string): boolean {
+function isSettingsPath(rawPath: string): boolean {
+  const pathname = trimSlash(rawPath);
   return (
     USER_SETTINGS_PATHS.has(pathname) ||
     pathname === "/orgs" ||
@@ -139,9 +146,10 @@ function isSettingsPath(pathname: string): boolean {
  * refresh keeps the sidebar pointed at the org being viewed. On a per-user page
  * there's no org in play, so we return null and the org-scoped links drop out. */
 function settingsOrgId(
-  pathname: string,
+  rawPath: string,
   activeOrgId: string | null,
 ): string | null {
+  const pathname = trimSlash(rawPath);
   if (USER_SETTINGS_PATHS.has(pathname)) return null;
   return pathname.match(/^\/orgs\/([^/]+)(?:\/|$)/)?.[1] ?? activeOrgId;
 }

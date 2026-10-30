@@ -172,6 +172,15 @@ describe("AppShell", () => {
     expect(screen.queryByText("Policies")).not.toBeInTheDocument();
   });
 
+  it("reads a trailing slash like the bare settings path", async () => {
+    renderWithProviders(<AppShell />, { initialRoute: "/connected-apps/" });
+    await waitFor(() =>
+      expect(screen.getByText("Back to workspace")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Members")).not.toBeInTheDocument();
+    expect(screen.queryByText("Policies")).not.toBeInTheDocument();
+  });
+
   it("collapsing the sidebar hides the nav labels", async () => {
     renderWithProviders(<AppShell />);
     await waitFor(() => expect(screen.getByText("Agents")).toBeInTheDocument());

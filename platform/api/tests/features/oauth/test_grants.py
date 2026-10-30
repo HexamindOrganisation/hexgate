@@ -7,6 +7,7 @@ from datetime import timedelta
 from fastapi.testclient import TestClient
 
 from hexgate_api.constants import DEFAULT_PROJECT_ID
+from hexgate_api.core.oauth_tokens import ACCESS_TOKEN_TTL_SECONDS
 from hexgate_api.models import OAuthRefreshToken, utcnow
 from tests.features.oauth.consent_flow import (
     CLIENT_ID,
@@ -109,7 +110,23 @@ def test_when_grant_unknown_or_already_revoked_then_404(
     (grant,) = _grants(consent_client).json()
     assert _revoke_grant(consent_client, "not-a-grant").status_code == 404
     _revoke_grant(consent_client, grant["id"])
-    assert _revoke_grant(consent_client, grant["id"]).status_code == 404
+    resp = _revoke_grant(consent_client, grant["id"])
+    assert resp.status_code == 404
+    # The dashboard counts this exact refusal, and no other 404, as "already
+    # logged out" (platform/dashboard/src/routes/ConnectedApps.tsx).
+    assert resp.json() == {"detail": "grant not found"}
+
+
+def test_when_access_token_ttl_changes_then_fails_until_dashboard_copy_updated() -> (
+    None
+):
+    # The Connected apps page tells the user "Access ends within 10 minutes."
+    # after a revoke, since an issued access token outlives it. Raising the TTL
+    # without that copy (ACCESS_ENDS in platform/dashboard/src/routes/
+    # ConnectedApps.tsx) would promise a cut-off sooner than the real one.
+    assert ACCESS_TOKEN_TTL_SECONDS == 600, (
+        "update the dashboard's 'Access ends within 10 minutes' copy"
+    )
 
 
 def test_when_grants_called_with_oauth_token_then_403(

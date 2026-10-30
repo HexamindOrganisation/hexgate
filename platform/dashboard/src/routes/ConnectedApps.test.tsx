@@ -6,7 +6,9 @@
  *   2. Each grant shows the projects it covers — not another grant's.
  *   3. Revoke confirms, DELETEs that grant, and its row goes away — also
  *      when the grant was already revoked elsewhere (404).
- *   4. No grants → the empty state; a failed read → the error state.
+ *   4. A 404 counts as done only when it is the API's own "grant not found".
+ *   5. No grants → the empty state; a failed first read → the error state; a
+ *      failed later read keeps the loaded list.
  */
 
 import { screen, waitFor, within } from "@testing-library/react";
@@ -51,6 +53,11 @@ interface Stub {
   listStatus?: number;
   /** The DELETE's status; 404 = already revoked elsewhere. */
   deleteStatus?: number;
+  /** The DELETE's 404 detail: the API's own is "grant not found"; FastAPI
+   * answers "Not Found" for a route it doesn't have. */
+  deleteDetail?: string;
+  /** Number of GETs that succeed before the list starts failing. */
+  listOkTimes?: number;
 }
 
 /** Stubs both grant routes; the DELETE removes the grant from what the next
@@ -59,26 +66,36 @@ function stubFetch({
   grants = [],
   listStatus = 200,
   deleteStatus = 204,
+  deleteDetail = "grant not found",
+  listOkTimes = Infinity,
 }: Stub): string[] {
   let live = [...grants];
+  let gets = 0;
   const deleted: string[] = [];
   vi.spyOn(window, "fetch").mockImplementation(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input), "http://localhost").pathname;
       if (init?.method === "DELETE") {
         deleted.push(path);
-        live = live.filter((g) => path !== `/v1/oauth/grants/${g.id}`);
+        // A revoke, or the API's own 404, leaves no such login on the server.
+        if (
+          deleteStatus === 204 ||
+          (deleteStatus === 404 && deleteDetail === "grant not found")
+        ) {
+          live = live.filter((g) => path !== `/v1/oauth/grants/${g.id}`);
+        }
         return deleteStatus === 204
           ? new Response(null, { status: 204 })
-          : new Response(JSON.stringify({ detail: "Not Found" }), {
+          : new Response(JSON.stringify({ detail: deleteDetail }), {
               status: deleteStatus,
             });
       }
       if (path === "/v1/oauth/grants") {
+        const status = gets++ < listOkTimes ? listStatus : 500;
         return new Response(
-          JSON.stringify(listStatus === 200 ? live : { detail: "boom" }),
+          JSON.stringify(status === 200 ? live : { detail: "boom" }),
           {
-            status: listStatus,
+            status,
             headers: { "Content-Type": "application/json" },
           },
         );
@@ -189,6 +206,57 @@ describe("ConnectedAppsPage", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
     expect(await screen.findByText("No connected apps")).toBeInTheDocument();
+  });
+
+  it("reports a 404 that is not the API's own as a failure", async () => {
+    // A route the API doesn't serve (an older API, a proxy) also says 404.
+    stubFetch({
+      grants: [CLAUDE],
+      deleteStatus: 404,
+      deleteDetail: "Not Found",
+    });
+    renderWithProviders(<ConnectedAppsPage />);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "Revoke" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Revoke" }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "Could not log out Claude Code.",
+      ),
+    );
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("keeps the loaded list when a later refresh fails", async () => {
+    // The first read succeeds; the refetch after the revoke fails.
+    stubFetch({ grants: [CLAUDE, CURSOR], listOkTimes: 1 });
+    renderWithProviders(<ConnectedAppsPage />);
+    const user = userEvent.setup();
+
+    await user.click(
+      within(await waitFor(() => rowOf("Claude Code"))).getByRole("button", {
+        name: "Revoke",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Revoke" }));
+
+    expect(
+      await screen.findByText(
+        /Could not refresh; showing the last loaded list/,
+      ),
+    ).toBeInTheDocument();
+    // Cursor's row, and its Revoke, are still there to act on.
+    expect(
+      within(rowOf("Cursor")).getByRole("button", { name: "Revoke" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Could not load your connected apps."),
+    ).not.toBeInTheDocument();
   });
 
   it("shows the empty state when no app is connected", async () => {
