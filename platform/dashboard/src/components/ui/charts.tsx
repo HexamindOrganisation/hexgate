@@ -340,7 +340,7 @@ export function Donut({
           return (
             <div
               key={s.key}
-              className="flex items-center gap-2 py-[3px] text-[12.5px]"
+              className="flex items-center gap-2 py-[3px] text-meta"
             >
               <span className={`size-[9px] rounded-sm ${s.swatchClass}`} />
               <span className="flex-1 text-foreground">{s.label}</span>

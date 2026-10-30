@@ -207,7 +207,7 @@ export function KpiCard({
         >
           {value}
         </div>
-        <div className="text-[11.5px] text-muted-foreground">{sub}</div>
+        <div className="text-caption text-muted-foreground">{sub}</div>
         {showSpark && spark && (
           <div className="mt-1.5">
             <Sparkline data={spark} color={sparkColor} width={170} />
@@ -336,7 +336,7 @@ export function EventsTable({
     <Card className="overflow-hidden p-0">
       <div className="flex items-center justify-between border-b border-border px-5 py-4">
         <div>
-          <div className="text-[15px] font-semibold">Decisions</div>
+          <div className="text-body font-semibold">Decisions</div>
           <div className="mt-0.5 text-xs text-muted-foreground">
             Newest first · ordered by{" "}
             <span className="font-mono">occurred_at</span>. Click a row to
@@ -371,7 +371,7 @@ export function EventsTable({
                 <TableCell className="font-mono text-xs text-muted-foreground">
                   {fmtTs(new Date(e.occurred_at))}
                 </TableCell>
-                <TableCell className="font-mono text-[12.5px]">
+                <TableCell className="font-mono text-meta">
                   {e.agent_name}
                 </TableCell>
                 <TableCell
@@ -379,13 +379,13 @@ export function EventsTable({
                 >
                   <RolesCell roles={e.user_roles} />
                 </TableCell>
-                <TableCell className="font-mono text-[12.5px]">
+                <TableCell className="font-mono text-meta">
                   {e.tool_name}
                 </TableCell>
                 <TableCell>
                   <DecisionBadge d={e.outcome} />
                 </TableCell>
-                <TableCell className="max-w-80 overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px] text-muted-foreground">
+                <TableCell className="max-w-80 overflow-hidden text-ellipsis whitespace-nowrap text-meta text-muted-foreground">
                   {e.reason || "—"}
                 </TableCell>
                 <TableCell>
@@ -471,7 +471,7 @@ export function AnomaliesCard({
     <Card className="overflow-hidden p-0">
       <div className="flex items-center gap-2 border-b border-border px-5 py-4">
         <TriangleAlert className="size-4 text-approval" />
-        <div className="text-[15px] font-semibold">
+        <div className="text-body font-semibold">
           Anomalies · {rows.length} detected
         </div>
       </div>
@@ -503,7 +503,7 @@ export function AnomaliesCard({
                 <TableCell>
                   <SeverityBadge severity={row.severity} />
                 </TableCell>
-                <TableCell className="font-mono text-[12.5px]">
+                <TableCell className="font-mono text-meta">
                   {row.user_id}
                 </TableCell>
                 <TableCell>
