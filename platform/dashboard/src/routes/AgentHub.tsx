@@ -541,9 +541,6 @@ function AgentDecisions({ agent }: { agent: AgentManifestView }) {
   );
 }
 
-/* NOTE: AgentHeader mirrors the inline card in Agents.tsx on purpose: H1b
-   makes /agents list-only and drops that card, so a shared extraction now
-   would be reworked immediately. */
 function AgentHeader({
   agent,
   canManageBans,
