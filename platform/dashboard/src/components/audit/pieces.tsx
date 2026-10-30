@@ -1,4 +1,4 @@
-import { useMemo, useState, type ComponentType } from "react";
+import { useMemo, useState } from "react";
 import { isToday, isYesterday } from "date-fns";
 import {
   Ban,
@@ -28,7 +28,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ALL, FilterSelect } from "@/components/ui/filter-select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Sparkline } from "@/components/ui/charts";
 import { cn } from "@/lib/utils";
 import { BreakdownCardShell } from "@/components/ui/breakdown-card";
 import { BreakdownBar, type BreakdownDatum } from "./charts";
@@ -155,62 +154,6 @@ export function ActiveChips({ f, setF }: { f: Filters; setF: SetFilters }) {
         }))
       }
     />
-  );
-}
-
-// ————————————————————————————————————————————— KPI tile
-export function KpiCard({
-  label,
-  icon: KpiIcon,
-  value,
-  sub,
-  color,
-  spark,
-  sparkColor,
-  showSpark,
-  onClick,
-  active,
-}: {
-  label: string;
-  icon: ComponentType<{ className?: string }>;
-  value: string;
-  sub: string;
-  color?: "allow" | "deny" | "approval";
-  spark?: number[];
-  sparkColor?: string;
-  showSpark?: boolean;
-  onClick?: () => void;
-  active?: boolean;
-}) {
-  // Static map — Tailwind's scanner can't see interpolated class names.
-  const valColor = {
-    allow: "text-allow",
-    deny: "text-deny",
-    approval: "text-approval",
-  };
-  return (
-    <Card
-      onClick={onClick}
-      className={`p-5 transition-colors ${onClick ? "cursor-pointer" : ""} ${active ? "border-primary/50" : ""}`}
-    >
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <KpiIcon className="size-3.5" />
-          <span>{label}</span>
-        </div>
-        <div
-          className={`text-[28px] font-semibold leading-tight tracking-tight ${color ? valColor[color] : ""}`}
-        >
-          {value}
-        </div>
-        <div className="text-caption text-muted-foreground">{sub}</div>
-        {showSpark && spark && (
-          <div className="mt-1.5">
-            <Sparkline data={spark} color={sparkColor} width={170} />
-          </div>
-        )}
-      </div>
-    </Card>
   );
 }
 

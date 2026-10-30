@@ -7,6 +7,19 @@
 
 export type Range = "24h" | "7d" | "30d" | "90d";
 
+/** "the last …" wording for a preset range. */
+export const RANGE_LABEL: Record<Range, string> = {
+  "24h": "24 hours",
+  "7d": "7 days",
+  "30d": "30 days",
+  "90d": "90 days",
+};
+
+/** "in the last 7 days", or "in the selected range" for custom dates. */
+export function rangePhrase(range: Range, start: Date | null): string {
+  return start ? "in the selected range" : `in the last ${RANGE_LABEL[range]}`;
+}
+
 export const RANGE_DAYS: Record<Range, number> = {
   "24h": 1,
   "7d": 7,
