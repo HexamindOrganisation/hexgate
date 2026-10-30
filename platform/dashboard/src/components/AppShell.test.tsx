@@ -93,18 +93,13 @@ describe("AppShell", () => {
     await waitFor(() => {
       expect(screen.getByText("Agents")).toBeInTheDocument();
     });
-    for (const label of [
-      "Home",
-      "Policies",
-      "Playground",
-      "Audit",
-      "API keys",
-    ]) {
+    for (const label of ["Home", "Policies", "Audit", "API keys"]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
-    // Graph left the sidebar — it lives in the agent hub's Overview now.
-    // Playground stays until it gets its own hub tab.
+    // Graph and Playground left the sidebar — they live inside an agent now
+    // (the hub's Overview graph and its Playground tab).
     expect(screen.queryByText("Graph")).not.toBeInTheDocument();
+    expect(screen.queryByText("Playground")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute(
       "href",
       "/",
