@@ -5,6 +5,7 @@ in deploy, so a hosted client never sees the tool. No API call, but the
 caller still needs `policy:write`.
 """
 
+import logging
 import os
 import stat
 import tempfile
@@ -16,7 +17,10 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
+from hexgate_mcp.settings import check_local_policy_dir
 from hexgate_mcp.tools import caller
+
+logger = logging.getLogger(__name__)
 
 POLICY_SUFFIXES = {".yaml", ".yml"}
 # A policy is a few KiB; past this a looping model is filling the disk.
@@ -28,7 +32,7 @@ def confine(root: Path, path: str) -> Path:
     first follows every `..` and symlink, so one check refuses an absolute
     path, a `..` that leaves the directory and a link out alike. The directory
     itself is refused too: it is not a file to write. The suffix and dot rules
-    are name hygiene, not a sandbox: the start-up checks keep the root itself
+    are name hygiene, not a sandbox: check_local_policy_dir keeps the root
     sane, and no file is written inside a repo below it."""
     target = (root / path).resolve()
     if target == root or not target.is_relative_to(root):
@@ -56,17 +60,17 @@ def new_file_mode() -> int:
 
 
 def write_atomic(root: Path, target: Path, data: bytes, new_mode: int) -> None:
-    """Write `data` to `target`, creating missing directories below `root`
-    only, and removing them again if the write fails. A root deleted since
-    start-up is refused rather than recreated."""
-    if not root.is_dir():
-        raise ToolError("the local policy directory no longer exists")
-    below = [d for d in target.parents if d != root and d.is_relative_to(root)]
+    """Write `data` to `target`, creating the missing directories down to it,
+    and removing them again if the write fails. A root deleted since start-up
+    is recreated with its parents, once it passes the start-up checks again."""
+    check_local_policy_dir(root)
+    # confine() keeps target under root, so above root these are its parents.
+    dirs = [d for d in target.parents if not d.exists()]
     # Only what this call made: a parallel write may create the same
     # directories, and removing them would fail that write too.
     created = []
     try:
-        for d in reversed(below):
+        for d in reversed(dirs):
             with suppress(FileExistsError):
                 d.mkdir()
                 created.append(d)
@@ -76,6 +80,8 @@ def write_atomic(root: Path, target: Path, data: bytes, new_mode: int) -> None:
             with suppress(OSError):
                 d.rmdir()
         raise
+    if root in created:
+        logger.info("recreated the local policy directory %s", root)
 
 
 def replace_file(target: Path, data: bytes, new_mode: int) -> None:
