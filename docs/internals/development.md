@@ -37,12 +37,12 @@ make test-one T=tests/security/test_bundle.py   # single file
 
 ## Run the platform locally
 
-**Shortcut:** in Claude Code, `/run-platform` does all of this, on your local machine only (for staging or prod, see `platform/DEPLOY.md`). It checks prerequisites and prints what's missing (uv, pnpm, Docker, Go, busy ports). It starts the platform-api, the dashboard and the MCP server, and hands back the dashboard URL, the first-boot admin password and the `claude mcp add` line that connects Claude Code to the MCP server (say "without MCP" to skip it). Ask for the full pipeline to get the collector and enricher too. Without Claude, `.claude/skills/run-platform/preflight.sh [--full]` runs the same prerequisite check.
+**Shortcut:** in Claude Code, `/run-platform` does all of this, on your local machine only (for staging or prod, see `platform/DEPLOY.md`). It checks prerequisites and prints what's missing (uv, pnpm, Docker, Go, busy ports). It starts the platform-api, the dashboard and the MCP server, registers the MCP server with Claude Code (`claude mcp add`), and hands back the dashboard URL and the first-boot admin password; you then open a new Claude Code session (keep the first one open, it holds the servers) and authenticate in `/mcp` (say "without MCP" to skip the MCP server). Ask for the full pipeline to get the collector and enricher too. Without Claude, `.claude/skills/run-platform/preflight.sh [--full]` runs the same prerequisite check.
 
-The platform is four processes plus your agent. Two of them — the collector and
+The platform is five processes plus your agent. Two of them — the collector and
 the span-enricher, with the Redpanda buffer their targets start for you — make
 up the audit pipeline, and an agent run without them looks fine while its audit
-trail silently 404s, so start all of them. Each `make` target starts the Docker
+trail silently 404s, so start all of them (the MCP server only when an MCP client connects). Each `make` target starts the Docker
 infrastructure it needs (Postgres, Redpanda, ClickHouse) and then blocks, one
 terminal each:
 
@@ -53,6 +53,7 @@ make platform-api-pg      # 1. API on :8000, on Postgres — NOT `platform-api`:
 make collector-run        # 2. OTLP receiver on :4318 (needs the keypair the API wrote on first boot)
 make enricher-run         # 3. Redpanda → ClickHouse
 make dashboard            # 4. http://localhost:5173
+make mcp-run              # 5. MCP server on :8080 (http://localhost:8080/mcp)
 ```
 
 Then mint a key at [http://localhost:5173/tokens](http://localhost:5173/tokens)
@@ -68,7 +69,7 @@ HEXGATE_OTLP_ENDPOINT=http://localhost:4318/v1/traces
 ```
 
 ```bash
-make serve                # 5. bridge the demo agent; chat at http://localhost:5173/playground
+make serve                # 6. bridge the demo agent; chat at http://localhost:5173/playground
 ```
 
 Every decision the agent makes shows up on the dashboard's audit page a few

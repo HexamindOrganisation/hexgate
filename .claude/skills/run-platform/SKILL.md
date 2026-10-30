@@ -1,6 +1,6 @@
 ---
 name: run-platform
-description: Spin up a local hexgate platform instance (FastAPI platform-api + React dashboard + MCP server, optionally the full OTLP pipeline) — check prerequisites first (uv, pnpm, Docker, Go, free ports), start the servers in the background, and hand back the dashboard URL, the first-boot admin email and password, and the `claude mcp add` line that connects Claude Code to the local MCP server over OAuth. Use when asked to run, start, spin up, or demo the platform/dashboard/MCP server locally, or to get a login for a local instance; "without MCP" or "dashboard only" skips the MCP server. Local dev machine only, not staging or prod (those are deploy stacks, see platform/DEPLOY.md).
+description: Spin up a local hexgate platform instance (FastAPI platform-api + React dashboard + MCP server, optionally the full OTLP pipeline) — check prerequisites first (uv, pnpm, Docker, Go, free ports), start the servers in the background, and hand back the dashboard URL, the first-boot admin email and password, and register the local MCP server with Claude Code (`claude mcp add`) so the user only restarts and authenticates. Use when asked to run, start, spin up, or demo the platform/dashboard/MCP server locally, or to get a login for a local instance; "without MCP" or "dashboard only" skips the MCP server. Local dev machine only, not staging or prod (those are deploy stacks, see platform/DEPLOY.md).
 ---
 
 # Run the hexgate platform locally
@@ -12,8 +12,8 @@ see `platform/DEPLOY.md`). If the user asks for staging or prod, point them
 there and don't run anything from this skill against them.
 
 Goal: a running instance the user can log into and connect Claude Code to.
-End with the URL, email, password and the `claude mcp add` line, or with
-exactly what is missing.
+End with the URL, email, password and the MCP server registered in Claude
+Code, or with exactly what is missing.
 
 The MCP server is part of the platform, so start it every time. Skip it (and
 its port, step and report line) only when the user asks for the platform
@@ -191,17 +191,35 @@ password can't be printed again. Offer these options and let the user choose:
 
 ## 5. Connect Claude Code
 
-Skip this when the user opted out of the MCP server. Give the user these
-steps, since you can't do them for them:
-1. Register the server once (skip it if `claude mcp get hexgate` already shows
-   `http://localhost:8080/mcp`):
-   `claude mcp add -s user --transport http hexgate http://localhost:8080/mcp`.
-2. Restart Claude Code. A session that started before `claude mcp add` doesn't
-   see the server.
-3. In the new session, open `/mcp`, choose `hexgate`, then **Authenticate**.
+Skip this when the user opted out of the MCP server.
+
+Register the server yourself; it is a shell command that writes
+`~/.claude.json`. Check first:
+```bash
+claude mcp get hexgate
+```
+- It shows `http://localhost:8080/mcp`: already registered, add nothing.
+- It says there is no server named `hexgate`: register it.
+  ```bash
+  claude mcp add -s user --transport http hexgate http://localhost:8080/mcp
+  ```
+- It shows another URL: ask the user before replacing it
+  (`claude mcp remove hexgate -s user`, then the add above), since it may be
+  their connection to another instance.
+
+Remember whether you added it or found it; the report says which.
+
+Two things only the user can do, in their own session:
+1. Open a **new** Claude Code session in another terminal, and keep this one
+   open: the servers are this session's background commands, so quitting it
+   stops them. A session reads its MCP servers when it starts, so one that
+   started before the registration doesn't see the server. If the
+   registration was already there before this session started, this session
+   sees it already, so skip to 2 here.
+2. In that session, open `/mcp`, choose `hexgate`, then **Authenticate**.
    The browser opens the dashboard by itself, nothing to paste: log in with the
-   step 4 credentials, then approve the consent page.
-4. First prompt: "List my Hexgate projects".
+   step 4 credentials, then approve the consent page. Then a first prompt:
+   "List my Hexgate projects".
 
 `HEXGATE_OAUTH_ALLOW_INSECURE_CLIENT_IDS` is **not** needed for Claude Code.
 Its client id is https://claude.ai/oauth/claude-code-client-metadata, an https
@@ -212,7 +230,13 @@ not local.
 
 Failure modes:
 - **"No Hexgate MCP server connected"** (or the session has no hexgate
-  tools): the session started before `claude mcp add`. Restart Claude Code.
+  tools): the session started before the server was registered. Open a new
+  session in another terminal.
+- **hexgate shows as failed in `/mcp`**: if :8000, :5173 and :8080 are free,
+  the session that started the servers was quit, which stopped them; run
+  `/run-platform` again and keep that session open. If they are up, the
+  session loaded hexgate before :8080 answered; choose Reconnect, then
+  Authenticate.
 - **"Safari can't connect to the server localhost:5173"** after Authenticate:
   the API's `HEXGATE_DASHBOARD_URL` has no dashboard behind it. Either the
   dashboard isn't running (start it, step 3), or it runs on another port (set
@@ -226,9 +250,7 @@ Failure modes:
 Give the user:
 - the dashboard URL that `instance.sh dash` printed (normally `http://localhost:5173`);
 - the email and password, and that they should rotate the password in account settings;
-- the line that connects Claude Code, in a code block beside the URL and credentials:
-  `claude mcp add -s user --transport http hexgate http://localhost:8080/mcp`,
-  then the rest of the step 5 steps (restart, `/mcp` → hexgate → Authenticate, first prompt). Leave it out only when the user opted out of the MCP server;
+- the MCP server, beside the URL and credentials: `http://localhost:8080/mcp`, whether step 5 added the `hexgate` registration or found it already there, and the user's steps (a new Claude Code session in another terminal while this one stays open, unless the registration predates this session; then `/mcp` → hexgate → Authenticate and a first prompt). Leave it out only when the user opted out of the MCP server;
 - the log directory, `/tmp/hexgate-<checkout name>`;
 - how to stop the instance: stop the background tasks, or run `.claude/skills/run-platform/instance.sh stop`, which stops this checkout's API, dashboard, MCP server, collector and enricher and nothing else.
 
