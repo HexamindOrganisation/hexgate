@@ -41,6 +41,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { cn } from "@/lib/utils";
+import { PlaygroundLive } from "./Playground";
 
 /** `/agents/:name`: everything about one agent on its own page. The header
  * stays above the tabs; each tab renders in the `Outlet` from `HubContext`. */
@@ -212,6 +213,27 @@ export function AgentDecisionsTab() {
   );
 }
 
+/** The Playground tab — chat embedded in the hub. The playground WS is
+ * project-scoped (one `hexgate serve` at a time), so it's live for whichever
+ * agent is serving; the tab frames it around this one. */
+export function AgentPlaygroundTab() {
+  const ctx = useOutletContext<HubContext>();
+  const { projectId } = useProjectScoped();
+  if (!projectId) return null;
+  return (
+    <div className="space-y-3">
+      <p className="text-meta text-muted-foreground">
+        The playground talks to whichever agent is running{" "}
+        <span className="font-mono text-foreground">hexgate serve</span> in this
+        project. Start{" "}
+        <span className="font-mono text-foreground">{ctx.agent.name}</span> to
+        test it here — the header shows which agent is live.
+      </p>
+      <PlaygroundLive projectId={projectId} embedded />
+    </div>
+  );
+}
+
 /** Tools + skills, or null for an agent that never registered: a 0 would
  * assert what the "not registered yet" copy refuses to. */
 function resourceCount(agent: AgentManifestView): number | null {
@@ -248,6 +270,9 @@ function HubTabs({ resources }: { resources: number | null }) {
       </NavLink>
       <NavLink to="policies" className={cls}>
         Policies
+      </NavLink>
+      <NavLink to="playground" className={cls}>
+        Playground
       </NavLink>
       <NavLink to="decisions" className={cls}>
         Decision log

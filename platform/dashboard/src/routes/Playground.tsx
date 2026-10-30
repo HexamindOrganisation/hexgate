@@ -66,7 +66,14 @@ export function PlaygroundPage() {
   return <PlaygroundLive projectId={scope.projectId} />;
 }
 
-function PlaygroundLive({ projectId }: { projectId: string }) {
+export function PlaygroundLive({
+  projectId,
+  embedded = false,
+}: {
+  projectId: string;
+  /** Rendered inside a hub tab (bounded panel) rather than full-screen. */
+  embedded?: boolean;
+}) {
   const { state, sendChat, reset, respondToApproval } = usePlayground({
     projectId,
   });
@@ -203,8 +210,11 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   return (
     <AccentScope
       className={cn(
-        "relative flex h-screen flex-col overflow-hidden bg-background",
-        !present && "-mx-8 -my-6",
+        "relative flex flex-col overflow-hidden bg-background",
+        // Embedded in a hub tab: a bounded, bordered panel. Standalone: the
+        // full-screen surface that breaks out of the page padding.
+        embedded ? "h-[640px] rounded-xl border border-border" : "h-screen",
+        !present && !embedded && "-mx-8 -my-6",
       )}
     >
       <GooFilter />
@@ -229,7 +239,7 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
             <SlidersHorizontal className="size-4" />
             Settings
           </button>
-          <AccentPicker />
+          {!embedded && <AccentPicker />}
           {present && <ThemeToggle />}
           <FullScreenToggle />
           {!present && (

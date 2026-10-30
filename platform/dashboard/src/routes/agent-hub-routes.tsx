@@ -4,6 +4,7 @@ import {
   AgentDecisionsTab,
   AgentHub,
   AgentOverviewTab,
+  AgentPlaygroundTab,
   AgentPoliciesTab,
   AgentResourcesTab,
 } from "./AgentHub";
@@ -15,6 +16,7 @@ export function agentHubRoute() {
       <Route index element={<AgentOverviewTab />} />
       <Route path="resources" element={<AgentResourcesTab />} />
       <Route path="policies" element={<AgentPoliciesTab />} />
+      <Route path="playground" element={<AgentPlaygroundTab />} />
       <Route path="decisions" element={<AgentDecisionsTab />} />
     </Route>
   );

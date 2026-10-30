@@ -19,6 +19,23 @@ vi.mock("@/components/policy_files/PolicyGraphDialog", () => ({
   ),
 }));
 
+// The Playground tab embeds the live chat (a WebSocket). Stub it — its own
+// behaviour is covered in Playground.test; here we only check the tab mounts
+// embedded and project-scoped.
+vi.mock("@/routes/Playground", () => ({
+  PlaygroundLive: ({
+    projectId,
+    embedded,
+  }: {
+    projectId: string;
+    embedded?: boolean;
+  }) => (
+    <div data-testid="embedded-playground">
+      playground:{projectId}:{String(embedded)}
+    </div>
+  ),
+}));
+
 const PROJECT = "p1";
 
 const MANIFEST = {
@@ -208,7 +225,7 @@ function renderHub(
     summaryError?: boolean;
     noAgentInGraph?: boolean;
     matrixError?: boolean;
-    tab?: "" | "/resources" | "/policies" | "/decisions";
+    tab?: "" | "/resources" | "/policies" | "/playground" | "/decisions";
   } = {},
 ) {
   stubFetch(role, manifestError, summaryError, noAgentInGraph, matrixError);
@@ -553,6 +570,16 @@ describe("AgentHub", () => {
     expect(
       screen.getByRole("link", { name: /full audit log/i }),
     ).toHaveAttribute("href", expect.stringContaining("agent=support_bot"));
+  });
+
+  it("embeds the playground, scoped to the agent, on the Playground tab", async () => {
+    renderHub("support_bot", { tab: "/playground" });
+    // Embedded (not full-screen) and keyed to this project.
+    expect(await screen.findByTestId("embedded-playground")).toHaveTextContent(
+      `playground:${PROJECT}:true`,
+    );
+    // Framed around this agent: tells you to serve it.
+    expect(screen.getByText(/hexgate serve/)).toBeInTheDocument();
   });
 
   it("links Ban agent to the prefilled /bans route for an admin", async () => {
