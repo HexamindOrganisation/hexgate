@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Filter, Lightbulb, X } from "lucide-react";
-import { endOfDay, startOfDay } from "date-fns";
 import { useNavigate } from "react-router-dom";
 import {
   api,
@@ -18,6 +17,7 @@ import { DashboardRangePicker } from "@/components/ui/dashboard-range-picker";
 import { type ChartBucket, StackedBars } from "@/components/ui/charts";
 import { StatStrip } from "@/components/ui/stat-strip";
 import { AuditOnboarding } from "@/components/audit/onboarding";
+import { burstFilters } from "@/components/audit/anomalies";
 import { type Counts, DecisionBadge } from "@/components/audit/charts";
 import {
   displayNoValue,
@@ -751,13 +751,7 @@ export function AuditPage() {
               <AnomaliesCard
                 rows={anomaliesQ.data}
                 onRowClick={(from, to, userId) =>
-                  setF((p) => ({
-                    ...p,
-                    customMode: true,
-                    start_date: startOfDay(from),
-                    end_date: endOfDay(to),
-                    user: userId,
-                  }))
+                  setF((p) => ({ ...p, ...burstFilters(userId, from, to) }))
                 }
                 onBanUser={
                   canManageBans
