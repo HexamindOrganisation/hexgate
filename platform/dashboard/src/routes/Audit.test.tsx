@@ -230,7 +230,11 @@ let messageRows: () => LlmMessageRow[] = () => MESSAGES;
  * every requested URL (path + query) so tests can assert what filter
  * state actually reached the API.
  */
-function stubFetch(anomalies: AuditAnomaly[] = [], role = "owner"): string[] {
+function stubFetch(
+  anomalies: AuditAnomaly[] = [],
+  role = "owner",
+  summary: unknown = SUMMARY,
+): string[] {
   const calls: string[] = [];
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -265,7 +269,7 @@ function stubFetch(anomalies: AuditAnomaly[] = [], role = "owner"): string[] {
             },
           ]);
         case `/v1/projects/${PROJECT}/audit/summary`:
-          return json(SUMMARY);
+          return json(summary);
         case `/v1/projects/${PROJECT}/audit/timeseries`:
           return json([]);
         case `/v1/projects/${PROJECT}/audit/decisions`: {
@@ -398,6 +402,70 @@ describe("AuditPage", () => {
     expect(
       calls.some((u) => u.includes("(none)") || u.includes("%28none%29")),
     ).toBe(false);
+  });
+
+  it("reads the range in one sentence: total and deny rate", async () => {
+    stubFetch();
+    renderWithProviders(<AuditPage />);
+    // SUMMARY: 10 decisions, 4 denied.
+    const header = (await screen.findByRole("heading", { name: "Audit" }))
+      .parentElement as HTMLElement;
+    await waitFor(() =>
+      expect(header).toHaveTextContent(
+        /10 policy decisions in the last \d+ (days|hours) for demo-project\. Deny rate 40\.0%\./,
+      ),
+    );
+  });
+
+  it("does not call a filtered count the project total", async () => {
+    useAuditFilters.setState((st) => ({
+      filters: { ...st.filters, tool: "read_file" },
+    }));
+    stubFetch();
+    renderWithProviders(<AuditPage />);
+    const header = (await screen.findByRole("heading", { name: "Audit" }))
+      .parentElement as HTMLElement;
+    await waitFor(() =>
+      expect(header).toHaveTextContent(/10 decisions match these filters/),
+    );
+    expect(header).not.toHaveTextContent("for demo-project");
+  });
+
+  it("shows next steps instead of zeros when the range holds nothing", async () => {
+    stubFetch([], "owner", {
+      totals: counts(0, 0, 0),
+      by_agent: [],
+      by_role: [],
+      by_tool: [],
+      by_user: [],
+    });
+    renderWithProviders(<AuditPage />);
+    expect(
+      await screen.findByText("No decisions in this range"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /API keys/ })).toHaveAttribute(
+      "href",
+      "/tokens",
+    );
+    expect(screen.queryByText("Decision log")).not.toBeInTheDocument();
+  });
+
+  it("keeps the log, not next steps, when a filter empties the range", async () => {
+    useAuditFilters.setState((st) => ({
+      filters: { ...st.filters, tool: "read_file" },
+    }));
+    stubFetch([], "owner", {
+      totals: counts(0, 0, 0),
+      by_agent: [],
+      by_role: [],
+      by_tool: [],
+      by_user: [],
+    });
+    renderWithProviders(<AuditPage />);
+    expect(await screen.findByText("Decision log")).toBeInTheDocument();
+    expect(
+      screen.queryByText("No decisions in this range"),
+    ).not.toBeInTheDocument();
   });
 
   it("outcome KPI card toggles the outcome filter", async () => {
@@ -1071,6 +1139,35 @@ describe("AuditPage", () => {
         ).toBe(true);
       });
       expect(screen.getByText("Clear all")).toBeInTheDocument();
+    });
+
+    it("shows the first three bursts and folds the rest", async () => {
+      stubFetch(
+        ["a", "b", "c", "d", "e"].map((u) => ({ ...ANOMALY, user_id: u })),
+      );
+      const user = userEvent.setup();
+      renderWithProviders(<AuditPage />);
+
+      expect(await screen.findByText("c")).toBeInTheDocument();
+      expect(screen.queryByText("d")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Show 2 more" }));
+      expect(screen.getByText("e")).toBeInTheDocument();
+    });
+
+    it("never folds a high-severity burst behind medium ones", async () => {
+      stubFetch([
+        ...["a", "b", "c"].map((u) => ({
+          ...ANOMALY,
+          user_id: u,
+          severity: "medium" as const,
+        })),
+        { ...ANOMALY, user_id: "zed" },
+      ]);
+      renderWithProviders(<AuditPage />);
+      expect(await screen.findByText("zed")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Show 1 more" }),
+      ).toBeInTheDocument();
     });
 
     it("renders a Medium badge for medium-severity anomalies", async () => {
