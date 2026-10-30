@@ -10,6 +10,20 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def as_utc(value: datetime) -> datetime:
+    """Read a naive datetime as UTC; return an aware one unchanged.
+
+    Every timestamp this API stores is UTC, but not every reader hands it back
+    with its zone: SQLite (tests and local dev) returns naive values where
+    Postgres returns aware ones, and clickhouse_connect returns
+    ``DateTime64(_, 'UTC')`` columns naive. Comparing a naive value against
+    :func:`utcnow` raises ``TypeError``, and serializing one drops the zone, so
+    callers stamp it here first. An aware value is not converted to UTC; a
+    caller that needs the UTC offset itself calls ``astimezone`` after.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 def new_uuid_str() -> str:
     """Default factory for str-typed UUID primary keys.
 
