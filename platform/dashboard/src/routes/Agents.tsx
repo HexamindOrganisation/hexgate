@@ -26,6 +26,7 @@ import { DocsLink } from "@/components/DocsLink";
 import { DOC_PATHS } from "@/lib/docs";
 import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { StatStrip, type Stat } from "@/components/ui/stat-strip";
 import { useAuditSummary24h } from "@/lib/audit-summary";
 import { pluralise } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -65,6 +66,63 @@ export function AgentsPage() {
   // An errored summary shows "—" so it reads apart from a genuine 0 calls.
   const summaryFailed = summary.isError && !summary.data;
 
+  // Portfolio KPIs across the project's agents, memoised like byAgent above
+  // (the 24h summary polls, so don't re-derive every render). Volume reads
+  // "—" (never a fake "0") until the summary loads or on error; the count
+  // comes from the manifest list. No live/offline tile — agent connection
+  // status isn't a signal the backend exposes yet.
+  const kpis = useMemo<Stat[]>(() => {
+    const list = manifests.data ?? [];
+    const totals = summary.data?.totals;
+    const vol = (n?: number) =>
+      summary.data ? (n ?? 0).toLocaleString() : "—";
+    const registered = list.filter((a) => a.manifest).length;
+    const awaiting = list.length - registered;
+    const denyRate =
+      totals && totals.all > 0 ? (totals.deny / totals.all) * 100 : 0;
+    const topTool = (field: "deny" | "needs_approval") =>
+      (summary.data?.by_tool ?? [])
+        .filter((r) => r[field] > 0)
+        .sort((a, b) => b[field] - a[field])[0] ?? null;
+    const topDeny = topTool("deny");
+    const topApproval = topTool("needs_approval");
+    return [
+      {
+        key: "agents",
+        label: "Agents",
+        value: manifests.data ? `${list.length}` : "—",
+        sub: manifests.data
+          ? `${registered} registered${awaiting ? ` · ${awaiting} awaiting first run` : ""}`
+          : undefined,
+      },
+      {
+        key: "calls",
+        label: "Calls · 24h",
+        value: vol(totals?.all),
+        sub: "across all agents",
+      },
+      {
+        key: "denied",
+        label: "Denied · 24h",
+        value: vol(totals?.deny),
+        valueClass: totals && totals.deny > 0 ? "text-deny" : undefined,
+        sub: summary.data
+          ? `${denyRate.toFixed(1)}%${topDeny ? ` · mostly ${topDeny.key}` : ""}`
+          : undefined,
+      },
+      {
+        key: "approvals",
+        label: "Pending approvals",
+        value: vol(totals?.needs_approval),
+        valueClass:
+          totals && totals.needs_approval > 0 ? "text-approval" : undefined,
+        sub: topApproval
+          ? `${topApproval.key} ×${topApproval.needs_approval}`
+          : undefined,
+      },
+    ];
+  }, [manifests.data, summary.data]);
+
   if (scope.status === "no-project") {
     return <NoProjectEmptyState resource="agents" />;
   }
@@ -94,6 +152,10 @@ export function AgentsPage() {
           <DocsLink path={DOC_PATHS.registerAgent} label="Register an agent" />
         }
       />
+
+      <div className="mb-4">
+        <StatStrip stats={kpis} />
+      </div>
 
       <Card className="overflow-hidden p-0">
         <nav aria-label="Agents" className="flex flex-col">
