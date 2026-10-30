@@ -1,6 +1,6 @@
 ---
 name: run-platform
-description: Spin up a local hexgate platform instance (FastAPI platform-api + React dashboard, optionally the full OTLP pipeline) — check prerequisites first (uv, pnpm, Docker, Go, free ports), start the servers in the background, and hand back the dashboard URL plus the first-boot admin email and password. Use when asked to run, start, spin up, or demo the platform/dashboard locally, or to get a login for a local instance. Local dev machine only, not staging or prod (those are deploy stacks, see platform/DEPLOY.md).
+description: Spin up a local hexgate platform instance (FastAPI platform-api + React dashboard + MCP server, optionally the full OTLP pipeline) — check prerequisites first (uv, pnpm, Docker, Go, free ports), start the servers in the background, and hand back the dashboard URL, the first-boot admin email and password, and the `claude mcp add` line that connects Claude Code to the local MCP server over OAuth. Use when asked to run, start, spin up, or demo the platform/dashboard/MCP server locally, or to get a login for a local instance; "without MCP" or "dashboard only" skips the MCP server. Local dev machine only, not staging or prod (those are deploy stacks, see platform/DEPLOY.md).
 ---
 
 # Run the hexgate platform locally
@@ -11,8 +11,13 @@ staging or prod. Those are deploy stacks (`make platform-up STAGE=staging|prod`,
 see `platform/DEPLOY.md`). If the user asks for staging or prod, point them
 there and don't run anything from this skill against them.
 
-Goal: a running instance the user can log into. End with the URL, email, and
-password, or with exactly what is missing.
+Goal: a running instance the user can log into and connect Claude Code to.
+End with the URL, email, password and the `claude mcp add` line, or with
+exactly what is missing.
+
+The MCP server is part of the platform, so start it every time. Skip it (and
+its port, step and report line) only when the user asks for the platform
+"without MCP" or "dashboard only".
 
 Works on macOS and Linux. The paths and `make` targets below are relative to
 the repo root, and each command runs in a fresh shell, so start **every**
@@ -27,6 +32,7 @@ cd "$(git rev-parse --show-toplevel)" && LOGDIR="/tmp/hexgate-$(basename "$PWD")
 .claude/skills/run-platform/preflight.sh          # light mode
 .claude/skills/run-platform/preflight.sh --full   # full pipeline
 ```
+Add `--no-mcp` (to either) when the user opted out of the MCP server.
 
 - Any `MISS` line: stop and give the user the install hint the script printed.
 - `8000 busy`: an API may already be running, but `/health` looks the same whatever database it uses, so check with `.claude/skills/run-platform/instance.sh who` before reusing it. Reuse it only when its checkout is this one and its target fits the mode you pick below: `make platform-api` for light, `make platform-api-pg` (or a Postgres `DATABASE_URL`) for full. A light-mode API under a full pipeline looks healthy, but the collector rejects every key it mints with 401.
@@ -34,6 +40,7 @@ cd "$(git rev-parse --show-toplevel)" && LOGDIR="/tmp/hexgate-$(basename "$PWD")
   - Another checkout: ask the user before stopping it; it may be in use.
   - `not a hexgate API on :8000`: tell the user what holds the port.
 - `5173 busy`: fine if it's another checkout's dashboard; Vite starts this one on the next free port, and step 3 finds it.
+- `8080 busy`: an MCP server may already be running. Check its checkout with `lsof -a -p <pid> -d cwd`: reuse it if that is `<this checkout>/platform/mcp`, otherwise ask the user before stopping it; `make mcp-run` would fail on the taken port.
 - `4317`/`4318 busy` in full mode: a collector is already running. `make collector-run` would fail on it, so find out whose it is before starting yours.
 
 **Pick the mode.** Default to light unless the user wants audit events, agents
@@ -41,7 +48,7 @@ talking to the platform, or integration tests.
 
 | Mode | Runs | Needs |
 |---|---|---|
-| light | `platform-api` (SQLite) + `dashboard` | uv, pnpm |
+| light | `platform-api` (SQLite) + `dashboard` + `mcp-run` | uv, pnpm |
 | full | + Postgres, Redpanda, ClickHouse, collector, enricher (`make demo-platform` prints the recipe) | + Docker, Go |
 
 **No Docker?** Explain the options to the user instead of failing:
@@ -70,6 +77,7 @@ Light mode:
 ```bash
 UV_PYTHON=3.13 make platform-api >> "$LOGDIR/api.log" 2>&1       # :8000
 make dashboard >> "$LOGDIR/dash.log" 2>&1                         # :5173
+make mcp-run >> "$LOGDIR/mcp.log" 2>&1                            # :8080
 ```
 
 Full mode, in this order:
@@ -87,12 +95,33 @@ Full mode, in this order:
    `collector-run` runs the binary and doesn't build it.
 4. Start `make collector-run` and `make enricher-run` as background commands,
    appending to `$LOGDIR/collector.log` and `$LOGDIR/enricher.log`.
+5. Start the dashboard and `make mcp-run` as in light mode.
+
+The MCP server's defaults already fit this setup, so export nothing:
+`HEXGATE_MCP_API_URL` is `http://localhost:8000` and `HEXGATE_MCP_RESOURCE_URL`
+is `http://localhost:8080/mcp`. It doesn't read `platform/api/.env`. So if the
+API runs with a non-default `HEXGATE_PUBLIC_URL`, export the same value to
+`make mcp-run`, or every token gets refused for its issuer.
 
 Wait until the API answers `curl -sf localhost:8000/health` and
 `.claude/skills/run-platform/instance.sh dash` prints this checkout's dashboard
 URL. Don't probe `localhost:5173` directly: when another checkout's dashboard
 holds it, Vite quietly moves this one to the next port. Watch `api.log` for a
 `Traceback` while you wait. A CSS `@import` warning in `dash.log` is harmless.
+Then check the MCP server answers (any HTTP code, a `401` is normal before
+login): `curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8080/mcp`.
+If it prints `000`, read `mcp.log`: an address-in-use error means another MCP
+server holds :8080 (see the preflight).
+
+The OAuth login ends on a consent page on the API's `HEXGATE_DASHBOARD_URL`,
+which defaults to `http://localhost:5173`, and the consent form is refused
+unless its origin matches that URL exactly. So check the URL `instance.sh dash`
+printed:
+- `http://localhost:5173`: nothing more to do.
+- Another port: Vite moved off a 5173 that another checkout holds. Restart the
+  API with `HEXGATE_DASHBOARD_URL=<that URL>` (it reads its settings only at
+  startup). Otherwise consent opens the other checkout's dashboard, which may
+  not have the consent page.
 
 In full mode the pipeline must be up too, or the audit page stays empty while
 everything else looks fine. Before reporting, check that:
@@ -160,13 +189,48 @@ password can't be printed again. Offer these options and let the user choose:
 - start from a fresh database. For SQLite, stop the API and move `platform/api/hexgate.db` aside (don't delete it). For Postgres, run `make postgres-reset`, which wipes the one Postgres volume every checkout shares, so ask first; then restart the API, which creates the tables and seeds (printing a new block) only at startup;
 - light mode only: run in a fresh git worktree, which gets its own SQLite database. Full mode gets nothing fresh from a new worktree, because all checkouts share the same Postgres.
 
-## 5. Report
+## 5. Connect Claude Code
+
+Skip this when the user opted out of the MCP server. Give the user these
+steps, since you can't do them for them:
+1. Register the server once (skip it if `claude mcp get hexgate` already shows
+   `http://localhost:8080/mcp`):
+   `claude mcp add -s user --transport http hexgate http://localhost:8080/mcp`.
+2. Restart Claude Code. A session that started before `claude mcp add` doesn't
+   see the server.
+3. In the new session, open `/mcp`, choose `hexgate`, then **Authenticate**.
+   The browser opens the dashboard by itself, nothing to paste: log in with the
+   step 4 credentials, then approve the consent page.
+4. First prompt: "List my Hexgate projects".
+
+`HEXGATE_OAUTH_ALLOW_INSECURE_CLIENT_IDS` is **not** needed for Claude Code.
+Its client id is https://claude.ai/oauth/claude-code-client-metadata, an https
+URL the API fetches as usual. Set it, on the API, only for a client whose
+client id is an `http://localhost` URL, such as a metadata document you serve
+yourself. The API refuses to start with it when its public or dashboard URL is
+not local.
+
+Failure modes:
+- **"No Hexgate MCP server connected"** (or the session has no hexgate
+  tools): the session started before `claude mcp add`. Restart Claude Code.
+- **"Safari can't connect to the server localhost:5173"** after Authenticate:
+  the API's `HEXGATE_DASHBOARD_URL` has no dashboard behind it. Either the
+  dashboard isn't running (start it, step 3), or it runs on another port (set
+  the variable as in step 3 and restart the API). Then authenticate again.
+- **`401` on `POST /mcp`** in `mcp.log`: this is normal before login. That's
+  how the server tells the client to authenticate. It's only a problem if it
+  keeps happening after the consent page has been approved.
+
+## 6. Report
 
 Give the user:
 - the dashboard URL that `instance.sh dash` printed (normally `http://localhost:5173`);
 - the email and password, and that they should rotate the password in account settings;
+- the line that connects Claude Code, in a code block beside the URL and credentials:
+  `claude mcp add -s user --transport http hexgate http://localhost:8080/mcp`,
+  then the rest of the step 5 steps (restart, `/mcp` → hexgate → Authenticate, first prompt). Leave it out only when the user opted out of the MCP server;
 - the log directory, `/tmp/hexgate-<checkout name>`;
-- how to stop the instance: stop the background tasks, or run `.claude/skills/run-platform/instance.sh stop`, which stops this checkout's API, dashboard, collector and enricher and nothing else.
+- how to stop the instance: stop the background tasks, or run `.claude/skills/run-platform/instance.sh stop`, which stops this checkout's API, dashboard, MCP server, collector and enricher and nothing else.
 
 The password is a local dev credential, so printing it in chat is fine. Never do
 this against a staging or prod stack.

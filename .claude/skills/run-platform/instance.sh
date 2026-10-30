@@ -2,7 +2,7 @@
 # Inspect or stop a local hexgate platform instance (macOS or Linux).
 #   instance.sh who    # checkout, make target and exported DATABASE_URL of the API on :8000
 #   instance.sh dash   # URL of this checkout's dashboard (Vite moves off 5173 when it's taken)
-#   instance.sh stop   # stop this checkout's API, dashboard, collector and enricher
+#   instance.sh stop   # stop this checkout's API, dashboard, MCP server, collector and enricher
 set -u
 
 if ! command -v lsof >/dev/null 2>&1 && ! command -v ss >/dev/null 2>&1; then
@@ -27,7 +27,7 @@ cwd_of() {
 # else on these ports (Docker's port proxy, another project's Vite) is not ours.
 checkout_of() {
   case $(cwd_of "$1") in
-    */platform/api|*/platform/dashboard|*/platform/collector) dirname "$(dirname "$(cwd_of "$1")")";;
+    */platform/api|*/platform/dashboard|*/platform/mcp|*/platform/collector) dirname "$(dirname "$(cwd_of "$1")")";;
   esac
 }
 
@@ -81,9 +81,10 @@ dash)
   ;;
 stop)
   root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "instance.sh: run it inside a hexgate checkout" >&2; exit 1; }
-  # API, dashboard (Vite moves up from 5173 when it is taken), collector,
-  # enricher (matched on its -m module, not on a file path an editor could hold).
-  cands=$( { for port in 8000 5173 5174 5175 5176 4317 4318; do listeners "$port"; done
+  # API, dashboard (Vite moves up from 5173 when it is taken), MCP server,
+  # collector, enricher (matched on its -m module, not on a file path an editor
+  # could hold).
+  cands=$( { for port in 8000 5173 5174 5175 5176 8080 4317 4318; do listeners "$port"; done
              pgrep -f -- '-m hexgate_api\.jobs\.enricher'; } 2>/dev/null | sort -u)
   pids=""
   for p in $cands; do
