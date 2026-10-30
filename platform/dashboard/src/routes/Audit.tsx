@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Filter, Lightbulb, X } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   api,
   type AuditDecisionRow,
@@ -27,8 +27,13 @@ import {
   scopeNoValue,
 } from "@/components/audit/chart-tokens";
 import {
-  type AuditFilters as Filters,
+  EMPTY_AUDIT_FILTERS,
+  fromAuditSearch,
+  pageLimitFor,
+  type SetAuditFilters,
+  toAuditSearch,
   useAuditFilters,
+  withAuditFilters,
 } from "@/lib/audit-filters";
 import { rangeDays, rangePhrase } from "@/lib/date-range";
 import { fmtTs } from "@/components/audit/fmt";
@@ -123,7 +128,7 @@ function DetailDrawer({
   projectId: string | null;
   onClose: () => void;
   onSelect: (e: AuditDecisionRow) => void;
-  setF: (u: (p: Filters) => Filters) => void;
+  setF: SetAuditFilters;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -418,13 +423,51 @@ export function AuditPage() {
   const canManageBans = useCanManageBans();
   // Display name for the page subtitle; falls back to the id.
   const projectName = projectScope.projectName ?? projectId;
-  // Filter + paging state lives in a zustand store (see lib/audit-filters)
-  // so the dialled-in slice survives route switches; drawer selection is
-  // ephemeral and stays local.
-  const f = useAuditFilters((s) => s.filters);
-  const setF = useAuditFilters((s) => s.setFilters);
-  const tableLimit = useAuditFilters((s) => s.tableLimit);
-  const loadMore = useAuditFilters((s) => s.loadMore);
+  // The URL is the source of truth for the filters, so a link, a reload or
+  // a shared URL opens the same slice and the first render already queries
+  // it. A bare /audit (the sidebar) is redirected to the last view.
+  const [params, setParams] = useSearchParams();
+  const lastSearch = useAuditFilters(
+    (s) => (projectId && s.lastSearch[projectId]) || "",
+  );
+  const remember = useAuditFilters((s) => s.remember);
+  const urlFilters = useMemo(() => fromAuditSearch(params), [params]);
+  const f = useMemo(
+    () =>
+      urlFilters ??
+      fromAuditSearch(new URLSearchParams(lastSearch)) ??
+      EMPTY_AUDIT_FILTERS,
+    [urlFilters, lastSearch],
+  );
+  const viewKey = toAuditSearch(f).toString();
+  useEffect(() => {
+    // Rewrite a bare /audit to the last view, and a malformed URL to what
+    // the page actually shows, so a copied link matches the screen.
+    // Wait for the project: the remembered view is per project.
+    if (!projectId) return;
+    if (params.toString() !== withAuditFilters(params, f).toString())
+      setParams((prev) => withAuditFilters(prev, f), { replace: true });
+    if (urlFilters) remember(projectId, viewKey);
+  }, [urlFilters, viewKey, f, params, projectId, remember, setParams]);
+  // Calls in one event compose: each builds on the previous one's result,
+  // not on the render's `f`.
+  const latest = useRef(f);
+  useEffect(() => {
+    latest.current = f;
+  }, [f]);
+  const setF: SetAuditFilters = useCallback(
+    (update) => {
+      latest.current = update(latest.current);
+      const next = latest.current;
+      setParams((prev) => withAuditFilters(prev, next), { replace: true });
+    },
+    [setParams],
+  );
+  // Paging belongs to one view; any other view starts at the first page.
+  const tableLimit = useAuditFilters((s) => pageLimitFor(s, viewKey));
+  const loadMoreFor = useAuditFilters((s) => s.loadMore);
+  const loadMore = () => loadMoreFor(viewKey);
+  // Drawer selection is ephemeral and stays local.
   const [sel, setSel] = useState<AuditDecisionRow | null>(null);
 
   // UI state → wire: '' = "all" locally, so unset filters are omitted
