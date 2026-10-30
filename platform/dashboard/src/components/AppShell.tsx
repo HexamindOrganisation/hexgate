@@ -239,8 +239,8 @@ function NavItem({
           "flex h-9 items-center rounded-lg text-sm transition-colors",
           collapsed ? "justify-center px-0" : "justify-between px-2.5",
           isActive
-            ? "bg-card font-semibold text-foreground shadow-xs ring-1 ring-border"
-            : "font-medium text-muted-foreground hover:bg-accent hover:text-foreground",
+            ? "bg-accent font-semibold text-foreground"
+            : "font-medium text-muted-foreground hover:bg-accent/60 hover:text-foreground",
         )
       }
     >
@@ -253,7 +253,7 @@ function NavItem({
             {!collapsed && label}
             {/* Collapsed: a dot on the icon keeps the signal visible. */}
             {collapsed && badge && (
-              <span className="absolute -top-0.5 left-3 size-2 rounded-full bg-deny ring-2 ring-background" />
+              <span className="absolute -top-0.5 left-3 size-2 rounded-full bg-deny ring-2 ring-card" />
             )}
           </span>
           {badge && (
@@ -363,11 +363,11 @@ export function AppShell() {
     <div className="flex h-screen bg-background text-foreground">
       <aside
         className={cn(
-          // Same ground as the page plus a hairline, so the active item can
-          // sit on it as a raised card. The whole shell lives in the sidebar
-          // (switcher on top, account on the bottom), so the content column
-          // reclaims the old header's height.
-          "flex flex-col border-r border-border bg-background transition-[width] duration-200",
+          // A lighter surface than the page (card over the gray content area),
+          // set off by a hairline, so the sidebar reads as its own panel. The
+          // whole shell lives here (switcher on top, account on the bottom),
+          // so the content column reclaims the old header's height.
+          "flex flex-col border-r border-border bg-card transition-[width] duration-200",
           sidebarCollapsed ? "w-14" : "w-[240px]",
         )}
       >
