@@ -119,7 +119,7 @@ unless its origin matches that URL exactly. So check the URL `instance.sh dash`
 printed:
 - `http://localhost:5173`: nothing more to do.
 - Another port: Vite moved off a 5173 that another checkout holds. Restart the
-  API with `HEXGATE_DASHBOARD_URL=<that URL>` (it reads its settings only at
+  API             with `HEXGATE_DASHBOARD_URL=<that URL>` (it reads its settings only at
   startup). Otherwise consent opens the other checkout's dashboard, which may
   not have the consent page.
 
@@ -252,10 +252,10 @@ before or after it.
 
 ```
 Hexgate platform · <light|full> mode · logs <dir>
-  Dashboard  http://localhost:5173    admin@hexgate.dev / <password or "unchanged">
-  API        http://localhost:8000    (<SQLite|Postgres>)
-  Pipeline   collector :4317/:4318 · enricher running        ← full mode only
-  MCP        http://localhost:8080/mcp   registered as `hexgate` (<added|found>)
+  Dashboard       http://localhost:5173    admin@hexgate.dev / <password or "unchanged">
+  API             http://localhost:8000    (<SQLite|Postgres>)
+  OTLP pipeline   collector :4317/:4318 · enricher running        ← full mode only
+  MCP             http://localhost:8080/mcp   registered as `hexgate` (<added|found>)
 Next  open a NEW terminal: claude → /mcp → hexgate → Authenticate → "List my Hexgate projects"
 Stop  .claude/skills/run-platform/instance.sh stop
 Notes <one line per anomaly, e.g. "enricher restarted once (Postgres init deadlock)">; omit the line when there is none
@@ -266,7 +266,7 @@ Rules:
 - `Dashboard` is the URL `instance.sh dash` printed. The password is the one the
   login check accepted, or `unchanged` when the database was already seeded and
   the user keeps their saved one.
-- Leave out the `Pipeline` line in light mode, and the `MCP` and `Next` lines
+- Leave out the `OTLP pipeline` line in light mode, and the `MCP` and `Next` lines
   when the user opted out of the MCP server.
 - Add `(keep this session open, it owns the servers)` to the `Next` line only
   when this run started any server (rather than reusing ones already running):
