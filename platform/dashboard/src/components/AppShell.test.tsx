@@ -93,16 +93,12 @@ describe("AppShell", () => {
     await waitFor(() => {
       expect(screen.getByText("Agents")).toBeInTheDocument();
     });
-    for (const label of [
-      "Home",
-      "Policies",
-      "Graph",
-      "Playground",
-      "Audit",
-      "API keys",
-    ]) {
+    for (const label of ["Home", "Policies", "Audit", "API keys"]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+    // Graph and Playground left the sidebar — they live inside an agent now.
+    expect(screen.queryByText("Graph")).not.toBeInTheDocument();
+    expect(screen.queryByText("Playground")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute(
       "href",
       "/",
