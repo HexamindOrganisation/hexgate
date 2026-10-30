@@ -813,6 +813,44 @@ export interface AiActReportCreateBody {
   to?: string;
 }
 
+/** A scope with the sentence the consent page showed for it. */
+export interface OAuthScope {
+  name: string;
+  description: string;
+}
+
+export interface OAuthGrantProject {
+  id: string;
+  name: string;
+  org_id: string;
+  org_name: string;
+}
+
+/** One live login of an MCP client, from ``GET /v1/oauth/grants``. ``id`` is
+ * the login itself, stable across token refreshes. ``client_name`` is the
+ * client's own claim (its metadata document), so the page also shows the
+ * host of ``client_id``. A project deleted since consent is left out. */
+export interface OAuthGrant {
+  id: string;
+  client_name: string;
+  client_id: string;
+  scopes: OAuthScope[];
+  projects: OAuthGrantProject[];
+  created_at: string;
+  /** Null until the client first refreshes its token. */
+  last_used_at: string | null;
+}
+
+/** Per-user, not project-scoped: the grants of whoever holds the session. */
+export const oauthGrantsApi = {
+  list: () => request<OAuthGrant[]>("/v1/oauth/grants"),
+
+  revoke: (grantId: string) =>
+    request<void>(`/v1/oauth/grants/${encodeURIComponent(grantId)}`, {
+      method: "DELETE",
+    }),
+};
+
 /** Percent-encode each path segment but keep the slashes, so a name like
  * `caps/refunds.yaml` reaches the server's `{name:path}` converter intact. */
 function encodePath(path: string): string {
