@@ -589,10 +589,6 @@ function AgentDecisions({ agent }: { agent: AgentManifestView }) {
   );
 }
 
-/* NOTE: AgentHeader and the roleModes memo mirror Agents.tsx on purpose, for
-   now — H1b makes /agents list-only (dropping its inline card) and H2 replaces
-   this header with the graph-hero Overview, so a shared extraction here would
-   be reworked immediately. Kept parallel until then. */
 function AgentHeader({
   agent,
   canManageBans,

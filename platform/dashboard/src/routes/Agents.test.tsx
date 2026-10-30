@@ -1,15 +1,21 @@
 /**
- * Tests for the /agents page — the "ban agent" cross-page tie-in (§9.6)
- * and the skills section, whose point is the distinction between resources
- * a framework did not enumerate and a skill that ships none.
+ * Tests for the /agents page — the agent list (each row links into the
+ * hub, 24h volume, the legacy ?agent= redirect) and ManifestView's skills
+ * and guards sections, whose point is the distinction between resources a
+ * framework did not enumerate and a skill that ships none.
  */
 
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Route, Routes, useParams } from "react-router-dom";
 
 import { useActive } from "@/lib/active";
-import type { GuardDefinition, SkillDefinition } from "@/lib/api";
-import { AgentsPage } from "@/routes/Agents";
+import type {
+  AgentManifestView,
+  GuardDefinition,
+  SkillDefinition,
+} from "@/lib/api";
+import { AgentsPage, ManifestView } from "@/routes/Agents";
 import { renderWithProviders } from "@/test/render";
 
 const PROJECT = "p1";
@@ -97,7 +103,7 @@ function stubFetch(role: string, manifest: unknown = MANIFEST) {
         case `/v1/projects/${PROJECT}/agents/manifest`:
           return manifest === "error"
             ? new Response("boom", { status: 500 })
-            : json([manifest]);
+            : json(manifest === "empty" ? [] : [manifest]);
         case `/v1/projects/${PROJECT}/policy-files`:
           return json([
             {
@@ -153,7 +159,13 @@ function stubFetch(role: string, manifest: unknown = MANIFEST) {
   );
 }
 
-describe("AgentsPage — ban tie-in", () => {
+/** Stand-in for the agent hub, so the redirect test can prove where it lands. */
+function HubStub() {
+  const { name } = useParams();
+  return <div>hub:{name}</div>;
+}
+
+describe("AgentsPage — the agent list", () => {
   beforeEach(() => {
     act(() => {
       useActive.setState({ activeOrgId: "org-1", activeProjectId: PROJECT });
@@ -164,65 +176,33 @@ describe("AgentsPage — ban tie-in", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows an admin a ban-agent link pointing at the prefilled /bans route", async () => {
+  it("lists each agent as a link into its hub", async () => {
     stubFetch("admin");
     renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
-
-    const link = await screen.findByRole("link", { name: /ban agent/i });
-    expect(link).toHaveAttribute("href", "/bans?ban_agent=support_bot");
+    const link = await screen.findByRole("link", { name: "support_bot" });
+    expect(link).toHaveAttribute("href", "/agents/support_bot");
   });
 
-  it("links View decisions to Audit for the agent over 24h", async () => {
+  it("shows each agent's 24h call and denial volume on its row", async () => {
     stubFetch("admin");
     renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
-    const href = (
-      await screen.findByRole("link", { name: /view decisions/i })
-    ).getAttribute("href")!;
-    const params = new URL(href, "http://x").searchParams;
-    expect(params.get("agent")).toBe("support_bot");
-    expect(params.get("range")).toBe("24h");
+    const row = await screen.findByRole("link", { name: "support_bot" });
+    expect(within(row).getByText("15")).toBeInTheDocument();
+    expect(within(row).getByText("calls 24h")).toBeInTheDocument();
+    expect(within(row).getByText("4")).toBeInTheDocument();
+    expect(within(row).getByText("denied")).toBeInTheDocument();
   });
 
-  it("shows how each role treats each tool", async () => {
-    stubFetch("admin", {
-      ...MANIFEST,
-      manifest: {
-        ...MANIFEST.manifest,
-        tools: [
-          {
-            name: "refund",
-            description: "",
-            input_schema: { type: "object", properties: {}, required: [] },
-          },
-          {
-            name: "lookup",
-            description: "",
-            input_schema: { type: "object", properties: {}, required: [] },
-          },
-        ],
-      },
-    });
-    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
-    // The engine's condition text rides on the chip.
-    expect(
-      await screen.findByTitle("support: args.amount <= 50"),
-    ).toHaveTextContent("support allow*");
-    // A manifest tool the policy doesn't list takes the engine's fallback,
-    // role-wide constraint included.
-    expect(
-      screen.getByTitle("guest: not listed, default applies"),
-    ).toHaveTextContent("guest deny");
-    expect(
-      screen.getByTitle("support: not listed, default applies, user.tier == 1"),
-    ).toHaveTextContent("support allow*");
-  });
-
-  it("shows the agent's last 24 hours", async () => {
+  it("sends a legacy ?agent= deep link to the agent's hub", async () => {
     stubFetch("admin");
-    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
-    expect(await screen.findByText("Calls · 24h")).toBeInTheDocument();
-    expect(screen.getByText(/15 calls in 24h/)).toBeInTheDocument();
-    expect(screen.getByText("4")).toBeInTheDocument();
+    renderWithProviders(
+      <Routes>
+        <Route path="/agents" element={<AgentsPage />} />
+        <Route path="/agents/:name" element={<HubStub />} />
+      </Routes>,
+      { initialRoute: "/agents?agent=support_bot" },
+    );
+    expect(await screen.findByText("hub:support_bot")).toBeInTheDocument();
   });
 
   it("does not claim there are no agents while the project resolves", async () => {
@@ -230,7 +210,6 @@ describe("AgentsPage — ban tie-in", () => {
     renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
     expect(await screen.findByText("Loading agents…")).toBeInTheDocument();
     expect(screen.queryByText("No agents yet.")).not.toBeInTheDocument();
-    expect(screen.queryByText("No agents to inspect.")).not.toBeInTheDocument();
   });
 
   it("says when agents couldn't load instead of claiming there are none", async () => {
@@ -242,16 +221,10 @@ describe("AgentsPage — ban tie-in", () => {
     expect(screen.queryByText("No agents yet.")).not.toBeInTheDocument();
   });
 
-  it("hides the ban-agent link from a plain member", async () => {
-    stubFetch("member");
+  it("says there are no agents when the list is empty", async () => {
+    stubFetch("admin", "empty");
     renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
-
-    // The edit-policy link still renders, proving the header mounted —
-    // only the ban affordance is gated away.
-    await screen.findByRole("link", { name: /edit policy/i });
-    await waitFor(() =>
-      expect(screen.queryByRole("link", { name: /ban agent/i })).toBeNull(),
-    );
+    expect(await screen.findByText(/No agents yet/)).toBeInTheDocument();
   });
 });
 
@@ -267,8 +240,9 @@ describe("AgentsPage — skills section", () => {
   });
 
   async function renderWithSkills(skills: SkillDefinition[] | null) {
-    stubFetch("admin", withSkills(skills));
-    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    renderWithProviders(
+      <ManifestView agent={withSkills(skills) as AgentManifestView} />,
+    );
     await screen.findByText("Skills");
   }
 
@@ -385,13 +359,18 @@ describe("AgentsPage — skills section", () => {
   });
 
   it("renders the unregistered state", async () => {
-    stubFetch("admin", {
-      ...MANIFEST,
-      manifest: null,
-      version: null,
-      content_hash: null,
-    });
-    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    renderWithProviders(
+      <ManifestView
+        agent={
+          {
+            ...MANIFEST,
+            manifest: null,
+            version: null,
+            content_hash: null,
+          } as AgentManifestView
+        }
+      />,
+    );
 
     await screen.findByText("Skills");
     expect(
@@ -414,8 +393,9 @@ describe("AgentsPage — guards section", () => {
   });
 
   async function renderWithGuards(guards: GuardDefinition[] | null) {
-    stubFetch("admin", withGuards(guards));
-    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    renderWithProviders(
+      <ManifestView agent={withGuards(guards) as AgentManifestView} />,
+    );
     await screen.findByText("Guards");
   }
 

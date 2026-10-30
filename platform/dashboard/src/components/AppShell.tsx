@@ -9,10 +9,8 @@ import {
   CircleUser,
   KeyRound,
   LogOut,
-  MessageSquareCode,
   Monitor,
   Moon,
-  Network,
   PanelLeft,
   Scale,
   ScrollText,
@@ -131,8 +129,6 @@ const workspaceGroups: NavGroup[] = [
     links: [
       { to: "/agents", label: "Agents", icon: Bot },
       { to: "/policies", label: "Policies", icon: Files },
-      { to: "/graph", label: "Graph", icon: Network },
-      { to: "/playground", label: "Playground", icon: MessageSquareCode },
     ],
   },
   {
