@@ -502,7 +502,7 @@ export function HomePage() {
               return (
                 <Link
                   key={a.name}
-                  to={`/agents?agent=${encodeURIComponent(a.name)}`}
+                  to={`/agents/${encodeURIComponent(a.name)}`}
                   className="grid grid-cols-[minmax(0,1fr)_170px] items-center gap-3 border-t border-border/60 px-5 py-3 first:border-t-0 hover:bg-accent/50"
                 >
                   <span className="min-w-0">
