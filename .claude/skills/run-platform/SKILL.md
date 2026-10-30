@@ -269,7 +269,8 @@ Rules:
 - Leave out the `Pipeline` line in light mode, and the `MCP` and `Next` lines
   when the user opted out of the MCP server.
 - Add `(keep this session open, it owns the servers)` to the `Next` line only
-  when step 5 added the registration in this run.
+  when this run started any server (rather than reusing ones already running):
+  quitting this session stops them.
 - Don't mention stale FIRST-BOOT blocks unless the password line depends on
   them.
 
