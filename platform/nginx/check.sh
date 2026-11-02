@@ -37,6 +37,8 @@ http {
     server {
         listen 127.0.0.1:8080;
         server_name $stage.hexgate.test;
+        # The exact path, not the box's wildcard form: here a missing file
+        # must fail the check rather than include nothing.
         include $here/hexgate-$stage.conf;
         location / {
             proxy_pass http://127.0.0.1:$api_port;

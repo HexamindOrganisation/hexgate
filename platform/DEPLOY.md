@@ -98,8 +98,8 @@ route (in Caddy a `handle /v1/traces` block above the general `reverse_proxy`;
 in nginx the exact `location = /v1/traces` that the stage's include provides,
 see *The nginx includes* below, never written by hand). This is what makes the
 SDK's default OTLP endpoint (`<api url>/v1/traces`) work with zero client
-config. Without the route, the api's SPA catch-all answers the POST with a JSON
-404 and every SDK on that stage silently loses its audit trail — `make
+config. Without the route, the api's GET-only SPA catch-all answers the POST
+with a 405 and every SDK on that stage silently loses its audit trail — `make
 platform-smoke` (§4) is how you catch that. Everything else in the stack
 (Postgres, ClickHouse, Redpanda) binds no host ports; Redpanda in particular is
 PLAINTEXT with no auth — never publish it.
@@ -145,28 +145,37 @@ Install once per stage. In `sites-available/app.hexgate.ai`, inside the 443
 fresh box, where there is none, add it beside `location /`) with
 
 ```nginx
-include /srv/hexgate-prod/platform/nginx/hexgate-prod.conf;
+include /srv/hexgate-prod/platform/nginx/hexgate-prod*.conf;
 ```
 
 and in `sites-available/app.staging.hexgate.ai` with
 
 ```nginx
-include /srv/hexgate-staging/platform/nginx/hexgate-staging.conf;
+include /srv/hexgate-staging/platform/nginx/hexgate-staging*.conf;
 ```
 
-Remove the old block in the same edit: the include defines
-`location = /v1/traces` too, and two of them fail `nginx -t`. Then
-`sudo nginx -t && sudo systemctl reload nginx`; a graceful reload keeps existing
-connections, and a failed test changes nothing. The include names a file in
-that stage's checkout, so install it only once the checkout has
-`platform/nginx/`: for prod, after promoting a release that contains it.
+Remove the old block in the same edit: the include defines `location =
+/v1/traces` too, and two of them fail `nginx -t`. Then `sudo nginx -t && sudo
+systemctl reload nginx`; a graceful reload keeps existing connections, and a
+failed test changes nothing. The include names a file in that stage's checkout,
+so install it only once the checkout has `platform/nginx/`: for prod, after
+promoting a release that contains it. The wildcard also hides a mistyped path
+or an include installed too early (both match nothing and pass `nginx -t`), so
+finish with the section 4 check `curl -s -o /dev/null -w '%{http_code}\n' -X
+POST https://<hostname>/v1/traces`: 401 is the collector; a 405 means the
+include matched nothing.
 
-One nginx serves both stages and the box's other sites, so a broken or missing
-file in either checkout fails every later reload on the box, certbot's renewal
-reload included, and a restart would not come back. So test right after a
-checkout moves and reload once the stack is up (both in the section 6 recipe):
-a bad file shows up before anything changes, while the running config is still
-the old one.
+The `*` matters: nginx treats a wildcard include that matches nothing as empty,
+while a plain path to a missing file is an error. One nginx serves both stages
+and the box's other sites, and with a plain path a checkout without the file (a
+rollback, an old branch) would fail every later reload on the box, certbot's
+renewal reload included, and the next restart would not come back. With the
+wildcard that checkout only loses its Hexgate routes: `/v1/traces` then goes to
+the api, which answers 405, and the stage's SDKs drop their spans, which `make
+platform-smoke` catches. A file that exists but is broken still fails `nginx
+-t`, so test right after a checkout moves and reload once the stack is up (both
+in the section 6 recipe): a bad file shows up before anything changes, while
+the running config is still the old one.
 
 (In Caddy this is two `reverse_proxy` site blocks; in nginx, two `server`
 blocks with `proxy_pass`. Forward `X-Forwarded-Proto: https` — the API trusts
@@ -200,8 +209,8 @@ docker ps                                    # hexgate-prod-* and hexgate-stagin
 curl -sf https://app.hexgate.ai/v1/health    # → 200
 curl -sf https://app.staging.hexgate.ai/v1/health
 # The /v1/traces route: a 401 means the collector answered (it rejects the
-# unauthenticated POST); a JSON 404 means the api's SPA catch-all did, i.e. the
-# path route is missing or ordered after the hostname's catch-all.
+# unauthenticated POST); a 405 means the api's GET-only SPA catch-all did,
+# i.e. the stage's include is missing or matched nothing.
 curl -s -o /dev/null -w '%{http_code}\n' -X POST https://app.hexgate.ai/v1/traces   # → 401
 ```
 
@@ -437,12 +446,12 @@ enricher. No other data is lost, and deploying the enricher stops it. To roll
 back, go the other way: revert the SDK release first, then the enricher.
 
 **Rolling back past `platform/nginx/`.** A commit from before the per-stage
-includes has no `platform/nginx/hexgate-<stage>.conf`, so the include would
-point at a missing file and fail every reload on the box (section 3). Before
-checking such a commit out, put the hand-written block back in that stage's
-server block in place of the `include` line, with that stage's collector port
-(7001 prod, 7201 staging), and reload. Moving forward past it again, redo the
-section 3 install (the `include` in place of this block), or routes added to
+includes has no `platform/nginx/hexgate-<stage>.conf`, so the wildcard include
+matches nothing and that stage loses `/v1/traces` (section 3). Before checking
+such a commit out, put the hand-written block back in that stage's server block
+in place of the `include` line, with that stage's collector port (7001 prod,
+7201 staging), and reload. Moving forward past it again, redo the section 3
+install (the `include` in place of this block), or routes added to
 `platform/nginx/` later never reach the box:
 
 ```nginx
