@@ -138,10 +138,14 @@ The value was 8 MiB before message logging, which is why it had to be raised.
 **The nginx includes.** Every Hexgate route on the box except the hostname's
 catch-all is in `platform/nginx/hexgate-<stage>.conf`, and each stage's server
 block includes its own file from its own checkout. A route change then ships
-when that checkout moves to it and nginx reloads (section 6), and `make nginx-check` (also a CI job) runs
-`nginx -t` on both files inside a stub server block and fails if staging's
-file differs from prod's beyond its ports. The server block keeps its listen,
-TLS, forwarded headers and `location /` to the api.
+when that checkout moves to it and nginx reloads (section 6), and `make
+nginx-check` (also a CI job) runs `nginx -t` on each stage's files inside a
+stub shaped like its server block, and once on both stages together as the box
+includes them, and fails if staging's files differ from prod's beyond their
+ports and zone names, if a location proxies to a port its route table does not
+name, or if the `/v1/traces` body cap no longer equals the collector's. The
+server block keeps its listen, TLS, forwarded headers and `location /` to the
+api.
 
 Install once per stage. In `sites-available/app.hexgate.ai`, inside the 443
 `server` block, replace the hand-written `location = /v1/traces { … }` (on a
@@ -157,8 +161,24 @@ and in `sites-available/app.staging.hexgate.ai` with
 include /srv/hexgate-staging/platform/nginx/hexgate-staging*.conf;
 ```
 
+and, once per box (not per stage: it holds both stages' lines, and a line
+included twice declares its zones twice, which fails `nginx -t`), create
+`/etc/nginx/conf.d/hexgate.conf` at `http` level with each stage's rate-limit
+zones (see *The MCP routes and rate limits* below):
+
+```nginx
+include /srv/hexgate-prod/platform/nginx/hexgate-zones-prod*.conf;
+include /srv/hexgate-staging/platform/nginx/hexgate-zones-staging*.conf;
+```
+
 Remove the old block in the same edit: the include defines `location =
-/v1/traces` too, and two of them fail `nginx -t`. Then `sudo nginx -t && sudo
+/v1/traces` too, and two of them fail `nginx -t`. Also remove any MCP or OAuth
+`location` blocks, `limit_req_status` line or `conf.d/hexgate-ratelimit.conf`
+hand-written from an earlier version of this page: the include and
+`hexgate.conf` now provide them (the duplicate locations and `limit_req_status`
+fail `nginx -t`). `hexgate-ratelimit.conf` is shared by both stages, so delete
+it only once neither server block has a `limit_req` naming `hexgate_mcp` or
+`hexgate_oauth`; until then it does no harm. Then `sudo nginx -t && sudo
 systemctl reload nginx`; a graceful reload keeps existing connections, and a
 failed test changes nothing. The include names a file in that stage's checkout,
 so install it only once the checkout has `platform/nginx/`: for prod, after
@@ -186,103 +206,43 @@ Forward `X-Forwarded-Proto: https` — the API trusts it, via uvicorn
 `proxy_set_header Host $host`. `/v1` includes WebSocket endpoints, so the
 server block also needs the `Upgrade`/`Connection` headers set.
 
-**The MCP routes.** Two paths on the api hostname go to the stage's
-`HEXGATE_MCP_PORT` instead of the hostname's catch-all:
+**The MCP routes and rate limits** are in the same files. `/mcp` (a `^~`
+prefix: the MCP server redirects `/mcp/` to `/mcp`) and its protected-resource
+metadata, `/.well-known/oauth-protected-resource/mcp`, go to the stage's
+`HEXGATE_MCP_PORT`; the api's two discovery documents
+(`/.well-known/oauth-authorization-server`, `/.well-known/jwks.json`, exact
+matches so an ACME or `security.txt` location is never shadowed) and
+`/v1/oauth/` go to the api. All five are limited per client IP, because they
+answer callers with no credentials by design and `/v1/oauth/authorize` and
+`/token` make the api fetch a client metadata document from whatever host the
+caller names. The comments in `hexgate-<stage>.conf` give each block's reason.
+The MCP server fetches the JWKS from `http://api:8000` on the compose network,
+never through the proxy. `HEXGATE_PUBLIC_URL` and `HEXGATE_MCP_RESOURCE_URL`
+(section 6) must name this same hostname: a client that connects to
+`https://app.hexgate.ai/mcp` is only given a token for the resource URL the MCP
+server advertises.
 
-- `/mcp`, as a **prefix** (`location ^~ /mcp`, not `location = /mcp`): the MCP
-  server redirects `/mcp/` to `/mcp`, and an exact match would hand `/mcp/` to
-  the api instead.
-- `/.well-known/oauth-protected-resource/mcp`, the MCP server's own metadata.
-  This is the document an MCP client reads first, after the 401 from `/mcp`;
-  it names the api as the authorization server.
+The limits' zones are per stage, in
+`platform/nginx/hexgate-zones-<stage>.conf`, at `http` level, included from
+`conf.d/hexgate.conf` (the install above).
 
-The other two discovery documents, `/.well-known/oauth-authorization-server`
-and `/.well-known/jwks.json`, are the api's and stay on the catch-all. The MCP
-server fetches the JWKS from `http://api:8000` on the compose network, never
-through the proxy. Without either route the api answers in the MCP server's
-place (the metadata path with a JSON 404), and the client's connect or
-discovery fails. `HEXGATE_PUBLIC_URL` and `HEXGATE_MCP_RESOURCE_URL` (section
-6) must name this same hostname: a client that
-connects to `https://app.hexgate.ai/mcp` is only given a token for the
-resource URL the MCP server advertises.
-
-**Rate-limit the unauthenticated OAuth and MCP paths.** The api has no request
-rate limiting of its own, and the `/.well-known/` discovery documents, `/mcp`
-and the OAuth endpoints under `/v1/oauth/` answer callers that carry no
-credentials, by design: discovery, the login redirect and the token exchange
-come before any token exists. `/v1/oauth/authorize` and `/v1/oauth/token` also
-make the api fetch the client's metadata document from the host the caller
-names (on a cache miss, which a new hostname always is), so an unthrottled
-caller can keep the api's DNS lookups and outbound fetches busy with one
-distinct hostname per request. Limit each of these paths per client IP at the
-proxy. In nginx, a zone at `http` level (e.g.
-`/etc/nginx/conf.d/hexgate-ratelimit.conf`, once for both stages):
-
-```nginx
-limit_req_zone $binary_remote_addr zone=hexgate_oauth:10m rate=5r/s;
-limit_req_zone $binary_remote_addr zone=hexgate_mcp:10m rate=20r/s;
-```
-
-then, in each stage's `server` block (ports shown for prod; on staging use 7202
-for 7002 and 7200 for 7000, or staging's MCP and OAuth traffic reaches prod).
-`limit_req_status` goes here rather than at `http` level, where it would also
-change the status of any other site's limits on the box:
-
-```nginx
-limit_req_status 429;
-location ^~ /mcp {
-    limit_req zone=hexgate_mcp burst=40 nodelay;
-    client_max_body_size 1m;
-    proxy_pass http://127.0.0.1:7002;
-    proxy_buffering off;    # MCP replies may stream as server-sent events
-}
-location = /.well-known/oauth-protected-resource/mcp {
-    limit_req zone=hexgate_oauth burst=20 nodelay;
-    proxy_pass http://127.0.0.1:7002;
-}
-location = /.well-known/oauth-authorization-server {
-    limit_req zone=hexgate_oauth burst=20 nodelay;
-    proxy_pass http://127.0.0.1:7000;
-}
-location = /.well-known/jwks.json {
-    limit_req zone=hexgate_oauth burst=20 nodelay;
-    proxy_pass http://127.0.0.1:7000;
-}
-location ^~ /v1/oauth/ {
-    limit_req zone=hexgate_oauth burst=20 nodelay;
-    client_max_body_size 1m;
-    proxy_pass http://127.0.0.1:7000;
-}
-```
-
-nginx takes an exact `=` match first, then the longest prefix, and `^~` stops
-it from trying regex locations after that, so these blocks win over `location
-/` and over any `location ~ …` the server already has (a common `location ~ /\.
-{ deny all; }` would otherwise refuse the discovery documents) wherever they
-sit in the file. The three `/.well-known/` routes are exact matches, the only
-such paths the api and the MCP server serve, so any other `/.well-known/`
-handling the server already has (an ACME challenge, a `security.txt`) keeps
-working. The `/v1/oauth/` one also covers the two calls the dashboard's consent
-page makes (`GET /v1/oauth/consent-info` and the consent `POST
-/v1/oauth/authorize`); a login makes each once, far under the limit. The 1 MiB
-body cap holds `/mcp` and `/v1/oauth/` to what they carry (a JSON-RPC call with
-at most a policy draft, the consent JSON, the token form) rather than the prod
-box's `http`-level 100M. Put every `proxy_set_header` at `server` level and
-none inside a `location`, this server's `location /` included: a `location`
-that sets any header of its own inherits none of the `server`'s. That covers
+Each checkout then brings its zones and the `limit_req` lines that name them
+together, or neither. One shared zones file could only come from one checkout,
+and a stage ahead of it would name a zone nginx does not know, which fails
+every reload on the box. The file name is deliberately outside the server
+include's `hexgate-<stage>*.conf`, since a zone directive at `server` level is
+an error. Put every `proxy_set_header` at `server` level and none inside a
+`location`, this server's `location /` included: a `location` that sets any
+header of its own inherits none of the `server`'s. That covers
 `X-Forwarded-Proto`, `Host $host` and the WebSocket `Upgrade`/`Connection` pair
 (above). For `/mcp`, `Host $host` matters: the MCP server's `/mcp/` → `/mcp`
 redirect is built from the Host it receives (uvicorn's proxy headers correct
 the scheme, not the host), so without it the redirect points at
 `127.0.0.1:7002`.
 
-A login is about eight requests on these paths (the first `/mcp` call's 401,
-the two metadata documents, `/authorize`, the consent page's two `/v1/oauth`
-calls, `/token`, the retried `/mcp` call), well inside the burst; each tool
-call after that is one `/mcp` request. A caller over the limit gets `429`.
-`$binary_remote_addr` is the client's address only because nothing sits in
-front of this proxy; put a CDN or load balancer in front of it and the key
-becomes that hop's address, throttling every user as one.
+`$binary_remote_addr`, the limits' key, is the client's address only because
+nothing sits in front of this proxy; put a CDN or load balancer in front of it
+and the key becomes that hop's address, throttling every user as one.
 
 ## 4. Launch — env stacks, then wire up the proxy
 
@@ -428,13 +388,13 @@ a long index build.
 Promote a release: tag it, `git checkout` it in the prod checkout, then the
 same `platform-stop-writers` → `platform-migrate` → `platform-up` sequence,
 plus any per-release step the migration table below names (e.g.
-`platform-backfill` for `clickhouse/0005` and `clickhouse/0006`), and the
-nginx reload at the end of the recipe. The first release that contains
-`platform/nginx/` also needs the one-time section 3 include install on that
-stage; until then its server block keeps the hand-written block, and routes
-added to `platform/nginx/` later never reach it. Rolling
-*back* past a release
-that added columns has its own step — see below.
+`platform-backfill` for `clickhouse/0005` and `clickhouse/0006`), and the nginx
+reload at the end of the recipe. The first release that contains
+`platform/nginx/` also needs the one-time section 3 install on that stage (the
+server include and the `conf.d/hexgate.conf` zones lines); until then its
+server block keeps the hand-written block, and routes added to
+`platform/nginx/` later never reach it. Rolling *back* past a release that
+added columns has its own step — see below.
 
 Upgrades reuse the env already on the box: the deploy targets only pull a
 MISSING `.env.<stage>`, never refresh an existing one. If the secret changed,
@@ -458,12 +418,17 @@ far that did this:
 | MCP server | `HEXGATE_PUBLIC_URL` | `https://app.hexgate.ai` prod, `https://app.staging.hexgate.ai` staging — no trailing slash (the api and mcp refuse to boot with one) |
 | MCP server | `HEXGATE_MCP_RESOURCE_URL` | `https://app.hexgate.ai/mcp` prod, `https://app.staging.hexgate.ai/mcp` staging |
 
-The MCP server release also changes the box's reverse proxy, which
-`platform-up` does not touch. In the same upgrade, apply section 3's "The MCP
-routes" and "Rate-limit" blocks as written there, once per stage with that
-stage's ports, then `nginx -t && systemctl reload nginx` and run section 4's
-MCP checks against both hostnames. Until then the api answers `/mcp` in the MCP
-server's place and the OAuth paths run with no per-IP limit.
+The MCP server release adds its routes to `platform/nginx/` and a zones file
+per stage, which nginx needs at `http` level first. In the same upgrade, before
+the recipe's `git pull`, create `conf.d/hexgate.conf` from section 3 if the box
+does not have it (each line matches nothing until its checkout has the file),
+so no reload in between sees a `limit_req` naming a zone that is not declared;
+`nginx -t` reports one as `zero size shared memory zone "hexgate_mcp_<stage>"`.
+If that stage does not have the server include yet, install it after the pull,
+as section 3 says. If it has hand-written MCP or OAuth blocks from an earlier
+version of this page, remove them before the pull (section 3 lists them): the
+include now defines them, and duplicates fail `nginx -t`. After the reload, run
+section 4's MCP checks against both hostnames.
 
 **When a release adds a Postgres column** — `init_db()` is `create_all`, which
 creates missing tables but never adds columns to an existing one, so the schema
