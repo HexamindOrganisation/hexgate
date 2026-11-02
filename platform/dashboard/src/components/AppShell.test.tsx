@@ -160,6 +160,27 @@ describe("AppShell", () => {
     expect(screen.queryByText("Organization settings")).not.toBeInTheDocument();
   });
 
+  it("keeps the settings sidebar, without org links, on connected apps", async () => {
+    renderWithProviders(<AppShell />, { initialRoute: "/connected-apps" });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("link", { name: "Connected apps" }),
+      ).toHaveAttribute("href", "/connected-apps"),
+    );
+    // Per user, like Account: no org is in play, and no product links.
+    expect(screen.queryByText("Members")).not.toBeInTheDocument();
+    expect(screen.queryByText("Policies")).not.toBeInTheDocument();
+  });
+
+  it("reads a trailing slash like the bare settings path", async () => {
+    renderWithProviders(<AppShell />, { initialRoute: "/connected-apps/" });
+    await waitFor(() =>
+      expect(screen.getByText("Back to workspace")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Members")).not.toBeInTheDocument();
+    expect(screen.queryByText("Policies")).not.toBeInTheDocument();
+  });
+
   it("collapsing the sidebar hides the nav labels", async () => {
     renderWithProviders(<AppShell />);
     await waitFor(() => expect(screen.getByText("Agents")).toBeInTheDocument());
