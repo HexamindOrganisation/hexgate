@@ -10,9 +10,9 @@ HTTP on a **loopback port** (prod `7000`, staging `7200`). Its **collector**
 (prod `7001`, staging `7201`). There is no separate edge container — the SPA
 is baked into the API image and served by it.
 
-The box **already runs a reverse proxy** that owns 80/443 and terminates TLS.
-Hexgate does not ship its own front proxy — you point the existing one at the
-two loopback ports by hostname.
+The box **already runs nginx** (host-installed, one `sites-available` file per
+hostname) that owns 80/443 and terminates TLS. Hexgate does not ship its own
+front proxy — you point the existing one at the two loopback ports by hostname.
 
 ```
                             one machine (one IP)
@@ -94,9 +94,8 @@ app.staging.hexgate.ai  → 127.0.0.1:7200   (except path /v1/traces → 127.0.0
 
 The `/v1/traces` path routes to the stage's `HEXGATE_OTLP_PORT` — the
 collector's OTLP/HTTP receiver — and must match BEFORE the hostname's catch-all
-route (in Caddy a `handle /v1/traces` block above the general `reverse_proxy`;
-in nginx the exact `location = /v1/traces` that the stage's include provides,
-see *The nginx includes* below, never written by hand). This is what makes the
+route (the exact `location = /v1/traces` that the stage's include provides, see
+*The nginx includes* below, never written by hand). This is what makes the
 SDK's default OTLP endpoint (`<api url>/v1/traces`) work with zero client
 config. Without the route, the api's GET-only SPA catch-all answers the POST
 with a 405 and every SDK on that stage silently loses its audit trail — `make
@@ -129,8 +128,6 @@ the Biscuit token, so whatever it allows is what an unauthenticated caller can
 make the proxy buffer. Keep it as small as the largest legitimate export: 32
 MiB covers a 64-span batch of maximally-sized message spans, and nothing more.
 The value was 8 MiB before message logging, which is why it had to be raised.
-
-Caddy imposes no default body limit and needs nothing.
 
 **The nginx includes.** Every Hexgate route on the box except the hostname's
 catch-all is in `platform/nginx/hexgate-<stage>.conf`, and each stage's server
@@ -177,11 +174,11 @@ platform-smoke` catches. A file that exists but is broken still fails `nginx
 in the section 6 recipe): a bad file shows up before anything changes, while
 the running config is still the old one.
 
-(In Caddy this is two `reverse_proxy` site blocks; in nginx, two `server`
-blocks with `proxy_pass`. Forward `X-Forwarded-Proto: https` — the API trusts
-it, via uvicorn `--proxy-headers`, for correct https OAuth callbacks. `/v1`
-includes WebSocket endpoints, so the proxy must pass upgrades — Caddy does this
-automatically; nginx needs the `Upgrade`/`Connection` headers set.)
+Each hostname is one nginx `server` block proxying to its loopback ports.
+Forward `X-Forwarded-Proto: https` — the API trusts it, via uvicorn
+`--proxy-headers`, for correct https OAuth callbacks. `/v1` includes WebSocket
+endpoints, so the server block also needs the `Upgrade`/`Connection` headers
+set.
 
 ## 4. Launch — env stacks, then wire up the proxy
 
