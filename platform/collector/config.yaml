@@ -29,6 +29,8 @@ receivers:
         # (max_export_batch_size in hexgate/tracing/_senders.py) and an LLM
         # message span can reach ~272 KiB uncompressed, so a full export is
         # ~17 MiB, uncomfortably close to that default. 32 MiB is the headroom.
+        # The proxy's client_max_body_size on /v1/traces must equal it
+        # (platform/nginx/hexgate-<stage>.conf; make nginx-check fails otherwise).
         max_request_body_size: 33554432 # 32 MiB
 
 processors:

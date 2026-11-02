@@ -93,33 +93,33 @@ app.staging.hexgate.ai  → 127.0.0.1:7200   (except path /v1/traces → 127.0.0
 ```
 
 The `/v1/traces` path routes to the stage's `HEXGATE_OTLP_PORT` — the
-collector's OTLP/HTTP receiver — and must match BEFORE the hostname's
-catch-all route (in Caddy a `handle /v1/traces` block above the general
-`reverse_proxy`; in nginx an exact `location = /v1/traces`). This is what
-makes the SDK's default OTLP endpoint (`<api url>/v1/traces`) work with zero
-client config. Without the route, the api's SPA catch-all answers the POST
-with a JSON 404 and every SDK on that stage silently loses its audit trail —
-`make platform-smoke` (§4) is how you catch that. Everything else in the
-stack (Postgres, ClickHouse, Redpanda) binds no host ports; Redpanda in
-particular is PLAINTEXT with no auth — never publish it.
+collector's OTLP/HTTP receiver — and must match BEFORE the hostname's catch-all
+route (in Caddy a `handle /v1/traces` block above the general `reverse_proxy`;
+in nginx the exact `location = /v1/traces` that the stage's include provides,
+see *The nginx includes* below, never written by hand). This is what makes the
+SDK's default OTLP endpoint (`<api url>/v1/traces`) work with zero client
+config. Without the route, the api's SPA catch-all answers the POST with a JSON
+404 and every SDK on that stage silently loses its audit trail — `make
+platform-smoke` (§4) is how you catch that. Everything else in the stack
+(Postgres, ClickHouse, Redpanda) binds no host ports; Redpanda in particular is
+PLAINTEXT with no auth — never publish it.
 
 **The `/v1/traces` route carries its own request-body limit.** The collector's
 OTLP receiver accepts 32 MiB (`max_request_body_size`) and an SDK export of LLM
 message spans can reach ~17 MiB, but the proxy enforces its own cap *first* and
 answers `413` before the collector ever sees the POST — so the proxy, not the
-collector, is what decides whether a large export gets through. This is the one
-hop in the record-size budget (`docs/internals/audit-pipeline.md` §4.1) that
-lives outside this repo, so nothing in `make check-all` can catch it.
+collector, is what decides whether a large export gets through. It is the one
+hop in the record-size budget (`docs/internals/audit-pipeline.md` §4.1) that the
+box applies, not the containers: `make nginx-check` checks its syntax and
+fails if it no longer equals the collector's `max_request_body_size`, so the
+two change together.
 
 In nginx the setting is `client_max_body_size`, and it belongs **inside the
-`location = /v1/traces` block** rather than at `http` or `server` level:
-
-```nginx
-location = /v1/traces {
-    proxy_pass http://127.0.0.1:7001;   # 7201 on staging
-    client_max_body_size 32m;
-}
-```
+`location = /v1/traces` block** rather than at `http` or `server` level. That
+block lives in the repo, in
+[`platform/nginx/hexgate-prod.conf`](nginx/hexgate-prod.conf) and
+[`hexgate-staging.conf`](nginx/hexgate-staging.conf) (see *The nginx includes*
+below).
 
 Note the value here is deliberately *tighter* than the surrounding default —
 on the prod box the `http` block allows `100M`, and this route is held to a
@@ -130,12 +130,43 @@ make the proxy buffer. Keep it as small as the largest legitimate export: 32
 MiB covers a 64-span batch of maximally-sized message spans, and nothing more.
 The value was 8 MiB before message logging, which is why it had to be raised.
 
-Both stages need it — they are separate files
-(`sites-available/app.hexgate.ai` and `…/app.staging.hexgate.ai`), each with
-its own `/v1/traces` block pointing at that stage's collector port. Apply with
-`nginx -t && systemctl reload nginx`; a graceful reload keeps existing
-connections and a failed test changes nothing. Caddy imposes no default body
-limit and needs nothing.
+Caddy imposes no default body limit and needs nothing.
+
+**The nginx includes.** Every Hexgate route on the box except the hostname's
+catch-all is in `platform/nginx/hexgate-<stage>.conf`, and each stage's server
+block includes its own file from its own checkout. A route change then ships
+when that checkout moves to it and nginx reloads (section 6), and `make nginx-check` (also a CI job) runs
+`nginx -t` on both files inside a stub server block and fails if staging's
+file differs from prod's beyond its ports. The server block keeps its listen,
+TLS, forwarded headers and `location /` to the api.
+
+Install once per stage. In `sites-available/app.hexgate.ai`, inside the 443
+`server` block, replace the hand-written `location = /v1/traces { … }` (on a
+fresh box, where there is none, add it beside `location /`) with
+
+```nginx
+include /srv/hexgate-prod/platform/nginx/hexgate-prod.conf;
+```
+
+and in `sites-available/app.staging.hexgate.ai` with
+
+```nginx
+include /srv/hexgate-staging/platform/nginx/hexgate-staging.conf;
+```
+
+Remove the old block in the same edit: the include defines
+`location = /v1/traces` too, and two of them fail `nginx -t`. Then
+`sudo nginx -t && sudo systemctl reload nginx`; a graceful reload keeps existing
+connections, and a failed test changes nothing. The include names a file in
+that stage's checkout, so install it only once the checkout has
+`platform/nginx/`: for prod, after promoting a release that contains it.
+
+One nginx serves both stages and the box's other sites, so a broken or missing
+file in either checkout fails every later reload on the box, certbot's renewal
+reload included, and a restart would not come back. So test right after a
+checkout moves and reload once the stack is up (both in the section 6 recipe):
+a bad file shows up before anything changes, while the running config is still
+the old one.
 
 (In Caddy this is two `reverse_proxy` site blocks; in nginx, two `server`
 blocks with `proxy_pass`. Forward `X-Forwarded-Proto: https` — the API trusts
@@ -238,6 +269,7 @@ curl -X POST https://app.hexgate.ai/v1/auth/register \
 
 ```bash
 cd /srv/hexgate-<stage> && git pull   # or checkout a new tag for prod
+sudo nginx -t                          # a bad platform/nginx/ file stops here, before anything changes
 
 # Postgres DDL needs locks the running API holds. Stops api + enricher and
 # leaves collector + redpanda up, so OTLP keeps buffering through the window.
@@ -245,6 +277,12 @@ make platform-stop-writers STAGE=<stage>
 
 make platform-migrate STAGE=<stage>   # schema BEFORE images — see below; no-op when nothing is new
 make platform-up STAGE=<stage>        # rebuilds changed images, recreates containers
+
+# Every time: the box reads platform/nginx/ only on a reload, and a checkout
+# move doesn't say whether it changed. After platform-up, so a new route's port
+# is already listening; a graceful reload keeps connections. Root: the
+# checkouts are not, nginx is.
+sudo nginx -t && sudo systemctl reload nginx
 ```
 
 `platform-migrate` runs first on purpose and is safe to run on every upgrade:
@@ -271,7 +309,11 @@ a long index build.
 Promote a release: tag it, `git checkout` it in the prod checkout, then the
 same `platform-stop-writers` → `platform-migrate` → `platform-up` sequence,
 plus any per-release step the migration table below names (e.g.
-`platform-backfill` for `clickhouse/0005` and `clickhouse/0006`). Rolling
+`platform-backfill` for `clickhouse/0005` and `clickhouse/0006`), and the
+nginx reload at the end of the recipe. The first release that contains
+`platform/nginx/` also needs the one-time section 3 include install on that
+stage; until then its server block keeps the hand-written block, and routes
+added to `platform/nginx/` later never reach it. Rolling
 *back* past a release
 that added columns has its own step — see below.
 
@@ -393,6 +435,22 @@ stores `hexgate.runs` to every stage *before* releasing an SDK that emits it:
 otherwise every run start becomes a DLQ record on a stage still running the old
 enricher. No other data is lost, and deploying the enricher stops it. To roll
 back, go the other way: revert the SDK release first, then the enricher.
+
+**Rolling back past `platform/nginx/`.** A commit from before the per-stage
+includes has no `platform/nginx/hexgate-<stage>.conf`, so the include would
+point at a missing file and fail every reload on the box (section 3). Before
+checking such a commit out, put the hand-written block back in that stage's
+server block in place of the `include` line, with that stage's collector port
+(7001 prod, 7201 staging), and reload. Moving forward past it again, redo the
+section 3 install (the `include` in place of this block), or routes added to
+`platform/nginx/` later never reach the box:
+
+```nginx
+location = /v1/traces {
+    proxy_pass http://127.0.0.1:7001;   # 7201 on staging
+    client_max_body_size 32m;
+}
+```
 
 **Rolling back past a migration.** The columns stay behind when the code goes
 away, and old code does not know to filter on them. Nothing here is automatic,
