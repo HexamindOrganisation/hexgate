@@ -458,6 +458,8 @@ install (the `include` in place of this block), or routes added to
 location = /v1/traces {
     proxy_pass http://127.0.0.1:7001;   # 7201 on staging
     client_max_body_size 32m;
+    proxy_connect_timeout 10s;
+    proxy_read_timeout 30s;
 }
 ```
 
