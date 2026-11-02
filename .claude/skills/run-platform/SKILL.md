@@ -40,7 +40,7 @@ Add `--no-mcp` (to either) when the user opted out of the MCP server.
   - Another checkout: ask the user before stopping it; it may be in use.
   - `not a hexgate API on :8000`: tell the user what holds the port.
 - `5173 busy`: fine if it's another checkout's dashboard; Vite starts this one on the next free port, and step 3 finds it.
-- `8080 busy`: an MCP server may already be running. Check its checkout with `lsof -a -p <pid> -d cwd`: reuse it if that is `<this checkout>/platform/mcp`, otherwise ask the user before stopping it; `make mcp-run` would fail on the taken port.
+- `8080 busy`: an MCP server may already be running. Check its checkout with `.claude/skills/run-platform/instance.sh owner 8080`: reuse it if that prints this checkout, otherwise ask the user before stopping it; `make mcp-run` would fail on the taken port.
 - `4317`/`4318 busy` in full mode: a collector is already running. `make collector-run` would fail on it, so find out whose it is before starting yours.
 
 **Pick the mode.** Default to light unless the user wants audit events, agents
@@ -48,7 +48,7 @@ talking to the platform, or integration tests.
 
 | Mode | Runs | Needs |
 |---|---|---|
-| light | `platform-api` (SQLite) + `dashboard` + `mcp-run` | uv, pnpm |
+| light | `platform-api` (SQLite) + `dashboard` + `mcp-run` | uv, pnpm, `claude` CLI (for the MCP server) |
 | full | + Postgres, Redpanda, ClickHouse, collector, enricher (`make demo-platform` prints the recipe) | + Docker, Go |
 
 **No Docker?** Explain the options to the user instead of failing:
@@ -108,20 +108,31 @@ Wait until the API answers `curl -sf localhost:8000/health` and
 URL. Don't probe `localhost:5173` directly: when another checkout's dashboard
 holds it, Vite quietly moves this one to the next port. Watch `api.log` for a
 `Traceback` while you wait. A CSS `@import` warning in `dash.log` is harmless.
-Then check the MCP server answers (any HTTP code, a `401` is normal before
-login): `curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8080/mcp`.
-If it prints `000`, read `mcp.log`: an address-in-use error means another MCP
-server holds :8080 (see the preflight).
+Then wait for the MCP server's health check, which names the service, so
+another app on :8080 doesn't pass for it (on a fresh checkout `uv run` first
+builds the MCP server's venv, so this can take a while):
+```bash
+for _ in $(seq 1 60); do curl -sf -m 2 localhost:8080/health | grep -q hexgate-mcp && echo up && break; sleep 1; done
+```
+If it never prints `up`, read `mcp.log`: an address-in-use error means another
+MCP server holds :8080 (see the preflight).
 
 The OAuth login ends on a consent page on the API's `HEXGATE_DASHBOARD_URL`,
-which defaults to `http://localhost:5173`, and the consent form is refused
-unless its origin matches that URL exactly. So check the URL `instance.sh dash`
-printed:
-- `http://localhost:5173`: nothing more to do.
-- Another port: Vite moved off a 5173 that another checkout holds. Restart the
-  API             with `HEXGATE_DASHBOARD_URL=<that URL>` (it reads its settings only at
-  startup). Otherwise consent opens the other checkout's dashboard, which may
-  not have the consent page.
+and the consent form is refused unless its origin matches that URL exactly.
+The API reads it from the shell first, then `platform/api/.env`, else
+`http://localhost:5173`. Resolve it the same way:
+```bash
+url=${HEXGATE_DASHBOARD_URL:-}
+[ -z "$url" ] && [ -f platform/api/.env ] && url=$(sed -n 's/^HEXGATE_DASHBOARD_URL=//p' platform/api/.env | tail -1)
+echo "${url:-http://localhost:5173}"
+```
+Compare it with the URL `instance.sh dash` printed:
+- The same: nothing more to do.
+- Different: usually Vite moved off a 5173 that another checkout holds, or
+  `.env` sets another host such as `127.0.0.1`. Restart the API with
+  `HEXGATE_DASHBOARD_URL=<the instance.sh dash URL>` (it reads its settings only
+  at startup). Otherwise consent opens a dashboard that isn't this one, or the
+  consent form gets a 403.
 
 In full mode the pipeline must be up too, or the audit page stays empty while
 everything else looks fine. Before reporting, check that:
@@ -203,9 +214,13 @@ claude mcp get hexgate
   ```bash
   claude mcp add -s user --transport http hexgate http://localhost:8080/mcp
   ```
-- It shows another URL: ask the user before replacing it
-  (`claude mcp remove hexgate -s user`, then the add above), since it may be
-  their connection to another instance.
+- It shows another URL: ask the user before replacing it, since it may be
+  their connection to another instance. Remove it at the scope its `Scope:`
+  line names (`claude mcp remove hexgate -s <user|local|project>`), then run
+  the add above: a local or project entry left in place would shadow the new
+  user one.
+
+`instance.sh stop` removes the user-scope registration again once :8080 is free.
 
 Remember whether you added it or found it; the report says which.
 
@@ -268,6 +283,10 @@ Rules:
   the user keeps their saved one.
 - Leave out the `OTLP pipeline` line in light mode, and the `MCP` and `Next` lines
   when the user opted out of the MCP server.
+- When the registration was there before this session started (step 5),
+  replace `open a NEW terminal: claude → /mcp → hexgate → Authenticate` with
+  `/mcp → hexgate → Reconnect → Authenticate`: this session loaded hexgate
+  before :8080 answered, so `/mcp` shows it as failed until reconnected.
 - Add `(keep this session open, it owns the servers)` to the `Next` line only
   when this run started any server (rather than reusing ones already running):
   quitting this session stops them.

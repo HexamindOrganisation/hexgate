@@ -2,7 +2,9 @@
 # Inspect or stop a local hexgate platform instance (macOS or Linux).
 #   instance.sh who    # checkout, make target and exported DATABASE_URL of the API on :8000
 #   instance.sh dash   # URL of this checkout's dashboard (Vite moves off 5173 when it's taken)
-#   instance.sh stop   # stop this checkout's API, dashboard, MCP server, collector and enricher
+#   instance.sh owner PORT  # checkout of the hexgate process listening on PORT
+#   instance.sh stop   # stop this checkout's API, dashboard, MCP server, collector and enricher,
+#                      # and unregister the `hexgate` MCP server from Claude Code
 set -u
 
 if ! command -v lsof >/dev/null 2>&1 && ! command -v ss >/dev/null 2>&1; then
@@ -31,6 +33,28 @@ checkout_of() {
   esac
 }
 
+# Say what holds port $1 instead of a $2 (or that nothing does), and exit 1.
+not_ours() {
+  other=$(listeners "$1" | head -1)
+  [ -n "$other" ] && echo "not a $2 on :$1: $(ps -o command= -p "$other")" \
+                  || echo "nothing listens on :$1"
+  exit 1
+}
+
+# Remove the `hexgate` MCP registration once nothing serves :8080, or every
+# Claude Code session keeps listing a dead server. Also runs when the servers
+# already died with the session that started them. Only the user-scope entry
+# pointing at the local server (anything else is the user's own).
+unregister() {
+  [ -z "$(listeners 8080)" ] || return 0
+  command -v claude >/dev/null 2>&1 || return 0
+  reg=$(claude mcp get hexgate 2>/dev/null) || return 0
+  case $reg in
+    *"Scope: User"*"URL: http://localhost:8080/mcp"*)
+      claude mcp remove hexgate -s user >/dev/null && echo "unregistered the hexgate MCP server from Claude Code";;
+  esac
+}
+
 case "${1:-}" in
 who)
   # With --reload both the reloader and its worker hold :8000. Pick the
@@ -43,12 +67,7 @@ who)
     case $all in *" $(ps -o ppid= -p "$p" | tr -d ' ') "*) continue;; esac
     pid=$p; break
   done
-  if [ -z "$pid" ]; then
-    other=$(listeners 8000 | head -1)
-    [ -n "$other" ] && echo "not a hexgate API on :8000: $(ps -o command= -p "$other")" \
-                    || echo "nothing listens on :8000"
-    exit 1
-  fi
+  [ -n "$pid" ] || not_ours 8000 "hexgate API"
   if [ -d /proc/"$pid" ]; then
     db=$(tr '\0' '\n' < /proc/"$pid"/environ 2>/dev/null | grep '^DATABASE_URL=')
   else
@@ -69,6 +88,14 @@ who)
   echo "DATABASE_URL: ${db#DATABASE_URL=}"
   [ -z "${db#DATABASE_URL=}" ] && echo "              (none exported: SQLite, or whatever platform/api/.env sets)"
   exit 0
+  ;;
+owner)
+  [ -n "${2:-}" ] || { echo "usage: instance.sh owner PORT" >&2; exit 2; }
+  for p in $(listeners "$2"); do
+    co=$(checkout_of "$p")
+    [ -n "$co" ] && { echo "pid $p: $co"; exit 0; }
+  done
+  not_ours "$2" "hexgate process"
   ;;
 dash)
   root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "instance.sh: run it inside a hexgate checkout" >&2; exit 1; }
@@ -93,18 +120,18 @@ stop)
     elif [ -n "$co" ]; then echo "skipping pid $p: it belongs to another checkout, $co"
     fi
   done
-  [ -z "$pids" ] && { echo "nothing of this checkout is running"; exit 0; }
+  [ -z "$pids" ] && { echo "nothing of this checkout is running"; unregister; exit 0; }
   echo "stopping:$pids"
   kill $pids 2>/dev/null
   # Wait for them to exit, so an immediate restart doesn't find the port taken.
   for _ in $(seq 1 20); do
     alive=""; for p in $pids; do kill -0 "$p" 2>/dev/null && alive="$alive $p"; done
-    [ -z "$alive" ] && { echo "stopped"; exit 0; }
+    [ -z "$alive" ] && { echo "stopped"; unregister; exit 0; }
     sleep 0.5
   done
   echo "still running after 10s:$alive (kill -9 them if they don't exit)"; exit 1
   ;;
 *)
-  echo "usage: instance.sh who|dash|stop" >&2; exit 2
+  echo "usage: instance.sh who|owner PORT|dash|stop" >&2; exit 2
   ;;
 esac

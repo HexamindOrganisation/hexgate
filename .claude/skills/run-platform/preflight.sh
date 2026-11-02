@@ -58,6 +58,7 @@ echo "tools:"
 need uv   "curl -LsSf https://astral.sh/uv/install.sh | sh"
 need pnpm "$(hint 'brew install pnpm' 'npm install -g pnpm (or https://pnpm.io/installation)')"
 command -v opa >/dev/null 2>&1 && ok opa || warn opa "optional: $(hint 'brew install opa' 'https://www.openpolicyagent.org/docs/#running-opa') (WASM policy engine)"
+[ $mcp = 1 ] && need claude "the Claude Code CLI on PATH, to register the MCP server: npm install -g @anthropic-ai/claude-code, or rerun with --no-mcp"
 [ $full = 1 ] && need go "$(hint 'brew install go' 'https://go.dev/doc/install') (to build the collector)"
 
 # biscuit-python has no Python 3.14 wheel and PyO3 can't build it there.
