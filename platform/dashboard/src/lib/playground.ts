@@ -350,6 +350,47 @@ function ensureSocketFor(projectId: string): void {
 // React hook
 // ---------------------------------------------------------------------
 
+/**
+ * Which agent the project's serve relay currently exposes, read without
+ * mounting the full chat surface. Opens the same module-scoped socket, so a
+ * hub can gate its Playground tab on whether THIS agent is the one served.
+ * An empty projectId stays disconnected (reports no agent).
+ *
+ * `agentName` is the stable signal: a transient socket drop leaves it intact
+ * (only a real serve detach/replace clears it), so gating on it doesn't flap
+ * on a reconnect. `online` is for messaging only (a serve is attached but
+ * hasn't yet announced its agent).
+ */
+export interface ServedAgent {
+  agentName: string | null;
+  online: boolean;
+}
+
+// A narrowed snapshot: a fresh object only when the served agent or online flag
+// changes, so a hub subscribing to it doesn't re-render on every streamed token
+// (cachedState churns on each chat event, but these two fields rarely move).
+let servedSnapshot: ServedAgent = { agentName: null, online: false };
+function getServedSnapshot(): ServedAgent {
+  if (
+    servedSnapshot.agentName !== cachedState.agentName ||
+    servedSnapshot.online !== cachedState.agentOnline
+  ) {
+    servedSnapshot = {
+      agentName: cachedState.agentName,
+      online: cachedState.agentOnline,
+    };
+  }
+  return servedSnapshot;
+}
+
+export function usePlaygroundServedAgent({ projectId }: Options): ServedAgent {
+  const served = useSyncExternalStore(subscribe, getServedSnapshot);
+  useEffect(() => {
+    if (projectId) ensureSocketFor(projectId);
+  }, [projectId]);
+  return served;
+}
+
 export function usePlayground({ projectId }: Options) {
   const state = useSyncExternalStore(subscribe, getSnapshot);
 
