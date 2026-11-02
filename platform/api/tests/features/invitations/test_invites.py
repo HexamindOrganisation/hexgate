@@ -16,6 +16,7 @@ import asyncio
 import uuid
 from datetime import timedelta
 
+import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -888,3 +889,29 @@ def test_second_revoke_keeps_the_first_actor(
     after = _read_invitation(session_factory, invite_id)
     assert after.revoked_at == first.revoked_at
     assert after.revoked_by_user_id == admin_id
+
+
+async def test_when_dashboard_url_set_then_invite_link_uses_it(
+    outbox: list[dict], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hexgate_api.features.invitations import service as invitations_service
+    from hexgate_api.settings import Settings
+
+    settings = Settings(
+        _env_file=None,
+        dashboard_url="https://app.hexgate.ai/",
+        oauth_allow_insecure_client_ids=False,
+    )
+    monkeypatch.setattr("hexgate_api.settings.get_settings", lambda: settings)
+    invitation = Invitation(
+        id="inv-1",
+        org_id="org-1",
+        email="bob@example.com",
+        role="member",
+        invited_by_user_id="u-1",
+        expires_at=utcnow() + timedelta(days=1),
+    )
+    await invitations_service.send_invitation_email(
+        invitation=invitation, org_name="Acme", inviter_email="alice@example.com"
+    )
+    assert "https://app.hexgate.ai/invites/inv-1/accept" in outbox[0]["body"]

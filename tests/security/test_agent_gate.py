@@ -13,6 +13,7 @@ import logging
 
 import pytest
 
+from hexgate.runtime.agent_usage import UsageLedgers, UsageScopeKind, new_usage_ledger
 from hexgate.runtime.context import HexgateContext
 from hexgate.security import (
     AgentNotAdmittedError,
@@ -77,6 +78,35 @@ def test_deny_error_carries_decision() -> None:
             assert not exc.decision.allowed
         else:  # pragma: no cover
             pytest.fail("expected AgentNotAdmittedError")
+
+
+def _admission_capped_by(constraint: str) -> PolicyEnforcer:
+    policy = load_policy_set_from_dict(
+        {"admission": {"mode": "allow", "constraints": [constraint]}}
+    )
+    # Its own ledgers: the process registry is one-way.
+    ledgers = UsageLedgers(new_usage_ledger)
+    return PolicyEnforcer(policy, agent_name="my-agent", ledgers=ledgers)
+
+
+def test_a_user_cap_denial_names_the_user_scope() -> None:
+    gate = resolve_agent_gate(_admission_capped_by("user_usage.invocations_1h < 0"))
+    with _ROLE.sync_scope(), pytest.raises(AgentNotAdmittedError) as caught:
+        gate.check_admission()
+
+    assert caught.value.quota_scopes == {UsageScopeKind.USER}
+    assert str(caught.value) == (
+        "admission denied for agent 'my-agent'; this caller may not run it. "
+        "The run did not start."
+    )
+
+
+def test_a_non_usage_denial_has_no_quota_scopes() -> None:
+    gate = resolve_agent_gate(_admission_capped_by('ctx.plan == "pro"'))
+    with _ROLE.sync_scope(), pytest.raises(AgentNotAdmittedError) as caught:
+        gate.check_admission()
+
+    assert caught.value.quota_scopes == frozenset()
 
 
 # --- approval --------------------------------------------------------------

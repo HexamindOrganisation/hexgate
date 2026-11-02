@@ -1,0 +1,100 @@
+[
+  {
+    "name": "order-desk",
+    "manifest": {
+      "name": "order-desk",
+      "description": null,
+      "framework": "langchain",
+      "model": null,
+      "system_prompt": null,
+      "tools": [
+        {
+          "name": "view_orders",
+          "description": "",
+          "input_schema": {
+            "properties": {
+              "customer_id": {
+                "title": "customer_id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "customer_id"
+            ]
+          }
+        },
+        {
+          "name": "lookup_order",
+          "description": "",
+          "input_schema": {
+            "properties": {
+              "order_id": {
+                "title": "order_id",
+                "type": "string"
+              }
+            },
+            "required": [
+              "order_id"
+            ]
+          }
+        },
+        {
+          "name": "refund_order",
+          "description": "",
+          "input_schema": {
+            "properties": {
+              "order_id": {
+                "title": "order_id",
+                "type": "string"
+              },
+              "amount": {
+                "title": "amount",
+                "type": "number"
+              },
+              "currency": {
+                "title": "currency",
+                "type": "string"
+              }
+            },
+            "required": [
+              "order_id",
+              "amount",
+              "currency"
+            ]
+          }
+        },
+        {
+          "name": "send_email",
+          "description": "",
+          "input_schema": {
+            "properties": {
+              "to": {
+                "title": "to",
+                "type": "array"
+              },
+              "subject": {
+                "title": "subject",
+                "type": "string"
+              },
+              "body": {
+                "title": "body",
+                "type": "string"
+              }
+            },
+            "required": [
+              "to",
+              "subject",
+              "body"
+            ]
+          }
+        }
+      ],
+      "skills": null,
+      "subagents": null,
+      "guards": null
+    },
+    "version": 1,
+    "content_hash": "8bf1ef44bf6f28747dc83d1ce6586a9da734ab8f206d3f409c76bc7334cc81ff",
+    "updated_at": "2026-10-01T00:00:00Z"
+  }
+]

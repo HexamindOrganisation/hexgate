@@ -85,6 +85,58 @@ A host restriction is required: pass `hosts=`, `subdomains=`, or `any_host=True`
 Calling `net_allow()` with only a scheme or port filter raises, because it would
 authorize every host.
 
+## Restrict file tools to paths (`file_scope`)
+
+The file tools `read_file`, `write_file`, `edit_file` (argument `file_path`),
+`glob` and `grep` (argument `path`) accept a `file_scope` that limits which paths
+they reach:
+
+```python
+policy = AgentPolicy.model_validate({
+    "version": 1,
+    "default_policy": {"mode": "deny"},
+    "tools": {
+        "read_file": {
+            "mode": "allow",
+            "file_scope": {
+                "allowed_paths": ["docs/*.md", "notes/**"],
+                "denied_paths": ["notes/private/*"],
+            },
+        },
+    },
+})
+```
+
+- `tools.<name>.file_scope.denied_paths` wins: a path matching it is denied even
+  if `file_scope.allowed_paths` matches too.
+- With `file_scope.allowed_paths` set, a path that matches none of its patterns
+  is denied.
+- A call without the path argument is denied.
+
+<Warning>
+`file_scope` is not a security boundary yet. Its path matching is being reworked:
+today some spellings of a path, such as `../`, absolute paths or
+symlinks, can reach files the patterns were meant to exclude. Use it to steer an
+agent away from files, and rely on the [workspace sandbox](/concepts/sandbox) to
+contain it.
+</Warning>
+
+A denied call names the scope in its hint:
+
+```text
+✗ DENY · [default] → read_file({"file_path": "src/app.py"})
+  reason: Policy denied tool "read_file" for the requested path
+  hint: {'allowed_paths': ['docs/*.md', 'notes/**'], 'denied_paths': ['notes/private/*']}
+```
+
+<Warning>
+`file_scope` runs only on the default Pydantic engine. The WASM/Rego engine
+doesn't support it yet, so `hexgate policy validate` and `hexgate policy build`
+reject a policy that uses it rather than produce a bundle that silently drops the
+path check. Keep it in policies you apply in code, and leave it out of YAML you
+build into bundles.
+</Warning>
+
 ## Unit-test a policy
 
 The `assert_*` helpers evaluate a policy the same way the runtime enforces it:

@@ -1,0 +1,4 @@
+# Escalation capability, for the support role. It only grants: escalating
+# with a human's approval.
+tools:
+  escalate: { mode: approval_required }

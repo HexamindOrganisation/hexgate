@@ -1,0 +1,7 @@
+starting_project: support_bot_modules
+agent: support-bot
+request: Security wants delete_customer denied for everyone, in a way that no team capability can ever override.
+expect:
+  changed: [policies/boundaries/org_core.yaml]
+  decisions:
+    - { roles: [default, support, billing], tool: delete_customer, args: { customer_id: c1 }, expect: deny }

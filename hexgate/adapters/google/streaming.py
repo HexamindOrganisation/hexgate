@@ -25,7 +25,7 @@ Two ADK specifics shape this:
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 from uuid import uuid4
 
 from hexgate.runtime import HexgateContext
@@ -34,6 +34,8 @@ from hexgate.streaming._accumulator import StreamAccumulator, run_normalizer
 
 if TYPE_CHECKING:
     from hexgate.approvals import ApprovalHandler
+
+ANONYMOUS_ADK_USER_ID: Final = "serve"
 
 
 class _GoogleRunAccumulator(StreamAccumulator):
@@ -195,9 +197,12 @@ class GoogleServeDriver:
         # separate from the caller-facing context: the caller's own session_id
         # passes through to audit unchanged (correlatable across frameworks),
         # while the minted ADK id is handed to run_async via its own parameter.
-        # Role/attributes/ttl carry through for policy + attenuation.
-        user_id = ctx.user_id if ctx and ctx.user_id else "serve"
-        adk_session_id = await self._ensure_session(user_id, agent_input)
+        # Role/attributes/ttl carry through for policy + attenuation. ADK needs a
+        # non-empty user, so an anonymous caller gets a synthetic one on the ADK
+        # side only: the run context keeps "" so it is never counted as a user.
+        user_id = ctx.user_id if ctx else ""
+        adk_user_id = user_id or ANONYMOUS_ADK_USER_ID
+        adk_session_id = await self._ensure_session(adk_user_id, agent_input)
         run_ctx = HexgateContext(
             user_id=user_id,
             user_roles=list(ctx.user_roles) if ctx else [],
@@ -212,6 +217,7 @@ class GoogleServeDriver:
                 new_message=new_message,
                 hexgate_context=run_ctx,
                 session_id=adk_session_id,
+                user_id=adk_user_id,
                 run_config=RunConfig(streaming_mode=StreamingMode.SSE),
             ):
                 yield event

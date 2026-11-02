@@ -25,6 +25,8 @@ import {
   useRequestVerify,
   useUser,
 } from "@/lib/auth";
+import { clearConsentReturn } from "@/lib/oauth_consent";
+
 import { AuthCardLayout } from "./SignIn";
 
 const SignUpSchema = z
@@ -63,6 +65,7 @@ export function SignUpPage() {
   if (!loading && user) return <Navigate to="/" replace />;
 
   async function onSubmit(values: SignUpValues) {
+    clearConsentReturn(); // as on SignIn: no stale consent stash survives
     try {
       // Three-step: create → log in → request the verification email
       // so the new user lands on the dashboard already signed in with

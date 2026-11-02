@@ -7,6 +7,8 @@ semantics the ``agent_usage.*`` namespace and PR 6 build on.
 
 from __future__ import annotations
 
+import logging
+import re
 import threading
 import time
 from collections.abc import Iterable, Mapping
@@ -15,21 +17,31 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from hexgate.runtime.agent_usage import (
-    AGENT_USAGE_LEDGERS,
+    AGENT_USAGE_PATHS,
+    AGENT_USAGE_VOCABULARY,
+    DEFAULT_USER_CACHE_SIZE,
     FINE_BUCKET_SECONDS,
     FINE_RETENTION_SECONDS,
     HOUR_BUCKET_SECONDS,
     KNOWN_AGENT_USAGE_PATHS,
+    KNOWN_USER_USAGE_PATHS,
     MAX_WINDOW_SECONDS,
     MINUTE_BUCKET_SECONDS,
+    USAGE_LEDGERS,
     USAGE_WINDOWS,
+    USER_CACHE_ENV,
+    USER_USAGE_PATHS,
+    USER_USAGE_VOCABULARY,
     BucketSeries,
     UsageLedger,
     UsageLedgers,
     UsageMetric,
+    UsageScope,
+    UsageScopeKind,
     combined_namespace,
     ledger_namespace,
     new_usage_ledger,
+    user_cache_size_from_env,
 )
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS
 
@@ -272,28 +284,29 @@ def test_the_default_clock_follows_a_patched_monotonic(
 def test_a_disabled_registry_hands_out_no_ledger() -> None:
     ledgers = UsageLedgers(new_usage_ledger)
 
-    assert not ledgers.enabled
-    assert ledgers.ledger_for("a") is None
+    assert not ledgers.is_enabled(UsageScopeKind.AGENT)
+    assert ledgers.ledger_for(UsageScope.agent("a")) is None
 
 
 def test_an_enabled_registry_keeps_one_ledger_per_agent() -> None:
     ledgers = UsageLedgers(new_usage_ledger)
-    ledgers.enable()
-    ledgers.enable()
+    ledgers.enable(UsageScopeKind.AGENT)
+    ledgers.enable(UsageScopeKind.AGENT)
 
-    first = ledgers.ledger_for("a")
+    first = ledgers.ledger_for(UsageScope.agent("a"))
     assert first is not None
-    assert ledgers.ledger_for("a") is first
-    assert ledgers.ledger_for("b") is not first
-    assert ledgers.enabled
+    assert ledgers.ledger_for(UsageScope.agent("a")) is first
+    assert ledgers.ledger_for(UsageScope.agent("b")) is not first
+    assert ledgers.is_enabled(UsageScopeKind.AGENT)
 
 
 def test_a_concurrent_first_lookup_yields_one_ledger() -> None:
     ledgers = UsageLedgers(new_usage_ledger)
-    ledgers.enable()
+    ledgers.enable(UsageScopeKind.AGENT)
+    scope = UsageScope.agent("a")
 
     with ThreadPoolExecutor(max_workers=_WRITERS) as pool:
-        found = list(pool.map(lambda _: ledgers.ledger_for("a"), range(_WRITERS * 4)))
+        found = list(pool.map(lambda _: ledgers.ledger_for(scope), range(_WRITERS * 4)))
 
     assert len({id(ledger) for ledger in found}) == 1
 
@@ -301,7 +314,159 @@ def test_a_concurrent_first_lookup_yields_one_ledger() -> None:
 def test_the_process_registry_is_disabled_at_import() -> None:
     """Only an enforcer over a usage policy enables it, and tests inject their own
     registry. Failing here means a test leaked into the process one."""
-    assert AGENT_USAGE_LEDGERS.enabled is False
+    assert not any(USAGE_LEDGERS.is_enabled(kind) for kind in UsageScopeKind)
+
+
+def test_scopes_of_different_kinds_with_one_key_get_different_ledgers() -> None:
+    ledgers = UsageLedgers(new_usage_ledger)
+    ledgers.enable(UsageScopeKind.AGENT)
+    ledgers.enable(UsageScopeKind.USER)
+
+    agent = ledgers.ledger_for(UsageScope.agent("alice"))
+    user = ledgers.ledger_for(UsageScope.user("alice"))
+
+    assert agent is not None
+    assert user is not None
+    assert agent is not user
+
+
+def test_enabling_agents_leaves_users_off() -> None:
+    ledgers = UsageLedgers(new_usage_ledger)
+    ledgers.enable(UsageScopeKind.AGENT)
+
+    assert ledgers.is_enabled(UsageScopeKind.USER) is False
+    assert ledgers.ledger_for(UsageScope.user("u")) is None
+
+
+def test_usage_scope_is_a_value_and_prints_its_kind() -> None:
+    assert UsageScope.agent("b") == UsageScope(UsageScopeKind.AGENT, "b")
+    assert hash(UsageScope.agent("b")) == hash(UsageScope(UsageScopeKind.AGENT, "b"))
+    assert str(UsageScope.agent("b")) == "agent 'b'"
+
+
+def test_a_user_scope_prints_a_fingerprint_not_its_key() -> None:
+    """G10: a user key is often an email, and every usage log line prints a scope."""
+    scope = UsageScope.user("alice@example.com")
+
+    assert re.fullmatch(r"user #[0-9a-f]{12}", str(scope))
+    assert "alice" not in str(scope)
+    assert "alice" not in repr(scope)
+    assert "alice" not in f"{scope!r}"
+
+
+def test_one_user_prints_one_fingerprint() -> None:
+    assert str(UsageScope.user("alice")) == str(UsageScope.user("alice"))
+    assert str(UsageScope.user("alice")) != str(UsageScope.user("bob"))
+
+
+def test_a_lone_surrogate_user_prints() -> None:
+    assert str(UsageScope.user("\ud800")).startswith("user #")
+
+
+def _user_ledgers(capacity: int = 2) -> UsageLedgers:
+    ledgers = UsageLedgers(new_usage_ledger, user_capacity=lambda: capacity)
+    ledgers.enable(UsageScopeKind.USER)
+    return ledgers
+
+
+def test_an_anonymous_user_scope_cannot_be_built() -> None:
+    with pytest.raises(ValueError):
+        UsageScope.user("")
+    with pytest.raises(ValueError):
+        UsageScope(UsageScopeKind.USER, "")
+
+    assert UsageScope.agent("").key == ""
+
+
+def test_a_user_scope_is_a_user_kind_value() -> None:
+    assert UsageScope.user("a") == UsageScope(UsageScopeKind.USER, "a")
+    assert UsageScope.user("a") != UsageScope.agent("a")
+
+
+def test_user_ledgers_past_capacity_drop_the_least_recently_used() -> None:
+    ledgers = _user_ledgers()
+    a = ledgers.ledger_for(UsageScope.user("a"))
+    b = ledgers.ledger_for(UsageScope.user("b"))
+    assert ledgers.ledger_for(UsageScope.user("a")) is a
+
+    ledgers.ledger_for(UsageScope.user("c"))
+
+    assert ledgers.ledger_for(UsageScope.user("a")) is a
+    assert ledgers.ledger_for(UsageScope.user("b")) is not b
+
+
+def test_the_user_registry_never_exceeds_its_capacity() -> None:
+    ledgers = _user_ledgers()
+
+    for n in range(50):
+        ledgers.ledger_for(UsageScope.user(f"u{n}"))
+
+    assert len(ledgers._user_ledgers) == 2
+
+
+def test_agent_ledgers_are_never_evicted() -> None:
+    ledgers = _user_ledgers(capacity=1)
+    ledgers.enable(UsageScopeKind.AGENT)
+    agents = [UsageScope.agent(name) for name in ("x", "y", "z")]
+    first = [ledgers.ledger_for(scope) for scope in agents]
+
+    for name in ("u", "v", "w"):
+        ledgers.ledger_for(UsageScope.user(name))
+
+    assert all(
+        ledgers.ledger_for(scope) is ledger
+        for scope, ledger in zip(agents, first, strict=True)
+    )
+
+
+def test_user_capacity_is_resolved_when_users_are_enabled() -> None:
+    calls: list[int] = []
+
+    def capacity() -> int:
+        calls.append(1)
+        return 2
+
+    ledgers = UsageLedgers(new_usage_ledger, user_capacity=capacity)
+    ledgers.enable(UsageScopeKind.AGENT)
+    assert calls == []
+
+    ledgers.enable(UsageScopeKind.USER)
+    ledgers.enable(UsageScopeKind.USER)
+
+    assert calls == [1]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected", "warns"),
+    [
+        (None, DEFAULT_USER_CACHE_SIZE, False),
+        ("500", 500, False),
+        ("0", DEFAULT_USER_CACHE_SIZE, True),
+        ("-3", DEFAULT_USER_CACHE_SIZE, True),
+        ("ten", DEFAULT_USER_CACHE_SIZE, True),
+    ],
+)
+def test_user_cache_size_from_env(
+    raw: str | None, expected: int, warns: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    environ = {} if raw is None else {USER_CACHE_ENV: raw}
+
+    with caplog.at_level(logging.WARNING, logger="hexgate.runtime.agent_usage"):
+        assert user_cache_size_from_env(environ) == expected
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == (1 if warns else 0)
+    assert all(USER_CACHE_ENV in r.getMessage() for r in warnings)
+
+
+def test_a_concurrent_first_user_lookup_yields_one_ledger() -> None:
+    ledgers = _user_ledgers()
+    scope = UsageScope.user("u")
+
+    with ThreadPoolExecutor(max_workers=_WRITERS) as pool:
+        found = list(pool.map(lambda _: ledgers.ledger_for(scope), range(_WRITERS * 4)))
+
+    assert len({id(ledger) for ledger in found}) == 1
 
 
 def test_metrics_share_their_names_with_run_paths() -> None:
@@ -363,6 +528,14 @@ def test_the_registry_is_every_metric_over_every_window() -> None:
 
     assert len(expected) == 35
     assert KNOWN_AGENT_USAGE_PATHS == expected
+
+
+def test_both_roots_share_one_vocabulary() -> None:
+    """``ledger_namespace`` looks every path up in ``AGENT_USAGE_PATHS``, so a user
+    registry that diverged would turn a user read into a ``KeyError``."""
+    assert USER_USAGE_PATHS is AGENT_USAGE_PATHS
+    assert KNOWN_USER_USAGE_PATHS == KNOWN_AGENT_USAGE_PATHS
+    assert USER_USAGE_VOCABULARY == AGENT_USAGE_VOCABULARY
 
 
 def test_no_window_outlasts_the_ledger() -> None:

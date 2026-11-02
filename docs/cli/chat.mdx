@@ -17,6 +17,7 @@ a system prompt. See [Which path do I pick?](/two-paths) for chat-vs-serve.
 hexgate chat --agent example_agent                                   # demo agent in the repo's examples/ (run from the repo root)
 hexgate chat --list-agents                                           # show resolvable agents
 hexgate chat --agent my_app.agents:my_agent                          # by module:attr spec
+hexgate chat --agent example_agent --model openai:gpt-5.4            # override the agent's model
 hexgate chat --use examples/file_agents.py --agent workspace_explorer
 hexgate chat --use examples/research_agents.py --agent update_researcher --approval-mode ask
 ```

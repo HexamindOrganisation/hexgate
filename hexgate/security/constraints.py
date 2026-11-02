@@ -78,14 +78,22 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 import re2
 
+from hexgate.runtime.agent_usage import UsageScopeKind
 from hexgate.security.errors import PolicyDeniedError
+from hexgate.security.usage_inputs import (
+    AGENT_USAGE_ROOT,
+    NO_USAGE,
+    USAGE_SCOPE_KIND_BY_ROOT,
+    USER_USAGE_ROOT,
+    UsageInputs,
+)
 
 if TYPE_CHECKING:  # `re2` exposes no public type for a compiled pattern.
     from re2 import _Regexp
@@ -93,6 +101,15 @@ if TYPE_CHECKING:  # `re2` exposes no public type for a compiled pattern.
 
 class ConstraintParseError(ValueError):
     """Raised on malformed constraint source — surfaces at policy load."""
+
+
+class ConstraintsFailedError(PolicyDeniedError):
+    """A call failed one or more constraints. ``str()`` names the first, as before;
+    ``failed`` holds every failing constraint's source, in policy order."""
+
+    def __init__(self, message: str, failed: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.failed = failed
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,9 +266,10 @@ _JSON_KEYWORDS = ("true", "false", "null")
 # string — so a lone non-fact identifier is rejected rather than read as a ref.
 FACTS = ("role", "tool")
 # The other roots a path can start from: the call's ``args``, the caller's
-# ``ctx`` and the run's ``run`` (the context :func:`check_constraints` builds).
+# ``ctx``, the run's ``run``, the agent's cross-run ``agent_usage`` and the end
+# user's cross-run ``user_usage`` (the context :func:`check_constraints` builds).
 # Facts are plain strings, so a path dotted into one is never set either.
-PATH_ROOTS = ("args", "ctx", "run")
+PATH_ROOTS = ("args", "ctx", "run", AGENT_USAGE_ROOT, USER_USAGE_ROOT)
 
 _FUNCS = ("startswith", "endswith", "contains", "matches")
 _FUNC_RE = re.compile(r"^([a-z]+)\((.*)\)$", re.DOTALL)
@@ -578,6 +596,23 @@ def iter_arg_refs_negated(node: Node, negated: bool = False):
             yield from iter_arg_refs_negated(part, negated)
     elif isinstance(node, Not):
         yield from iter_arg_refs_negated(node.inner, not negated)
+
+
+def usage_scope_kinds_of(constraints: Iterable[str]) -> frozenset[UsageScopeKind]:
+    """The usage scope kinds whose roots the given constraint sources reference. A
+    source this SDK can't parse (a bundle built by a newer one) names none."""
+    kinds: set[UsageScopeKind] = set()
+    for source in constraints:
+        try:
+            node = parse_constraint(source)
+        except ConstraintParseError:
+            continue
+        kinds.update(
+            USAGE_SCOPE_KIND_BY_ROOT[path[0]]
+            for path in iter_arg_refs(node)
+            if path and path[0] in USAGE_SCOPE_KIND_BY_ROOT
+        )
+    return frozenset(kinds)
 
 
 LEFT = "left"
@@ -957,9 +992,9 @@ def check_constraints(
     consts: dict[str, Any] | None = None,
     attributes: Mapping[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
-    agent_usage: Mapping[str, Any] | None = None,
+    usage: UsageInputs = NO_USAGE,
 ) -> None:
-    """Evaluate every constraint; raise on the first failure.
+    """Evaluate every constraint; raise once, naming the first failure.
 
     Caller passes raw source strings (typical YAML path) or pre-parsed
     nodes. Source strings are parsed once per call here for simplicity —
@@ -967,11 +1002,11 @@ def check_constraints(
 
     ``role`` and the tool name are exposed as top-level ``role`` / ``tool``
     facts, mirroring Rego's ``input.role`` / ``input.tool``. ``consts``
-    supplies ``consts.<name>``. ``attributes``, ``run`` and ``agent_usage`` are
-    exposed under ``ctx.<key>`` / ``run.<path>`` / ``agent_usage.<path>``,
-    mirroring ``input.ctx`` / ``input.run`` / ``input.agent_usage``. A missing
-    ``ctx.<key>``, ``run.<path>`` or ``agent_usage.<path>`` fails closed like any
-    other ref.
+    supplies ``consts.<name>``. ``attributes`` and ``run`` are exposed under
+    ``ctx.<key>`` / ``run.<path>``, and ``usage`` exposes each usage root under
+    ``<root>.<path>``, mirroring ``input.ctx`` / ``input.run`` / ``input.<root>``.
+    A missing ``ctx.<key>``, ``run.<path>`` or ``<root>.<path>`` fails closed like
+    any other ref.
     """
     if not constraints:
         return
@@ -981,12 +1016,16 @@ def check_constraints(
         "tool": tool_name,
         "ctx": dict(attributes or {}),
         "run": dict(run or {}),
-        "agent_usage": dict(agent_usage or {}),
+        **usage.namespaces(),
         _CONSTS_KEY: consts or {},
     }
+    failed: list[str] = []
     for entry in constraints:
         parsed = parse_constraint(entry) if isinstance(entry, str) else entry
         if not evaluate_constraint(parsed, context):
-            raise PolicyDeniedError(
-                f'Policy on "{tool_name}" denied: constraint failed — {parsed.source}'
-            )
+            failed.append(parsed.source)
+    if failed:
+        raise ConstraintsFailedError(
+            f'Policy on "{tool_name}" denied: constraint failed — {failed[0]}',
+            tuple(failed),
+        )

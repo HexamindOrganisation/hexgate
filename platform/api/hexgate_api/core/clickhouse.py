@@ -181,7 +181,7 @@ _UNKNOWN_TABLE_CODE = 60
 _SERVER_ERROR_CODE_RE = re.compile(r"code:\s*(\d+)")
 
 
-def _server_error_code(exc: DatabaseError) -> int | None:
+def server_error_code(exc: BaseException) -> int | None:
     match = _SERVER_ERROR_CODE_RE.search(str(exc))
     return int(match.group(1)) if match else None
 
@@ -215,7 +215,7 @@ def verify_written_columns(
             )
             break
         except DatabaseError as exc:
-            if _server_error_code(exc) != _UNKNOWN_TABLE_CODE:
+            if server_error_code(exc) != _UNKNOWN_TABLE_CODE:
                 # ACCESS_DENIED on a scoped grant, quota, metadata blip…
                 _log.warning("cannot verify the %s schema: %s", table, exc)
                 break

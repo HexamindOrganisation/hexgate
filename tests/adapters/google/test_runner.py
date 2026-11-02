@@ -353,6 +353,33 @@ async def test_run_async_opens_user_scope_and_yields_events(
     assert get_current_context() is None
 
 
+async def test_run_async_user_id_overrides_only_the_adk_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _silence_observability(monkeypatch)
+    fake = _install_fake_runner(monkeypatch)
+    runner = HexgateRunner(
+        agent=_make_agent(),
+        app_name="my_app",
+        session_service=InMemorySessionService(),
+        api_key="k",
+    )
+    context = HexgateContext(user_id="", session_id="s-1")
+
+    _ = [
+        event
+        async for event in runner.run_async(
+            new_message="hello", hexgate_context=context, user_id="serve"
+        )
+    ]
+
+    [fake_runner] = fake.instances
+    [run_call] = fake_runner.run_async_calls
+    assert run_call["user_id"] == "serve"
+    [active] = fake_runner.active_users
+    assert active.user_id == ""
+
+
 # ---------------------------------------------------------------------------
 # Langfuse propagation
 # ---------------------------------------------------------------------------

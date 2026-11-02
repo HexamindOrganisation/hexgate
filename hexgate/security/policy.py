@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
-from hexgate.security.constraints import check_constraints
+from hexgate.security.constraints import ConstraintsFailedError, check_constraints
 from hexgate.security.decision import DecisionOutcome, Verdict
 from hexgate.security.errors import ApprovalRequiredError, PolicyDeniedError
 from hexgate.security.file_scope import build_file_scope_hint, is_path_allowed
@@ -19,6 +19,7 @@ from hexgate.security.models import (
     ToolPolicy,
     is_reserved_key,
 )
+from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 
 # Agent keys (admission agent.run AND reach agent.tool:/agent.handoff:) and skill
 # keys (skill:/skill.resource:/skill.script:) are closed-world: an unlisted one
@@ -76,7 +77,7 @@ def evaluate_tool_call(
     role: str | None = None,
     attributes: Mapping[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
-    agent_usage: Mapping[str, Any] | None = None,
+    usage: UsageInputs = NO_USAGE,
 ) -> Verdict:
     """Return a :class:`Verdict` for a proposed tool call (pydantic engine).
 
@@ -110,10 +111,12 @@ def evaluate_tool_call(
             consts=policy.consts,
             attributes=attributes,
             run=run,
-            agent_usage=agent_usage,
+            usage=usage,
         )
-    except PolicyDeniedError as exc:
-        return Verdict(outcome=DecisionOutcome.DENY, reason=str(exc))
+    except ConstraintsFailedError as exc:
+        return Verdict(
+            outcome=DecisionOutcome.DENY, reason=str(exc), failed_constraints=exc.failed
+        )
 
     if isinstance(tool_policy, FileToolPolicy) and not is_path_allowed(
         tool_name, arguments, tool_policy
@@ -153,15 +156,15 @@ def authorize_tool_call(
     role: str | None = None,
     attributes: Mapping[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
-    agent_usage: Mapping[str, Any] | None = None,
+    usage: UsageInputs = NO_USAGE,
 ) -> None:
     """Raise when a tool call is denied or requires approval.
 
     Thin raise-on-deny wrapper over :func:`evaluate_tool_call`, kept for
     callers (the CLI, direct API users) that prefer the exception contract.
-    ``role``, ``attributes``, ``run`` and ``agent_usage`` are all forwarded so
-    their respective constraints see the same inputs the WASM engine always
-    receives.
+    ``role``, ``attributes``, ``run`` and ``usage`` (the usage roots,
+    ``agent_usage.*``) are all forwarded so their respective constraints see the
+    same inputs the WASM engine always receives.
     """
     _raise_for_verdict(
         evaluate_tool_call(
@@ -171,7 +174,7 @@ def authorize_tool_call(
             role=role,
             attributes=attributes,
             run=run,
-            agent_usage=agent_usage,
+            usage=usage,
         )
     )
 
@@ -184,7 +187,7 @@ def evaluate_tool_call_wasm(
     *,
     attributes: Mapping[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
-    agent_usage: Mapping[str, Any] | None = None,
+    usage: UsageInputs = NO_USAGE,
 ) -> Verdict:
     """WASM-backed counterpart of :func:`evaluate_tool_call`.
 
@@ -204,7 +207,7 @@ def evaluate_tool_call_wasm(
         args=arguments or {},
         ctx=dict(attributes or {}),
         run=dict(run or {}),
-        agent_usage=dict(agent_usage or {}),
+        usage=usage,
     )
     return verdict_from_rego(decision, tool_name=tool_name, role=role)
 
@@ -232,6 +235,7 @@ def verdict_from_rego(rego: Any, *, tool_name: str, role: str) -> Verdict:
             outcome=DecisionOutcome.DENY,
             reason=f'Policy denied tool "{tool_name}": {reasons}',
             violations=tuple(rego.violations),
+            failed_constraints=tuple(rego.violations),
         )
     return Verdict(
         outcome=DecisionOutcome.DENY,
@@ -250,7 +254,7 @@ def authorize_tool_call_wasm(
     *,
     attributes: Mapping[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
-    agent_usage: Mapping[str, Any] | None = None,
+    usage: UsageInputs = NO_USAGE,
 ) -> None:
     """Raise-on-deny wrapper over :func:`evaluate_tool_call_wasm`.
 
@@ -265,6 +269,6 @@ def authorize_tool_call_wasm(
             arguments,
             attributes=attributes,
             run=run,
-            agent_usage=agent_usage,
+            usage=usage,
         )
     )

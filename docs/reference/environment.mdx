@@ -35,6 +35,8 @@ raises a key-named error when the agent is built.
 | `HEXGATE_LOCAL_MODE` | Truthy value forces local audit and shorts the platform auto-bind path, even when `HEXGATE_API_KEY` is set. `hexgate chat` sets this automatically. |
 | `HEXGATE_LOG_MESSAGES` | `0` (or `false` / `no` / `off`) switches off LLM message logging — the prompt delta and completion of every model call, exported under scope `hexgate.messages` — while decisions, usage and bans keep flowing. **Default on**: an audit log a customer has to discover and enable is not there when an incident needs it. Content is redacted and byte-capped by the SDK before export, retained 180 days, and stays under your controllership: it is your data, processed on your behalf. |
 | `HEXGATE_BIND_AGENTS` | Truthy value opts a code-built agent into the platform path at construction time (requires `HEXGATE_API_KEY` — the platform path is otherwise opt-in). |
+| `HEXGATE_PROJECT_ID` | Project shown next to the key (`project=…`). Display only: by default it is read from the key itself. |
+| `HEXGATE_PUBLIC_KEY` | The platform's public key (base64url, 32 bytes), used to verify `HEXGATE_API_KEY` before it is sent and the signature of every policy bundle the platform delivers. A wrong or rotated key shows up as bundle signature failures. Unset, the SDK fetches it from `GET /v1/.well-known/keys` on first use. |
 
 The key and the URL are coupled: a `fty_live_…` key only verifies against the
 platform instance that minted it.
@@ -58,6 +60,20 @@ All optional — see [WASM bundles](/policy/wasm-bundles) and
 | `HEXGATE_BUNDLE_REQUIRE_SIGNATURE` | `true` to refuse unsigned or unverifiable bundles (default: warn only). |
 | `HEXGATE_OPA_BIN` | Override the `opa` binary location (default: search `PATH`). |
 
+## Usage quotas
+
+Optional — see [constraints](/policy/constraints#user-usage-user_usage).
+
+| Env var | Purpose |
+|---|---|
+| `HEXGATE_USAGE_REFRESH_SECONDS` | Age after which a run start refreshes an agent's usage snapshot in the background (default `5`). See [constraints](/policy/constraints#shared-across-processes). |
+| `HEXGATE_USAGE_SYNC_AFTER_SECONDS` | Age after which a run start waits for a fresh agent snapshot (default `60`). |
+| `HEXGATE_USAGE_MAX_STALENESS_SECONDS` | Age after which an agent snapshot is unavailable and its paths follow `usage.on_unavailable` (default `300`). The agent trio must satisfy `0 < refresh ≤ sync_after ≤ max_staleness`; a bad value logs a warning and all three use their defaults. |
+| `HEXGATE_USAGE_USER_REFRESH_SECONDS` | As `HEXGATE_USAGE_REFRESH_SECONDS`, for an end user's `user_usage.*` snapshot (default `30`). See [constraints](/policy/constraints#shared-across-processes-users). |
+| `HEXGATE_USAGE_USER_SYNC_AFTER_SECONDS` | As `HEXGATE_USAGE_SYNC_AFTER_SECONDS`, for users (default `60`). |
+| `HEXGATE_USAGE_USER_MAX_STALENESS_SECONDS` | As `HEXGATE_USAGE_MAX_STALENESS_SECONDS`, for users (default `300`). The user trio follows the same ordering rule, on its own. |
+| `HEXGATE_USAGE_USER_CACHE` | How many end users' `user_usage.*` counts one process keeps (default `10000`). Each costs about 118 KB, so the default bounds them at about 1.2 GB; the least recently seen user is dropped first and starts again from its platform count, or from zero without a platform. Read when a policy first references `user_usage.*`; a value below 1 or not a number logs a warning and uses the default. |
+
 ## Self-hosted platform (control plane)
 
 Read from the real environment or `platform/api/.env`. See
@@ -68,7 +84,9 @@ Read from the real environment or `platform/api/.env`. See
 | `DATABASE_URL` | Postgres DSN. Unset → local SQLite. Bare `postgres://` URLs are normalized to the `asyncpg` driver. |
 | `RESEND_API_KEY` | Resend API key — enables `ResendEmailSender` when paired with `HEXGATE_EMAIL_FROM`. |
 | `HEXGATE_EMAIL_FROM` | From-address on a verified Resend domain, e.g. `"Hexgate <noreply@yourdomain.com>"`. |
-| `HEXGATE_DASHBOARD_URL` | Link host embedded inside verification / reset emails. |
+| `HEXGATE_DASHBOARD_URL` | The dashboard's absolute `http(s)` URL (default `http://localhost:5173`; no user, query or fragment). Link host embedded inside verification / reset emails, and where an MCP client's OAuth login is sent for consent. |
+| `HEXGATE_OAUTH_ALLOW_INSECURE_CLIENT_IDS` | Set to `1` to also accept `http` OAuth client ids on a loopback host, for a client on your own machine. Refused at startup unless both `HEXGATE_PUBLIC_URL` and `HEXGATE_DASHBOARD_URL` are on a local host. |
+| `HEXGATE_MCP_LOCAL_POLICY_DIR` | Read by the MCP server (`platform/mcp`) only; unset in deploy. When set, the server registers `policy_write_local`, which writes policy files under this folder for a caller holding `policy:write`, and listens on `127.0.0.1` only. Point it at a **dedicated policies folder**, never a repo or package root: any `.yaml`/`.yml` below it whose path has no dot-prefixed part is writable. Refused at startup unless `HEXGATE_PUBLIC_URL` is on `localhost` or `127.0.0.1`, and when the folder is missing, a repo root, a system directory, or the home directory or an ancestor of it; a file inside a repo below the folder is refused per write. |
 | `HEXGATE_REDPANDA_BOOTSTRAP_SERVER` | Kafka-protocol broker the span-enricher consumes from and the collector publishes to (default `localhost:9092`). |
 
 The collector and the span-enricher are separate processes with their own

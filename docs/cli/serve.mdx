@@ -15,6 +15,9 @@ hexgate serve my_app.agents:my_agent
 
 # CI / deliberate-deploy: error if not pre-registered
 hexgate serve my_app.agents:my_agent --no-auto-register
+
+# Give the registered manifest a description
+hexgate serve my_app.agents:my_agent --description "Refunds and order lookups"
 ```
 
 The bridge works like Cloudflare Tunnel or ngrok — your local agent runtime is
@@ -51,6 +54,20 @@ There is no `HEXGATE_AGENT_NAME` env var, `--agent` flag, or `--use` flag on
 agent's `.name` attribute (or the `name=` kwarg you passed to `create_react_agent`
 / `create_agent`).
 </Note>
+
+## Sub-agents
+
+`serve` can register sub-agents at startup too. Its flags differ from `register`'s:
+
+| Flag | What it does |
+|---|---|
+| `--register-subagents` | Also register the agent's sub-agents, each with a starter policy the platform mints. Off by default. |
+| `--register-subagents-force` | With `--register-subagents`, keep the first of two different sub-agents that share a name instead of aborting startup. Same as `hexgate register --force`. |
+| `--no-bind-subagents` | Run sub-agents on their local policy only. By default each sub-agent registered on the platform binds its platform policy (editable in the dashboard), as the root does. A sub-agent not on the platform is unaffected either way. |
+
+```bash
+hexgate serve my_app.agents:triage --register-subagents
+```
 
 ## Env vars
 

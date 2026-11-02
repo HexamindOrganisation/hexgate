@@ -12,6 +12,7 @@ from clickhouse_connect.driver.exceptions import (
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from hexgate_api.constants import OAUTH_SCOPE_KEY
 from hexgate_api.features.audit.service import (
     AuditPayloadTooLarge,
     anomalies,
@@ -160,7 +161,8 @@ async def ingest_ban_enforcement(
 
 
 # Dashboard audit reads — project-scoped aggregation, cookie-authed like the
-# other dashboard reads (org membership via the project path param).
+# other dashboard reads (org membership via the project path param);
+# ``/audit/decisions`` also takes an OAuth token with ``audit:read``.
 #
 # ``role`` filter semantics: absent = no filter; ``role=`` (empty value) =
 # the no-role bucket. No sentinel string is reserved on the wire — the
@@ -246,6 +248,7 @@ async def api_audit_timeseries(
 @router.get(
     "/projects/{project_id}/audit/decisions",
     response_model=AuditDecisionPage,
+    openapi_extra={OAUTH_SCOPE_KEY: "audit:read"},
     dependencies=[Depends(require_org_member)],
     tags=["audit"],
 )

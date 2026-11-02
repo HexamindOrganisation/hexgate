@@ -253,14 +253,10 @@ async def send_invitation_email(
     StderrEmailSender dev mode, same swap-for-real-provider story for
     production via :func:`mailer.set_email_sender`.
     """
-    import os
-
     from hexgate_api.core.mailer import get_email_sender
+    from hexgate_api.settings import get_settings
 
-    dashboard_url = os.environ.get(
-        "HEXGATE_DASHBOARD_URL", "http://localhost:5173"
-    ).rstrip("/")
-    link = f"{dashboard_url}/invites/{invitation.id}/accept"
+    link = f"{get_settings().dashboard_url}/invites/{invitation.id}/accept"
     ttl_hours = max(
         1,
         int(

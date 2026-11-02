@@ -3,8 +3,10 @@ name = "hexgate-api"
 version = "0.1.0"
 description = "Hexgate control plane API — policy bundles, tokens, audit ingestion"
 # Matches the hexgate SDK's floor (>=3.13) — the control plane now depends on
-# it for compile_to_rego / compile_to_wasm.
-requires-python = ">=3.13"
+# it for compile_to_rego / compile_to_wasm. Capped <3.14 because biscuit-python
+# has no 3.14 wheel and its sdist builds on pyo3 0.24 (max 3.13); drop the cap
+# when upstream ships 3.14.
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
@@ -41,6 +43,7 @@ dependencies = [
     # Users' get_oauth_router consumes any httpx-oauth client uniformly,
     # so swapping providers is one constructor line.
     "httpx-oauth>=0.16",
+    "httpx>=0.27",
     # Transactional email — verify-email + password-reset go through Resend
     # in production. Dev mode stays on StderrEmailSender (no key needed).
     # Sync SDK; wrapped via asyncio.to_thread in mailer.py.
@@ -54,6 +57,14 @@ dependencies = [
     "opentelemetry-proto>=1.41",
     "weasyprint>=70.0",
     "jinja2>=3.1.6",
+    # OAuth access tokens are EdDSA JWTs (core/oauth_tokens.py). Transitive
+    # via fastapi-users, pinned since we import it directly (same rule as
+    # python-dotenv above). 2.10.1 fixes CVE-2024-53861 (`iss` compared as a
+    # substring).
+    "pyjwt[crypto]>=2.10.1",
+    # The OAuth server is the MCP SDK's auth routes (features/oauth/provider.py).
+    # Transitive via the hexgate SDK, pinned since we import it directly.
+    "mcp>=1.27,<2",
 ]
 
 [dependency-groups]

@@ -12,12 +12,16 @@ client patched over ``hexgate.cloud.client.HexgateClient``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from types import ModuleType
+from typing import Any
+
 import pytest
 from langchain_core.tools import tool
 
 from hexgate.adapters.langchain.tools import GuardedTool
 from hexgate.agents import factory
-from hexgate.cloud.client import HexgateError
+from hexgate.cloud.client import HexgateConfig, HexgateError
 from hexgate.security import AgentPolicy, BaseToolPolicy, PolicySet
 from hexgate.security import enforcer as enforcer_mod
 from hexgate.security.policy_set import DEFAULT_ROLE_NAME
@@ -45,6 +49,9 @@ class _FakeClient:
     def __init__(self) -> None:
         self._queued: list[tuple[dict | None, str | None] | Exception] = []
         self.calls: list[str | None] = []
+        self.config = HexgateConfig(
+            base_url="https://fake.example", api_key="fty_test_demo_dummybiscuit"
+        )
 
     def serve(self, payload: dict | None, etag: str | None = None) -> None:
         self._queued.append((payload, etag))
@@ -247,6 +254,25 @@ def test_bind_wraps_tools_and_attaches_source_and_client(
     assert isinstance(agent._binding.enforcer.policy, PolicySet)
     assert agent.hexgate_client is fc
     assert fc.calls == [None]  # exactly one fetch at creation
+
+
+def test_bind_builds_the_enforcer_from_the_bound_client(
+    monkeypatch: pytest.MonkeyPatch,
+    enforcer_clients: Callable[[ModuleType], list[Any]],
+) -> None:
+    """The client that fetched the policy also builds the enforcer, so usage
+    reads and audit go to the same platform, and it is the one attached."""
+    fc = _FakeClient()
+    fc.serve({"policy_yaml": _POLICY_YAML}, etag='"hash-a"')
+    _patch_platform(monkeypatch, fc)
+    clients = enforcer_clients(enforcer_mod)
+
+    agent, _ = factory.create_agent(
+        model="openai:gpt-5.4", tools=[echo], name="support-bot"
+    )
+
+    assert clients == [fc]
+    assert agent.hexgate_client is fc
 
 
 def test_bind_failure_is_loud_not_a_bare_agent(

@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,7 @@ from hexgate.security import (
     generate_keypair,
     sign_bytes,
 )
+from hexgate.security.usage_inputs import AGENT_USAGE_ROOT, USER_USAGE_ROOT
 
 _OPA_AVAILABLE = shutil.which("opa") is not None
 needs_opa = pytest.mark.skipif(
@@ -440,15 +442,25 @@ def test_build_signed_bundle_raises_on_bad_constraint() -> None:
 
 
 # ---------------------------------------------------------------------------
-# agent_usage — the referenced paths the enforcer enables the ledgers for
+# agent_usage / user_usage — the referenced paths the enforcer enables the
+# ledgers for
 # ---------------------------------------------------------------------------
 
-_USAGE_YAML = (
-    "version: 1\nroles:\n  default:\n"
-    "    constraints: ['agent_usage.tool_calls_5m < 10']\n"
-    "    admission:\n      mode: allow\n"
-    "      constraints: ['agent_usage.invocations_1h < 100']\n"
-)
+_USAGE_ROOTS = (AGENT_USAGE_ROOT, USER_USAGE_ROOT)
+_OTHER_ROOT = {AGENT_USAGE_ROOT: USER_USAGE_ROOT, USER_USAGE_ROOT: AGENT_USAGE_ROOT}
+_MANIFEST_USAGE_PATHS: dict[str, Callable[[PolicyBundle], frozenset[str]]] = {
+    AGENT_USAGE_ROOT: PolicyBundle.agent_usage_paths,
+    USER_USAGE_ROOT: PolicyBundle.user_usage_paths,
+}
+
+
+def _usage_yaml(root: str) -> str:
+    return (
+        "version: 1\nroles:\n  default:\n"
+        f"    constraints: ['{root}.tool_calls_5m < 10']\n"
+        "    admission:\n      mode: allow\n"
+        f"      constraints: ['{root}.invocations_1h < 100']\n"
+    )
 
 
 def _manifest_only_bundle(manifest: dict) -> PolicyBundle:
@@ -456,48 +468,73 @@ def _manifest_only_bundle(manifest: dict) -> PolicyBundle:
     return PolicyBundle.from_parts(wasm_bytes=b"\x00asm", manifest_bytes=manifest_bytes)
 
 
-def test_build_signed_bundle_records_the_usage_paths_sorted() -> None:
-    sb = build_signed_bundle(_USAGE_YAML, compile_wasm=False)
+@pytest.mark.parametrize("root", _USAGE_ROOTS)
+def test_build_signed_bundle_records_the_usage_paths_sorted(root: str) -> None:
+    sb = build_signed_bundle(_usage_yaml(root), compile_wasm=False)
 
-    assert sb.manifest["agent_usage"] == ["invocations_1h", "tool_calls_5m"]
-    assert _manifest_only_bundle(sb.manifest).agent_usage_paths() == {
+    assert sb.manifest[root] == ["invocations_1h", "tool_calls_5m"]
+    assert _OTHER_ROOT[root] not in sb.manifest
+    assert _MANIFEST_USAGE_PATHS[root](_manifest_only_bundle(sb.manifest)) == {
         "invocations_1h",
         "tool_calls_5m",
     }
 
 
-def test_a_usage_free_manifest_has_no_agent_usage_key() -> None:
+@pytest.mark.parametrize("root", _USAGE_ROOTS)
+@pytest.mark.parametrize("other_root_only", [True, False], ids=["other-root", "free"])
+def test_a_bundle_without_the_root_paths_has_no_root_key(
+    root: str, other_root_only: bool
+) -> None:
     """Omitted, not empty: every existing bundle's manifest bytes, and so its
     signature, must not move."""
-    sb = build_signed_bundle(_DEMO_YAML, compile_wasm=False)
+    source = _usage_yaml(_OTHER_ROOT[root]) if other_root_only else _DEMO_YAML
+    sb = build_signed_bundle(source, compile_wasm=False)
 
-    assert "agent_usage" not in sb.manifest
-    assert b"agent_usage" not in sb.manifest_bytes
-
-
-def test_a_manifest_without_the_key_references_no_path() -> None:
-    assert _manifest_only_bundle({"version": 1}).agent_usage_paths() == frozenset()
+    assert root not in sb.manifest
+    assert root.encode("utf-8") not in sb.manifest_bytes
 
 
+@pytest.mark.parametrize("root", _USAGE_ROOTS)
+def test_a_manifest_without_the_key_references_no_path(root: str) -> None:
+    bundle = _manifest_only_bundle({"version": 1})
+
+    assert _MANIFEST_USAGE_PATHS[root](bundle) == frozenset()
+
+
+@pytest.mark.parametrize("root", _USAGE_ROOTS)
 def test_an_unknown_manifest_path_is_dropped_with_a_warning(
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, root: str
 ) -> None:
     """A newer SDK may list a path this one lacks. Bound as-is it would raise
     KeyError on every decision; dropped, it reads missing and its constraint denies."""
     bundle = _manifest_only_bundle(
-        {"version": 1, "agent_usage": ["invocations_1h", "tool_calls_2h"]}
+        {"version": 1, root: ["invocations_1h", "tool_calls_2h"]}
     )
 
     with caplog.at_level(logging.WARNING, logger="hexgate.security.bundle"):
-        paths = bundle.agent_usage_paths()
+        paths = _MANIFEST_USAGE_PATHS[root](bundle)
 
     assert paths == {"invocations_1h"}
+    assert f"{root}.*" in caplog.text
     assert "tool_calls_2h" in caplog.text
+
+
+def test_a_pre_user_usage_bundle_reads_no_user_paths() -> None:
+    """A platform on an older SDK signs no ``user_usage`` key, so the enforcer
+    supplies no user namespace and those constraints fail closed."""
+    bundle = _manifest_only_bundle({"version": 1, AGENT_USAGE_ROOT: ["invocations_1h"]})
+
+    assert bundle.user_usage_paths() == frozenset()
+    assert bundle.agent_usage_paths() == {"invocations_1h"}
 
 
 @needs_opa
 def test_an_enforcer_over_a_bundle_with_an_unknown_path_still_decides() -> None:
-    from hexgate.runtime.agent_usage import UsageLedgers, new_usage_ledger
+    from hexgate.runtime.agent_usage import (
+        UsageLedgers,
+        UsageScopeKind,
+        new_usage_ledger,
+    )
     from hexgate.security.enforcer import PolicyEnforcer
 
     sb = build_signed_bundle(_DEMO_YAML)
@@ -512,7 +549,7 @@ def test_an_enforcer_over_a_bundle_with_an_unknown_path_still_decides() -> None:
     decision = enforcer.decide("refund_order", {"amount": 200})
 
     assert decision.outcome is not None
-    assert not ledgers.enabled
+    assert not ledgers.is_enabled(UsageScopeKind.AGENT)
 
 
 # ---------------------------------------------------------------------------

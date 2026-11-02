@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from hexgate_api.constants import OAUTH_SCOPE_KEY
 from hexgate_api.core.db import get_session
 from hexgate_api.core.locks import project_lock
 from hexgate_api.deps.org import require_org_member
@@ -124,7 +125,11 @@ async def _rebuild_or_none(session: AsyncSession, project_id: str) -> bool:
 # --- module CRUD -------------------------------------------------------------
 
 
-@router.get("/projects/{project_id}/policy-modules", tags=["policy"])
+@router.get(
+    "/projects/{project_id}/policy-modules",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
 async def api_list_policy_modules(
     project_id: str,
     _user: User = Depends(require_org_member),
@@ -239,7 +244,11 @@ async def api_delete_policy_module(
 # --- role bindings -----------------------------------------------------------
 
 
-@router.get("/projects/{project_id}/policy-roles", tags=["policy"])
+@router.get(
+    "/projects/{project_id}/policy-roles",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
 async def api_get_policy_roles(
     project_id: str,
     _user: User = Depends(require_org_member),
@@ -339,7 +348,11 @@ async def api_set_policy_roles(
 # --- file CRUD (compose entry-file store) ------------------------------------
 
 
-@router.get("/projects/{project_id}/policy-files", tags=["policy"])
+@router.get(
+    "/projects/{project_id}/policy-files",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
 async def api_list_policy_files(
     project_id: str,
     _user: User = Depends(require_org_member),
@@ -349,7 +362,11 @@ async def api_list_policy_files(
     return [_file_read(r) for r in await service.list_files(session, project_id)]
 
 
-@router.put("/projects/{project_id}/policy-files/{name:path}", tags=["policy"])
+@router.put(
+    "/projects/{project_id}/policy-files/{name:path}",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:write"},
+    tags=["policy"],
+)
 async def api_put_policy_file(
     project_id: str,
     name: str,
@@ -459,7 +476,11 @@ def _lint_out(lint: PolicyLint) -> PolicyLintOut:
     return out
 
 
-@router.post("/projects/{project_id}/policy/preview", tags=["policy"])
+@router.post(
+    "/projects/{project_id}/policy/preview",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
 async def api_preview_policy(
     project_id: str,
     body: PolicyPreviewRequest,
@@ -475,7 +496,11 @@ async def api_preview_policy(
     return PolicyPreviewResponse(resolved=resolved, lints=[_lint_out(x) for x in lints])
 
 
-@router.get("/projects/{project_id}/policy/resolve", tags=["policy"])
+@router.get(
+    "/projects/{project_id}/policy/resolve",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
 async def api_resolve_policy(
     project_id: str,
     role: str | None = None,
@@ -501,7 +526,11 @@ async def api_resolve_policy(
     return ResolvedPolicyResponse(roles=service.roles_json(result, role=role))
 
 
-@router.get("/projects/{project_id}/policy/check", tags=["policy"])
+@router.get(
+    "/projects/{project_id}/policy/check",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
 async def api_check_policy(
     project_id: str,
     _user: User = Depends(require_org_member),
@@ -515,7 +544,11 @@ async def api_check_policy(
     return PolicyCheckResponse(ok=ok, lints=out)
 
 
-@router.get("/projects/{project_id}/policy/graph", tags=["policy"])
+@router.get(
+    "/projects/{project_id}/policy/graph",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
 async def api_policy_graph(
     project_id: str,
     role: str | None = None,
@@ -534,7 +567,11 @@ async def api_policy_graph(
     return PolicyGraphResponse(**graph)
 
 
-@router.post("/projects/{project_id}/policy/test", tags=["policy"])
+@router.post(
+    "/projects/{project_id}/policy/test",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
 async def api_test_policy(
     project_id: str,
     body: PolicyTestRequest,

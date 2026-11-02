@@ -1,25 +1,35 @@
-"""Process-local usage per agent — the local term of ``agent_usage.*``.
+"""Process-local usage per scope (agents and end users) — the local term of the usage
+namespaces.
 
-Counts what *this process* did for each agent, in time buckets, so a policy can read
+Counts what *this process* did for each scope, in time buckets, so a policy can read
 "invocations in the last hour" without a network call. Recorded from ``RunFacts``, so
 each metric is counted on the same line as its ``run.*`` twin.
 
-Inert until :meth:`UsageLedgers.enable`: a process whose policy references no
-``agent_usage.*`` path never creates a ledger.
+Each kind is inert until :meth:`UsageLedgers.enable`, called only when the policy
+references its root (``agent_usage.*`` or ``user_usage.*``): a process whose policy
+references neither never creates a ledger. User ledgers are bounded by an LRU
+(``HEXGATE_USAGE_USER_CACHE``).
 """
 
 from __future__ import annotations
 
+import logging
+import os
 import threading
 import time
 from array import array
+from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Final
 
+from hexgate.utils.fingerprint import fingerprint
+
 Clock = Callable[[], float]
+
+logger = logging.getLogger("hexgate.runtime.agent_usage")
 
 
 class UsageMetric(StrEnum):
@@ -41,10 +51,48 @@ class OnUnavailable(StrEnum):
     DENY = "deny"  # the value is absent, so its constraints fail closed
 
 
+class UsageScopeKind(StrEnum):
+    """Whose usage a ledger or snapshot counts."""
+
+    AGENT = "agent"
+    USER = "user"
+
+
+@dataclass(frozen=True, slots=True)
+class UsageScope:
+    """One counted subject: the key of every ledger, snapshot and fetch."""
+
+    kind: UsageScopeKind
+    key: str
+
+    def __post_init__(self) -> None:
+        # Anonymous traffic is never counted, so no user scope is ever "".
+        if self.kind is UsageScopeKind.USER and not self.key:
+            raise ValueError("a user usage scope needs a non-empty user_id")
+
+    @classmethod
+    def agent(cls, name: str) -> UsageScope:
+        return cls(UsageScopeKind.AGENT, name)
+
+    @classmethod
+    def user(cls, user_id: str) -> UsageScope:
+        return cls(UsageScopeKind.USER, user_id)
+
+    def __str__(self) -> str:
+        # Every usage log line formats a scope through this. A user key is often an
+        # email, so it prints as a fingerprint, never as itself.
+        if self.kind is UsageScopeKind.USER:
+            return f"{self.kind} #{fingerprint(self.key)}"
+        return f"{self.kind} {self.key!r}"
+
+    def __repr__(self) -> str:
+        return f"UsageScope({self})"
+
+
 _SECONDS_PER_MINUTE: Final = 60
 _SECONDS_PER_HOUR: Final = 3_600
 _SECONDS_PER_DAY: Final = 86_400
-# The longest window ``agent_usage.*`` may register. A longer one would silently read
+# The longest window a usage path may register. A longer one would silently read
 # a truncated count, so the registry's windows are pinned against this.
 MAX_WINDOW_SECONDS: Final[float] = 30 * _SECONDS_PER_DAY
 # Three tiers, finest first. Fine buckets serve the snapshot cut-off, minutes old at
@@ -96,6 +144,35 @@ AGENT_USAGE_VOCABULARY: Final = (
     f"<metric>_<window>, metrics: {', '.join(sorted(USAGE_METRICS))}; "
     f"windows: {', '.join(USAGE_WINDOWS)}"
 )
+# user_usage.* reads the same metrics over the same windows, for one end user across
+# every agent of the project. One mapping, so the namespace builders below serve both.
+USER_USAGE_PATHS: Final[Mapping[str, UsagePath]] = AGENT_USAGE_PATHS
+KNOWN_USER_USAGE_PATHS: Final[frozenset[str]] = KNOWN_AGENT_USAGE_PATHS
+USER_USAGE_VOCABULARY: Final = AGENT_USAGE_VOCABULARY
+
+USER_CACHE_ENV: Final = "HEXGATE_USAGE_USER_CACHE"
+# End users whose usage one process keeps. Every ledger preallocates its buckets,
+# ~118 KB each, so this bounds user ledgers at ~1.2 GB.
+DEFAULT_USER_CACHE_SIZE: Final = 10_000
+
+
+def user_cache_size_from_env(environ: Mapping[str, str] = os.environ) -> int:
+    """``HEXGATE_USAGE_USER_CACHE``. A bad value logs and falls back to the default:
+    it runs when a policy binds, and must not stop agents."""
+    raw = environ.get(USER_CACHE_ENV)
+    if raw is None:
+        return DEFAULT_USER_CACHE_SIZE
+    try:
+        size = int(raw)
+    except ValueError:
+        size = 0
+    if size < 1:
+        logger.warning(
+            "ignoring %s=%r, using %d", USER_CACHE_ENV, raw, DEFAULT_USER_CACHE_SIZE
+        )
+        return DEFAULT_USER_CACHE_SIZE
+    return size
+
 
 # One signed 64-bit counter per metric per bucket.
 _ZERO_COUNTER: Final = array("q", [0])
@@ -166,8 +243,9 @@ class BucketSeries:
 
 
 class UsageLedger:
-    """One agent's usage in this process. Reads return every :class:`UsageMetric`,
-    zero when unused, so a reader never meets a missing key."""
+    """One :class:`UsageScope`'s usage in this process, an agent's or an end user's.
+    Reads return every :class:`UsageMetric`, zero when unused, so a reader never
+    meets a missing key."""
 
     def __init__(self, series: Sequence[BucketSeries], clock: Clock) -> None:
         """``series`` is finest first; a read uses the finest one whose retention
@@ -242,7 +320,7 @@ def ledger_namespace(
     *,
     current_run_age: float | None = None,
 ) -> dict[str, int]:
-    """The ``agent_usage`` mapping for ``paths``, from this process's ledger alone.
+    """A usage namespace for ``paths`` (either root), from this process's ledger alone.
 
     One locked ledger read covering every distinct window. Unknown paths raise
     ``KeyError``: callers pass only registered paths.
@@ -317,31 +395,60 @@ def _metric_value(totals: Mapping[UsageMetric, int], metric: str) -> int:
 
 
 class UsageLedgers:
-    """The process's ledgers by agent name. Off until :meth:`enable`, then on for
-    good, so a later policy re-adding a usage path finds its history intact."""
+    """The process's ledgers by scope. Each scope kind is off until :meth:`enable`,
+    then on for good, so a later policy re-adding a usage path finds its history
+    intact. Kinds switch independently: enabling agents never counts users.
 
-    def __init__(self, ledger_factory: Callable[[], UsageLedger]) -> None:
+    Agent ledgers are kept for good. User ledgers are an LRU: past capacity the
+    least recently used user's ledger is dropped, and that user starts again from
+    zero, the lenient direction."""
+
+    def __init__(
+        self,
+        ledger_factory: Callable[[], UsageLedger],
+        *,
+        user_capacity: Callable[[], int] = user_cache_size_from_env,
+    ) -> None:
         self._ledger_factory = ledger_factory
-        self._enabled = False
-        self._ledgers: dict[str, UsageLedger] = {}
+        # Resolved when users are enabled, not at import: bootstrap() loads .env after.
+        self._user_capacity_source = user_capacity
+        self._user_capacity = 0
+        # Rebound, never mutated, so a test can restore it by attribute.
+        self._enabled: frozenset[UsageScopeKind] = frozenset()
+        self._agent_ledgers: dict[UsageScope, UsageLedger] = {}
+        self._user_ledgers: OrderedDict[UsageScope, UsageLedger] = OrderedDict()
         self._lock = threading.Lock()
 
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
+    def is_enabled(self, kind: UsageScopeKind) -> bool:
+        return kind in self._enabled
 
-    def enable(self) -> None:
-        self._enabled = True
+    def enable(self, kind: UsageScopeKind) -> None:
+        with self._lock:
+            if kind is UsageScopeKind.USER and kind not in self._enabled:
+                self._user_capacity = self._user_capacity_source()
+            self._enabled |= {kind}
 
-    def ledger_for(self, agent: str) -> UsageLedger | None:
-        """``agent``'s ledger, created on first use; ``None`` while disabled."""
-        if not self._enabled:
+    def ledger_for(self, scope: UsageScope) -> UsageLedger | None:
+        """``scope``'s ledger, created on first use; ``None`` while its kind is off."""
+        if scope.kind not in self._enabled:
             return None
         with self._lock:
-            ledger = self._ledgers.get(agent)
+            if scope.kind is UsageScopeKind.USER:
+                return self._user_ledger_locked(scope)
+            ledger = self._agent_ledgers.get(scope)
             if ledger is None:
-                ledger = self._ledgers[agent] = self._ledger_factory()
+                ledger = self._agent_ledgers[scope] = self._ledger_factory()
             return ledger
 
+    def _user_ledger_locked(self, scope: UsageScope) -> UsageLedger:
+        ledger = self._user_ledgers.get(scope)
+        if ledger is not None:
+            self._user_ledgers.move_to_end(scope)
+            return ledger
+        ledger = self._user_ledgers[scope] = self._ledger_factory()
+        if len(self._user_ledgers) > self._user_capacity:
+            self._user_ledgers.popitem(last=False)
+        return ledger
 
-AGENT_USAGE_LEDGERS: Final[UsageLedgers] = UsageLedgers(new_usage_ledger)
+
+USAGE_LEDGERS: Final[UsageLedgers] = UsageLedgers(new_usage_ledger)

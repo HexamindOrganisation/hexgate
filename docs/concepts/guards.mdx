@@ -137,6 +137,38 @@ run-lifecycle `RunHooks` — a different thing. Rule of thumb: if it says `guard
 it's Hexgate's; if `hooks`, it's the framework's.
 </Note>
 
+## Turning a guard off from the policy
+
+The code decides what a guard does. The policy can only switch it on or off, with
+a top-level `guards:` block keyed by the guard's name (its function's
+`__name__`):
+
+```yaml
+guards:
+  block_secrets:
+    enabled: false   # skipped on every call
+```
+
+- A guard the policy doesn't mention runs. `enabled` is required in each entry.
+- The block is agent-wide. A `guards:` under a tool entry is rejected, and every
+  role must set the same values, or `hexgate policy validate` fails.
+- With `--manifest`, `validate` also fails on a name the agent doesn't declare
+  (`unknown-guard`) or one two of its guards share (`ambiguous-guard`).
+
+For the policy (and the dashboard) to know an agent's guards, its manifest has to
+declare them. `create_agent(guards=...)` does that for you. For an agent you build
+with a framework directly and then `register` or `serve`, stamp the list onto the
+object with `attach_guards`:
+
+```python
+from hexgate import attach_guards
+
+agent = attach_guards(agent, [block_secrets, cap_refund])
+```
+
+The manifest then lists them, and the wrappers use the stamped list when you don't
+pass `guards=`.
+
 ## Official plugins
 
 `hexgate.plugins` ships ready-to-use guards built on one shared secret detector, so

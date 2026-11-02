@@ -1,0 +1,12 @@
+starting_project: support_bot_single_file
+agent: support-bot
+request: Le support peut rembourser jusqu'à 30 EUR, pas au-delà, et uniquement en euros.
+expect:
+  decisions:
+    - { role: support, tool: refund_order, args: { order_id: o1, amount: 30, currency: EUR }, expect: allow }
+    - { role: support, tool: refund_order, args: { order_id: o1, amount: 31, currency: EUR }, expect: deny }
+    - { role: support, tool: refund_order, args: { order_id: o1, amount: 20, currency: USD }, expect: deny }
+    - { role: support, tool: refund_order, args: { order_id: o1, amount: 10, currency: CHF }, expect: deny }
+    - { role: support, tool: refund_order, args: { order_id: o1, amount: 10, currency: EUR }, expect: allow }
+    - { role: support, tool: refund_order, args: { order_id: o1, amount: 10, currency: GBP }, expect: deny }
+    - { role: support, tool: refund_order, args: { order_id: o1, amount: 30.5, currency: EUR }, expect: deny }

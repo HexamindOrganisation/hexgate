@@ -507,7 +507,8 @@ docstring (`features/audit/service.py`) is the reference for all five. A
 replay also duplicates DLQ envelopes, which carry no dedup key at all
 (consumers of the DLQ must tolerate that).
 
-The `usage_minute` views (§5.1) are not forgiving the same way: a view fires
+The `usage_minute` and `usage_minute_user` views (§5.1) are not forgiving the
+same way: a view fires
 once per inserted block, before any merge, so every copy that reaches an insert
 is summed for good. That is why step 4 dedups across polls and step 6 never
 repeats an acked insert. What still gets through is over-counted: a replay
@@ -738,6 +739,45 @@ TTL minute + INTERVAL 35 DAY
   `backfills/0005_usage_minute.sql` before they restart (`platform/DEPLOY.md`).
   The same file rebuilds the rollup after a `TRUNCATE`.
 
+#### `usage_minute_user` — per-minute usage per end user
+
+The rollup behind `user_usage.*` windows, and the source of
+`POST /v1/usage/users:read` and of the dashboard's
+`GET /v1/projects/{project_id}/usage/top-users` ranking. A mechanical copy of
+`usage_minute` with the key column swapped and anonymous rows filtered out,
+pinned by `platform/api/tests/core/test_usage_minute_sql.py`.
+
+```sql
+CREATE TABLE hexgate_audit.usage_minute_user
+(
+  project_id, user_id String, minute DateTime('UTC'),
+  invocations, tool_calls, denials, llm_calls, input_tokens, output_tokens  -- UInt64
+)
+ENGINE = SummingMergeTree
+PARTITION BY toYYYYMM(minute)
+ORDER BY (project_id, user_id, minute)
+TTL minute + INTERVAL 35 DAY
+```
+
+| View | Source | Writes |
+|---|---|---|
+| `usage_minute_user_from_runs` | `agent_run` | `invocations` |
+| `usage_minute_user_from_decisions` | `policy_decision` | `tool_calls`, `denials`, with the same decision filter as `usage_minute_from_decisions` |
+| `usage_minute_user_from_llm` | `llm_invocation` | `llm_calls`, `input_tokens`, `output_tokens` |
+
+- **`user_id` is a plain `String`.** A B2C project has far more distinct users
+  than `LowCardinality`'s dictionary suits.
+- **No `''` row.** Every view and the backfill filter `user_id != ''`:
+  anonymous traffic is not one user, and pooling it would let strangers deny
+  each other. The SDK reads a missing `user_id` as `unavailable` instead.
+  `usage_minute` still counts anonymous traffic for its agent.
+- **Project-wide.** Every agent's activity counts for the user, so one user
+  across two agents is one row per minute, and a user read is one key range.
+- **Migration:** `migrations/0006_add_usage_minute_user.sql`, applied with the
+  writers stopped, then the one-time 30-day fill
+  `backfills/0006_usage_minute_user.sql` before they restart
+  (`platform/DEPLOY.md`). The same file rebuilds the rollup after a `TRUNCATE`.
+
 ### 5.2 Insert semantics
 
 The enricher writes through `insert_decisions_batch` /
@@ -765,6 +805,13 @@ HTTP ingest uses the single-row `insert_decision`, whose settings are:
 
 ## 6. Privacy & data-handling notes
 
+- **`user_id` in the usage rollup.** `usage_minute_user` keeps `user_id`, often
+  an email, for 35 days (TTL). An erasure request needs `ALTER TABLE
+  hexgate_audit.usage_minute_user DELETE WHERE user_id = …` alongside the raw
+  tables. The SDK read takes `user_id` in a POST body, never in the URL, so it
+  never reaches proxy or access logs. The dashboard's top-users route takes no
+  `user_id` and returns them to org members only, with
+  `Cache-Control: private, no-store`.
 - **`arguments` carries tool inputs** (paths, payloads, possibly PII). It is
   transmitted to the platform and stored (compressed) for up to 180 days. The
   default `base_url` is **plaintext `http://localhost:8000`**; production
@@ -908,7 +955,7 @@ sort key `(project_id, agent_name, outcome, occurred_at, event_id)` and
    flood the log to bury real activity. Needs a per-project token bucket
    (`429 + Retry-After`; the SDK already logs-and-drops on ≥400) plus an
    ingest-volume-per-project alert.
-8. **`usage_minute` over-counts, never under-counts, at the edges** — a replay
+8. **`usage_minute` and `usage_minute_user` over-count, never under-count, at the edges** — a replay
    after an enricher restart or rebalance (the cross-poll cache is in memory),
    a cache overflow (logged), an insert stored in whole or in part while the
    client saw an error, the driver's silent re-send on a dropped keep-alive,

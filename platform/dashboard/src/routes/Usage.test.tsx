@@ -15,6 +15,7 @@
  *   6. The no-project empty state renders when the active org has none.
  */
 
+import { QueryClient } from "@tanstack/react-query";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -85,9 +86,27 @@ const ORGS = [
   },
 ];
 
+// Ids and values distinct from SUMMARY's, so text queries stay unambiguous.
+const HEAVY_USER = "heavy@example.com";
+const LIGHT_USER = "light@example.com";
+const TOP_USERS = {
+  window: "24h",
+  metric: "total_tokens",
+  users: [
+    { user_id: HEAVY_USER, value: 52_000 },
+    { user_id: LIGHT_USER, value: 7_500 },
+  ],
+};
+const TOP_USERS_PATH = `/v1/projects/${PROJECT}/usage/top-users`;
+
 /** Same fetch-stub helper pattern as Audit.test.tsx, recording every
- * requested URL so tests can assert what filter state reached the API. */
-function stubFetch(summary: unknown = SUMMARY): string[] {
+ * requested URL so tests can assert what filter state reached the API.
+ * A `Response` or `Promise` for `topUsers` is returned as is (e.g. a 503,
+ * or a read that never lands). */
+function stubFetch(
+  summary: unknown = SUMMARY,
+  topUsers: unknown = TOP_USERS,
+): string[] {
   const calls: string[] = [];
   vi.spyOn(window, "fetch").mockImplementation(
     async (input: RequestInfo | URL) => {
@@ -109,6 +128,10 @@ function stubFetch(summary: unknown = SUMMARY): string[] {
           ]);
         case `/v1/projects/${PROJECT}/llm/summary`:
           return json(summary);
+        case TOP_USERS_PATH:
+          return topUsers instanceof Response || topUsers instanceof Promise
+            ? topUsers
+            : json(topUsers);
         default:
           return new Response("not found", { status: 404 });
       }
@@ -346,5 +369,149 @@ describe("UsagePage", () => {
     renderWithProviders(<UsagePage />);
 
     expect(await screen.findByText("No project selected")).toBeInTheDocument();
+  });
+
+  describe("top users card", () => {
+    const topUsersCalls = (calls: string[]) =>
+      calls.filter((u) => u.startsWith(TOP_USERS_PATH));
+    const card = async () => screen.findByRole("region", { name: "Top users" });
+
+    it("ranks users with the default window, metric and limit", async () => {
+      const calls = stubFetch();
+      renderWithProviders(<UsagePage />);
+
+      const region = await card();
+      expect(await within(region).findByText(HEAVY_USER)).toBeInTheDocument();
+      expect(within(region).getByText(LIGHT_USER)).toBeInTheDocument();
+      expect(within(region).getByText("52,000")).toBeInTheDocument();
+      expect(within(region).getByText("7,500")).toBeInTheDocument();
+      expect(topUsersCalls(calls)).toEqual([
+        `${TOP_USERS_PATH}?window=24h&metric=total_tokens&limit=10`,
+      ]);
+    });
+
+    it("its window tabs and metric select refetch with the new scope", async () => {
+      const calls = stubFetch();
+      const user = userEvent.setup();
+      renderWithProviders(<UsagePage />);
+
+      const region = await card();
+      await within(region).findByText(HEAVY_USER);
+      await user.click(within(region).getByRole("tab", { name: "7 days" }));
+      await user.click(
+        within(region).getByText("by total tokens").closest("button")!,
+      );
+      await user.click(
+        await screen.findByRole("option", { name: "by denials" }),
+      );
+
+      await waitFor(() => {
+        expect(topUsersCalls(calls)).toContain(
+          `${TOP_USERS_PATH}?window=7d&metric=denials&limit=10`,
+        );
+      });
+    });
+
+    it("clicking a user filters the page to them; a second click clears it", async () => {
+      const calls = stubFetch();
+      const user = userEvent.setup();
+      renderWithProviders(<UsagePage />);
+
+      const region = await card();
+      const bar = (await within(region).findByText(HEAVY_USER)).closest(
+        ".mb-\\[11px\\]",
+      ) as HTMLElement;
+
+      await user.click(bar);
+      await waitFor(() => {
+        expect(useUsageFilters.getState().filters.user).toBe(HEAVY_USER);
+      });
+      await waitFor(() => {
+        expect(
+          calls.some(
+            (u) =>
+              u.includes("/llm/summary") &&
+              u.includes(`user=${encodeURIComponent(HEAVY_USER)}`),
+          ),
+        ).toBe(true);
+      });
+
+      await user.click(bar);
+      await waitFor(() => {
+        expect(useUsageFilters.getState().filters.user).toBe("");
+      });
+    });
+
+    it("a clicked user absent from the summary still shows in the user select", async () => {
+      stubFetch();
+      const user = userEvent.setup();
+      renderWithProviders(<UsagePage />);
+
+      const region = await card();
+      const bar = (await within(region).findByText(HEAVY_USER)).closest(
+        ".mb-\\[11px\\]",
+      ) as HTMLElement;
+      await user.click(bar);
+
+      await waitFor(() => {
+        expect(
+          screen
+            .getAllByRole("combobox")
+            .some((trigger) => trigger.textContent === HEAVY_USER),
+        ).toBe(true);
+      });
+    });
+
+    it("a failed read shows in the card only", async () => {
+      stubFetch(SUMMARY, new Response("unavailable", { status: 503 }));
+      renderWithProviders(<UsagePage />);
+
+      expect(
+        await screen.findByText("Top users are unavailable right now."),
+      ).toBeInTheDocument();
+      expect(screen.getByText("1.20M")).toBeInTheDocument();
+    });
+
+    it("a failed background refetch keeps the loaded rows", async () => {
+      stubFetch();
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      renderWithProviders(<UsagePage />, { client });
+
+      const region = await card();
+      await within(region).findByText(HEAVY_USER);
+      stubFetch(SUMMARY, new Response("unavailable", { status: 503 }));
+      await act(() =>
+        client.refetchQueries({ queryKey: ["usage", "top-users"] }),
+      );
+      // React Query notifies observers on a later tick.
+      await act(() => new Promise((r) => setTimeout(r, 0)));
+
+      expect(within(region).getByText(HEAVY_USER)).toBeInTheDocument();
+      expect(
+        within(region).queryByText("Top users are unavailable right now."),
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows the empty message when no user has activity", async () => {
+      stubFetch(SUMMARY, { ...TOP_USERS, users: [] });
+      renderWithProviders(<UsagePage />);
+
+      expect(
+        await screen.findByText("No user activity in this window."),
+      ).toBeInTheDocument();
+    });
+
+    it("reads as loading, not idle, until the first response lands", async () => {
+      stubFetch(SUMMARY, new Promise<Response>(() => {}));
+      renderWithProviders(<UsagePage />);
+
+      const region = await card();
+      expect(within(region).getByText("Loading…")).toBeInTheDocument();
+      expect(
+        within(region).queryByText("No user activity in this window."),
+      ).not.toBeInTheDocument();
+    });
   });
 });

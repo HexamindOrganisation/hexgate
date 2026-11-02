@@ -1,0 +1,5 @@
+# Capability for the billing role. It grants calling billing-bot as a tool, and
+# tries to block admin-bot here instead of in the boundary.
+agents:
+  billing-bot: { via: [tool], mode: allow }
+  admin-bot: { mode: deny }

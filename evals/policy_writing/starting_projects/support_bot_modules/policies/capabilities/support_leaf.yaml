@@ -1,0 +1,5 @@
+# Capability for the support role only. It only grants: sending email, and
+# escalating with a human's approval.
+tools:
+  send_email: { mode: allow }
+  escalate: { mode: approval_required }

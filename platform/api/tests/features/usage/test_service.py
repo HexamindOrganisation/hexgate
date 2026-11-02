@@ -13,26 +13,20 @@ from hexgate_api.core.clickhouse import SchemaOutOfDate
 from hexgate_api.features.usage import service
 from hexgate_api.features.usage.paths import UsageMetric, UsageWindowSpec
 from hexgate_api.features.usage.service import (
-    _METRIC_SQL,
-    _READ_COLUMNS,
+    METRIC_SQL,
+    AGENT_ROLLUP,
     QUERY_SETTINGS,
+    USER_ROLLUP,
     UsageMemo,
     UsageReadout,
     build_usage_query,
     read_usage,
 )
+from tests.features.usage.fakes import FakeClock
 
 _HOUR = UsageWindowSpec(UsageMetric.INVOCATIONS, 3_600)
 _DAY_TOKENS = UsageWindowSpec(UsageMetric.TOTAL_TOKENS, 86_400)
 _AS_OF = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
-
-
-class _FakeClock:
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        return self.now
 
 
 def _readout(value: int = 0) -> UsageReadout:
@@ -49,7 +43,7 @@ def _key(name: str = "a") -> service.UsageMemoKey:
 
 
 def test_the_query_reads_each_spec_over_its_window_in_one_scan() -> None:
-    sql, params = build_usage_query("p", "a", [_HOUR, _DAY_TOKENS])
+    sql, params = build_usage_query(AGENT_ROLLUP, "p", "a", [_HOUR, _DAY_TOKENS])
 
     assert (
         "sumIf(invocations, minute >= toStartOfMinute(as_of - toIntervalSecond({w0:UInt32}))) AS v0"
@@ -74,7 +68,7 @@ def test_the_query_reads_each_spec_over_its_window_in_one_scan() -> None:
 def test_no_request_string_reaches_the_sql_text() -> None:
     agent_name, project_id = "x' OR 1=1 --", "p'"
 
-    sql, params = build_usage_query(project_id, agent_name, [_HOUR])
+    sql, params = build_usage_query(AGENT_ROLLUP, project_id, agent_name, [_HOUR])
 
     assert agent_name not in sql
     assert project_id not in sql
@@ -89,15 +83,76 @@ def test_specs_with_the_same_window_share_one_parameter() -> None:
         UsageWindowSpec(UsageMetric.DENIALS, 300),
     ]
 
-    sql, params = build_usage_query("p", "a", specs)
+    sql, params = build_usage_query(AGENT_ROLLUP, "p", "a", specs)
 
     assert {k for k in params if k.startswith("w")} == {"w0", "w1"}
     assert params["scan"] == 3_600
     assert sql.count("{w0:UInt32}") == 2
 
 
+def test_the_agent_query_is_unchanged_by_the_rollup_parameter() -> None:
+    sql, params = build_usage_query(AGENT_ROLLUP, "p", "a", [_HOUR, _DAY_TOKENS])
+
+    assert sql == (
+        "WITH now('UTC') AS as_of\n"
+        "SELECT\n"
+        "    as_of,\n"
+        "    sumIf(invocations, minute >= toStartOfMinute(as_of - "
+        "toIntervalSecond({w0:UInt32}))) AS v0,\n"
+        "    sumIf(input_tokens + output_tokens, minute >= toStartOfMinute(as_of - "
+        "toIntervalSecond({w1:UInt32}))) AS v1\n"
+        "FROM usage_minute\n"
+        "WHERE project_id = {project_id:String}\n"
+        "  AND agent_name = {agent_name:String}\n"
+        "  AND minute >= toStartOfMinute(as_of - toIntervalSecond({scan:UInt32}))"
+    )
+    assert params == {
+        "project_id": "p",
+        "agent_name": "a",
+        "w0": 3_600,
+        "w1": 86_400,
+        "scan": 86_400,
+    }
+
+
+def test_the_user_query_reads_the_user_rollup_by_a_bound_user_id() -> None:
+    user_id = "alice@x"
+
+    sql, params = build_usage_query(USER_ROLLUP, "p", user_id, [_HOUR])
+
+    assert "FROM usage_minute_user\n" in sql
+    assert "  AND user_id = {user_id:String}\n" in sql
+    assert "agent_name" not in sql
+    assert user_id not in sql
+    assert params["user_id"] == user_id
+    assert "agent_name" not in params
+
+
+def test_a_hostile_user_id_never_reaches_the_sql_text() -> None:
+    user_id = "x' OR 1=1 --"
+
+    sql, params = build_usage_query(USER_ROLLUP, "p", user_id, [_HOUR])
+
+    assert user_id not in sql
+    assert params["user_id"] == user_id
+
+
+def test_each_rollup_reads_its_key_column() -> None:
+    metrics = [
+        "invocations",
+        "tool_calls",
+        "denials",
+        "llm_calls",
+        "input_tokens",
+        "output_tokens",
+    ]
+
+    assert AGENT_ROLLUP.read_columns == ["project_id", "agent_name", "minute", *metrics]
+    assert USER_ROLLUP.read_columns == ["project_id", "user_id", "minute", *metrics]
+
+
 def test_every_metric_has_its_sql() -> None:
-    assert set(_METRIC_SQL) == set(UsageMetric)
+    assert set(METRIC_SQL) == set(UsageMetric)
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +164,7 @@ def test_read_usage_maps_values_back_to_specs_by_position() -> None:
     client = MagicMock()
     client.query.return_value.result_rows = [[_AS_OF, 7, 1_234]]
 
-    readout = read_usage(client, "p", "a", [_HOUR, _DAY_TOKENS])
+    readout = read_usage(client, AGENT_ROLLUP, "p", "a", [_HOUR, _DAY_TOKENS])
 
     assert readout == UsageReadout(_AS_OF, {_HOUR: 7, _DAY_TOKENS: 1_234})
     assert client.query.call_args.kwargs["settings"] == QUERY_SETTINGS
@@ -119,7 +174,7 @@ def test_a_naive_as_of_is_read_as_utc() -> None:
     client = MagicMock()
     client.query.return_value.result_rows = [[_AS_OF.replace(tzinfo=None), 0]]
 
-    assert read_usage(client, "p", "a", [_HOUR]).as_of == _AS_OF
+    assert read_usage(client, AGENT_ROLLUP, "p", "a", [_HOUR]).as_of == _AS_OF
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +183,7 @@ def test_a_naive_as_of_is_read_as_utc() -> None:
 
 
 async def test_a_hit_inside_the_ttl_does_not_load_again() -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     memo = UsageMemo(1.0, 10, clock)
     loads: list[int] = []
 
@@ -146,7 +201,7 @@ async def test_a_hit_inside_the_ttl_does_not_load_again() -> None:
 
 
 async def test_concurrent_misses_on_one_key_share_one_load() -> None:
-    memo = UsageMemo(1.0, 10, _FakeClock())
+    memo = UsageMemo(1.0, 10, FakeClock())
     release = asyncio.Event()
     loads: list[int] = []
 
@@ -164,7 +219,7 @@ async def test_concurrent_misses_on_one_key_share_one_load() -> None:
 
 
 async def test_a_failed_load_is_not_memoized() -> None:
-    memo = UsageMemo(1.0, 10, _FakeClock())
+    memo = UsageMemo(1.0, 10, FakeClock())
 
     async def fail() -> UsageReadout:
         raise DatabaseError("boom")
@@ -179,7 +234,7 @@ async def test_a_failed_load_is_not_memoized() -> None:
 
 
 async def test_a_failure_does_not_evict_a_newer_entry_for_the_same_key() -> None:
-    memo = UsageMemo(1.0, 10, _FakeClock())
+    memo = UsageMemo(1.0, 10, FakeClock())
     release_old = asyncio.Event()
     newer_loads: list[int] = []
 
@@ -205,7 +260,7 @@ async def test_a_failure_does_not_evict_a_newer_entry_for_the_same_key() -> None
 
 
 async def test_a_load_slower_than_the_ttl_is_still_shared() -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     memo = UsageMemo(1.0, 10, clock)
     release = asyncio.Event()
     loads: list[int] = []
@@ -227,7 +282,7 @@ async def test_a_load_slower_than_the_ttl_is_still_shared() -> None:
 
 
 async def test_the_ttl_runs_from_when_the_load_completes() -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     memo = UsageMemo(1.0, 10, clock)
     release = asyncio.Event()
     loads: list[int] = []
@@ -250,7 +305,7 @@ async def test_the_ttl_runs_from_when_the_load_completes() -> None:
 
 
 async def test_a_full_memo_keeps_a_pending_load_over_an_expired_one() -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     memo = UsageMemo(1.0, 2, clock)
     release = asyncio.Event()
     loads: list[str] = []
@@ -280,7 +335,7 @@ async def test_a_full_memo_keeps_a_pending_load_over_an_expired_one() -> None:
 
 
 async def test_a_full_memo_drops_expired_entries_first_then_the_oldest() -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     memo = UsageMemo(1.0, 2, clock)
     loads: list[str] = []
 
@@ -319,7 +374,7 @@ def _counting_loader(loads: list[str]):
 
 
 async def test_a_full_memo_never_evicts_a_pending_load() -> None:
-    memo = UsageMemo(1.0, 2, _FakeClock())
+    memo = UsageMemo(1.0, 2, FakeClock())
     release = asyncio.Event()
     loads: list[str] = []
     loader = _counting_loader(loads)
@@ -339,7 +394,7 @@ async def test_a_full_memo_never_evicts_a_pending_load() -> None:
 
 
 async def test_a_memo_full_of_pending_loads_overflows_rather_than_drops_one() -> None:
-    memo = UsageMemo(1.0, 1, _FakeClock())
+    memo = UsageMemo(1.0, 1, FakeClock())
     release = asyncio.Event()
     loads: list[str] = []
     loader = _counting_loader(loads)
@@ -359,7 +414,7 @@ async def test_a_memo_full_of_pending_loads_overflows_rather_than_drops_one() ->
 
 
 async def test_reloading_an_expired_key_does_not_evict_a_live_one() -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     memo = UsageMemo(1.0, 2, clock)
     loads: list[str] = []
     loader = _counting_loader(loads)
@@ -388,17 +443,34 @@ def _describing(columns: list[str]) -> MagicMock:
     return client
 
 
+_BOTH_ROLLUPS_COLUMNS = sorted(
+    set(AGENT_ROLLUP.read_columns) | set(USER_ROLLUP.read_columns)
+)
+
+
 def test_verify_schema_happy_path() -> None:
-    service.verify_schema(_describing(list(_READ_COLUMNS)))  # no raise
+    service.verify_schema(_describing(_BOTH_ROLLUPS_COLUMNS))  # no raise
 
 
 def test_when_a_read_column_is_missing_then_verify_schema_names_it() -> None:
-    columns = [c for c in _READ_COLUMNS if c != "input_tokens"]
+    columns = [c for c in _BOTH_ROLLUPS_COLUMNS if c != "input_tokens"]
 
     with pytest.raises(SchemaOutOfDate) as exc:
         service.verify_schema(_describing(columns))
 
-    assert exc.value.missing == {"usage_minute": ["input_tokens"]}
+    assert exc.value.missing == {
+        "usage_minute": ["input_tokens"],
+        "usage_minute_user": ["input_tokens"],
+    }
+
+
+def test_when_the_user_key_column_is_missing_then_verify_schema_names_it() -> None:
+    columns = [c for c in _BOTH_ROLLUPS_COLUMNS if c != "user_id"]
+
+    with pytest.raises(SchemaOutOfDate) as exc:
+        service.verify_schema(_describing(columns))
+
+    assert exc.value.missing == {"usage_minute_user": ["user_id"]}
 
 
 def test_when_the_table_is_absent_then_verify_schema_reports_every_column() -> None:
@@ -411,4 +483,34 @@ def test_when_the_table_is_absent_then_verify_schema_reports_every_column() -> N
     with pytest.raises(SchemaOutOfDate) as exc:
         service.verify_schema(client)
 
-    assert exc.value.missing == {"usage_minute": sorted(_READ_COLUMNS)}
+    assert exc.value.missing == {
+        "usage_minute": sorted(AGENT_ROLLUP.read_columns),
+        "usage_minute_user": sorted(USER_ROLLUP.read_columns),
+    }
+
+
+def test_when_only_the_user_rollup_is_absent_then_only_it_is_reported() -> None:
+    """The boot gate: an API on a volume without migration 0006 refuses to start."""
+    described = _describing(AGENT_ROLLUP.read_columns).query.return_value
+
+    def query(sql: str) -> MagicMock:
+        if "usage_minute_user" in sql:
+            raise DatabaseError(
+                "Received ClickHouse exception, code: 60, server response: Code: 60. "
+                "DB::Exception: Table hexgate_audit.usage_minute_user does not exist"
+            )
+        return described
+
+    client = MagicMock()
+    client.query.side_effect = query
+
+    with pytest.raises(SchemaOutOfDate) as exc:
+        service.verify_schema(client)
+
+    assert exc.value.missing == {"usage_minute_user": sorted(USER_ROLLUP.read_columns)}
+
+
+def test_user_reads_get_their_own_pool_and_memo() -> None:
+    """README G9: a burst of cold users must not queue or evict agent reads."""
+    assert service.get_user_usage_executor() is not service.get_usage_executor()
+    assert service.get_user_usage_memo() is not service.get_usage_memo()

@@ -369,11 +369,18 @@ _START = rf"(?<!{_ALNUM})(?<![0-9][.,])"
 _END = rf"(?!{_ALNUM})(?![.,][0-9])"
 
 
+_APOSTROPHES = str.maketrans("’‘", "''")
+
+
 def _mentions(answer: str, word: str) -> bool:
     """`word` as a whole word or phrase: "no" doesn't match "know", while
-    "approval" still matches inside `approval_required`. Inflections don't
-    match ("refund" vs "refunds"), so a case lists each form it accepts."""
-    pattern = rf"{_START}{re.escape(word)}{_END}"
+    "approval" still matches inside `approval_required`. Curly apostrophes
+    count as straight ones, and a word not ending in "s" also matches an
+    -s/-es plural ("tier" matches "tiers"); other inflections don't ("approximate"
+    vs "approximately"), so a case lists each form it accepts."""
+    answer, word = answer.translate(_APOSTROPHES), word.translate(_APOSTROPHES)
+    plural = "" if word.lower().endswith("s") else "(e?s)?"
+    pattern = rf"{_START}{re.escape(word)}{plural}{_END}"
     return re.search(pattern, answer, re.IGNORECASE) is not None
 
 
@@ -385,7 +392,11 @@ def answer_checks(expect: dict, answer: str) -> list[Check]:
         detail = f"found {hit}" if hit else f"none of {words}"
         checks.append(Check("answer mentions one of", bool(hit), detail))
     if words := expect.get("mentions_all"):
-        missing = [w for w in words if not _mentions(answer, w)]
+        missing = [
+            w
+            for w in words
+            if not any(_mentions(answer, a) for a in ([w] if isinstance(w, str) else w))
+        ]
         detail = f"missing {missing}" if missing else ""
         checks.append(Check("answer mentions all of", not missing, detail))
     return checks

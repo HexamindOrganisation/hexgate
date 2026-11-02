@@ -16,16 +16,12 @@ import pytest
 import pytest_asyncio
 import yaml
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
-from sqlmodel import SQLModel, select
-from sqlmodel.ext.asyncio.session import AsyncSession
+from sqlmodel import select
 
 from hexgate_api.constants import DEFAULT_USER_ID
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.main import app
 from hexgate_api.models import PolicyModule, RoleBinding
-from hexgate_api.seeds.defaults import ensure_default_project
 
 # Actor for the service-level store writes below. The store requires one (issue
 # #160) so a route can't forget to pass it; these tests seed via
@@ -40,22 +36,6 @@ BOUNDARY = (
 )
 READ_ONLY = "tools:\n  view_orders: { mode: allow }\n"
 PAYMENTS = "tools:\n  refund_order: { mode: allow }\n"
-
-
-@pytest_asyncio.fixture
-async def session_factory():
-    engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as bootstrap:
-        await ensure_default_project(bootstrap)
-    yield factory
-    await engine.dispose()
 
 
 @pytest_asyncio.fixture
@@ -1706,46 +1686,9 @@ async def test_seeded_compose_demo_resolves(session_factory) -> None:
         assert bmode("default", "agent.run") == "deny"
 
 
-def _find_demo_notebook():
-    """Locate deploy/compose_support_demo.py from the test file, or None."""
-    from pathlib import Path
-
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / "deploy" / "compose_support_demo.py"
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def _notebook_dict(src: str, name: str) -> dict:
-    """Return the literal dict assigned to ``name`` in the notebook source.
-
-    Parses the source with ``ast`` and walks for the assignment, rather than a
-    regex over the text — so a cosmetic reformat (re-indent, a value that happens
-    to contain ``\\n    }``) can't break the notebook↔seed drift guard.
-    """
-    import ast
-
-    tree = ast.parse(src)
-    for node in ast.walk(tree):
-        targets = node.targets if isinstance(node, ast.Assign) else []
-        if any(isinstance(t, ast.Name) and t.id == name for t in targets):
-            return ast.literal_eval(node.value)
-    raise AssertionError(f"could not locate {name} in the demo notebook")
-
-
-def test_notebook_policy_files_match_seed() -> None:
-    # The marimo demo (deploy/compose_support_demo.py) inlines the same compose
-    # policy the API seeds, kept aligned by hand. Assert the two copies are
-    # byte-identical so an edit to one can't silently drift from the other.
-    from hexgate_api.features.policy_modules.seed_data import SEED_POLICY_FILES
-
-    notebook = _find_demo_notebook()
-    if notebook is None:
-        pytest.skip("marimo demo notebook not present in this checkout")
-
-    src = notebook.read_text(encoding="utf-8")
-    assert _notebook_dict(src, "_FILES") == SEED_POLICY_FILES
+# The notebook↔seed drift guard (every showcase demo's inlined ``_FILES`` must
+# stay byte-identical to the policy the API seeds) is parametrized over all demos
+# in test_notebook_drift.py.
 
 
 # NB: billing_bot's role-aware refund caps used to live in-kernel (the notebook's

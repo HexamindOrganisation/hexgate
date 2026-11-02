@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from hexgate_api.constants import OAUTH_SCOPE_KEY
 from hexgate_api.core.db import get_session
 from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.tokens import TokenActor, require_project, require_project_actor
@@ -131,6 +132,7 @@ def _build_agent_manifest_view(
 @router.get(
     "/projects/{project_id}/agents/manifest",
     response_model=list[AgentManifestView],
+    openapi_extra={OAUTH_SCOPE_KEY: "agents:read"},
     dependencies=[Depends(require_org_member)],
 )
 async def api_list_agent_manifests(

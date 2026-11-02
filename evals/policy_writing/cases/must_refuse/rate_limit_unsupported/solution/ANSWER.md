@@ -1,0 +1,1 @@
+Per-window caps (agent_usage.*) exist but are soft and count every tool call, not refunds, so 10 refunds per hour can't be enforced exactly in the policy. Instead you can bound refunds per run (run.calls_of_this_tool), require an approval on each refund, or put a limiter in the downstream refund service. No policy change made.

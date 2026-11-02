@@ -1,0 +1,14 @@
+starting_project: support_bot_sub_agents
+agent: front-desk
+request: Never allow more than 3 handoffs in a row.
+note: Handoff depth is a runner setting (HexgateRunner(max_handoff_depth=3)), not a policy rule, and no run.* counter counts handoffs.
+expect:
+  no_changes: true
+  mentions_all:
+    - [handoff, "hand-off", "hand off", max_handoff_depth, runner, HexgateRunner, transfer, transfers]
+    - ["no", "not", "isn't", "is not", "doesn't", "does not", "didn't", "did not", "won't", "cannot", "can't", "none", "unable", "unchanged", "unavailable", "lacks", "unknown"]
+  decisions:
+    - { role: support, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, run_facts: { tool_calls: 4 }, expect: allow }
+    - { roles: [default, support, billing], tool: "agent.handoff:billing-bot", args: {}, run_facts: { tool_calls: 10, llm_calls: 10 }, expect: allow }
+    - { roles: [default, support, billing], tool: "agent.handoff:refund-bot", args: {}, run_facts: { tool_calls: 10, llm_calls: 10 }, expect: allow }
+    - { roles: [default, support, billing], tool: "agent.handoff:admin-bot", args: {}, run_facts: { tool_calls: 10, llm_calls: 10 }, expect: allow }

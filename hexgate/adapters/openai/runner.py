@@ -208,7 +208,10 @@ class HexgateRunner:
         if binding is None:
             resolved = resolve_policy(name, api_key=self.api_key, client=self._client)
             enforcer = build_enforcer(
-                resolved.engine, agent_name=name, api_key=self.api_key
+                resolved.engine,
+                agent_name=name,
+                api_key=self.api_key,
+                client=self._client,
             )
             # Handoff reach is enforced (on_handoff). Agent-as-tool reach is
             # enforced too when the SDK tags as-tools with their origin (wrap_tool

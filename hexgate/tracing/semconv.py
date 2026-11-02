@@ -86,6 +86,8 @@ HINT = "sec_ai.hint"
 ARGUMENTS = "sec_ai.arguments"
 ATTRIBUTES = "sec_ai.attributes"
 USAGE_STATE = "sec_ai.usage_state"
+USER_USAGE_STATE = "sec_ai.user_usage_state"
+USAGE_IDENTITY = "sec_ai.usage_identity"
 
 # --- Run attribution (SCOPE_AUDIT; RUN_ID also on SCOPE_USAGE, SCOPE_MESSAGES,
 # and required on SCOPE_RUNS) ---------------------------------------------------

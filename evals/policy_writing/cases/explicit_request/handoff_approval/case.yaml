@@ -1,0 +1,7 @@
+starting_project: support_bot_sub_agents
+agent: front-desk
+request: Support may hand the conversation off to billing-bot, but only with a human approval. Support may not call billing-bot as a tool.
+expect:
+  decisions:
+    - { role: support, tool: "agent.handoff:billing-bot", args: {}, expect: approval_required }
+    - { role: support, tool: billing_bot, args: { input: i }, expect: deny }

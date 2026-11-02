@@ -7,6 +7,8 @@ a 404). These tests stub that seam so no platform is needed.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -135,6 +137,31 @@ def test_wrap_shares_one_enforcer_between_tools_and_binding(
 
     assert isinstance(binding.enforcer, PolicyEnforcer)
     assert binding.enforcer.agent_name == "my_agent"
+
+
+@pytest.mark.parametrize("supplied", [True, False], ids=["client", "no-client"])
+def test_wrap_passes_the_callers_client_to_the_enforcer(
+    resolved: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    enforcer_clients: Callable[[ModuleType], list[Any]],
+    supplied: bool,
+) -> None:
+    """Usage reads and audit follow the caller's client; ``None`` keeps the env
+    fallback."""
+    from hexgate.cloud.client import HexgateClient, HexgateConfig
+    from hexgate.security import usage_source
+
+    monkeypatch.setattr(usage_source, "_usage_sources", {})
+    client = (
+        HexgateClient(HexgateConfig(base_url="https://other.example", api_key="k"))
+        if supplied
+        else None
+    )
+    clients = enforcer_clients(wrapper_mod)
+
+    wrap_google_agent(_make_agent(), api_key="k", client=client)
+
+    assert clients == [client]
 
 
 # ---------------------------------------------------------------------------

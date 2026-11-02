@@ -1,0 +1,7 @@
+# Credits capability, for support and billing. It only grants: issuing a
+# credit of at most 100, with a human's approval.
+tools:
+  issue_credit:
+    mode: approval_required
+    constraints:
+      - args.amount <= 100

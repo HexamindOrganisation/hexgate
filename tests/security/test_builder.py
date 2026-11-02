@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
-from hexgate.runtime.agent_usage import KNOWN_AGENT_USAGE_PATHS
+from hexgate.runtime.agent_usage import KNOWN_AGENT_USAGE_PATHS, KNOWN_USER_USAGE_PATHS
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS, RUN_PATH_TYPES, RunFacts
 from hexgate.security import (
     AGENT_RUN_TOOL,
@@ -18,8 +20,10 @@ from hexgate.security import (
     assert_denies,
     assert_needs_approval,
     run_namespace,
+    user_usage_namespace,
 )
 from hexgate.security.constraints import ConstraintParseError
+from hexgate.security.usage_inputs import AGENT_USAGE_ROOT, USER_USAGE_ROOT
 
 # ---------------------------------------------------------------------------
 # C — typed constraint constructors emit the grammar strings the parser accepts
@@ -390,46 +394,77 @@ def test_a_wrong_typed_cap_is_not_mistaken_for_a_threshold_trip() -> None:
 
 
 # ---------------------------------------------------------------------------
-# agent_usage_namespace — a fresh process's usage, with overrides
+# agent_usage_namespace / user_usage_namespace — a fresh process's usage,
+# with overrides
 # ---------------------------------------------------------------------------
 
+_UsageNamespace = Callable[..., dict[str, int]]
 
-def _admission_cap(limit: int) -> AgentPolicy:
+_KNOWN_USAGE_PATHS = {
+    AGENT_USAGE_ROOT: KNOWN_AGENT_USAGE_PATHS,
+    USER_USAGE_ROOT: KNOWN_USER_USAGE_PATHS,
+}
+_USAGE_NAMESPACES = pytest.mark.parametrize(
+    ("root", "usage_namespace"),
+    [
+        (AGENT_USAGE_ROOT, agent_usage_namespace),
+        (USER_USAGE_ROOT, user_usage_namespace),
+    ],
+    ids=["agent", "user"],
+)
+
+
+def _admission_cap(root: str, limit: int) -> AgentPolicy:
     return AgentPolicy.model_validate(
         {
             "admission": {
                 "mode": "allow",
-                "constraints": [f"agent_usage.invocations_1h < {limit}"],
+                "constraints": [f"{root}.invocations_1h < {limit}"],
             }
         }
     )
 
 
-def test_agent_usage_namespace_zero_fills_every_registered_path() -> None:
-    namespace = agent_usage_namespace()
+@_USAGE_NAMESPACES
+def test_usage_namespace_zero_fills_every_registered_path(
+    root: str, usage_namespace: _UsageNamespace
+) -> None:
+    namespace = usage_namespace()
 
-    assert set(namespace) == KNOWN_AGENT_USAGE_PATHS
+    assert set(namespace) == _KNOWN_USAGE_PATHS[root]
     assert set(namespace.values()) == {0}
 
 
-def test_agent_usage_namespace_rejects_an_unregistered_path() -> None:
-    with pytest.raises(ValueError, match="unknown agent_usage"):
-        agent_usage_namespace(invocation_1h=1)
+@_USAGE_NAMESPACES
+def test_usage_namespace_rejects_an_unregistered_path(
+    root: str, usage_namespace: _UsageNamespace
+) -> None:
+    with pytest.raises(ValueError, match=rf"unknown {root}\.\* path"):
+        usage_namespace(invocation_1h=1)
 
 
+@_USAGE_NAMESPACES
 @pytest.mark.parametrize("value", [True, "3", 3.0], ids=["bool", "str", "float"])
-def test_agent_usage_namespace_rejects_a_non_int(value: object) -> None:
-    with pytest.raises(ValueError, match="expects int"):
-        agent_usage_namespace(invocations_1h=value)
+def test_usage_namespace_rejects_a_non_int(
+    root: str, usage_namespace: _UsageNamespace, value: object
+) -> None:
+    with pytest.raises(ValueError, match=rf"{root}\.invocations_1h expects int"):
+        usage_namespace(invocations_1h=value)
 
 
-def test_agent_usage_namespace_rejects_a_negative_count() -> None:
-    with pytest.raises(ValueError, match="is a count"):
-        agent_usage_namespace(invocations_1h=-1)
+@_USAGE_NAMESPACES
+def test_usage_namespace_rejects_a_negative_count(
+    root: str, usage_namespace: _UsageNamespace
+) -> None:
+    with pytest.raises(ValueError, match=rf"{root}\.invocations_1h is a count"):
+        usage_namespace(invocations_1h=-1)
 
 
-def test_agent_usage_namespace_derives_total_tokens_per_window() -> None:
-    namespace = agent_usage_namespace(
+@_USAGE_NAMESPACES
+def test_usage_namespace_derives_total_tokens_per_window(
+    root: str, usage_namespace: _UsageNamespace
+) -> None:
+    namespace = usage_namespace(
         input_tokens_1h=100, output_tokens_1h=50, input_tokens_24h=107
     )
 
@@ -461,8 +496,11 @@ def test_an_explicit_wider_window_wins_over_the_carry() -> None:
     assert namespace["invocations_7d"] == 99
 
 
-def test_a_token_split_carries_into_the_wider_totals() -> None:
-    namespace = agent_usage_namespace(input_tokens_1h=100, output_tokens_1h=50)
+@_USAGE_NAMESPACES
+def test_a_token_split_carries_into_the_wider_totals(
+    root: str, usage_namespace: _UsageNamespace
+) -> None:
+    namespace = usage_namespace(input_tokens_1h=100, output_tokens_1h=50)
 
     assert namespace["total_tokens_24h"] == 150
 
@@ -485,22 +523,35 @@ def test_a_wider_cap_fires_on_a_narrower_supplied_window() -> None:
     )
 
 
-def test_an_admission_cap_asserts_against_supplied_usage() -> None:
-    policy = _admission_cap(100)
+@_USAGE_NAMESPACES
+def test_an_admission_cap_asserts_against_supplied_usage(
+    root: str, usage_namespace: _UsageNamespace
+) -> None:
+    policy = _admission_cap(root, 100)
 
     assert_denies(
         policy,
         AGENT_RUN_TOOL,
         {"agent": "a"},
-        agent_usage=agent_usage_namespace(invocations_1h=100),
+        **{root: usage_namespace(invocations_1h=100)},
     )
     assert_allows(
         policy,
         AGENT_RUN_TOOL,
         {"agent": "a"},
-        agent_usage=agent_usage_namespace(invocations_1h=99),
+        **{root: usage_namespace(invocations_1h=99)},
     )
 
 
-def test_an_unset_usage_cap_reads_a_fresh_process() -> None:
-    assert_allows(_admission_cap(1), AGENT_RUN_TOOL, {"agent": "a"})
+@pytest.mark.parametrize("root", [AGENT_USAGE_ROOT, USER_USAGE_ROOT])
+def test_an_unset_usage_cap_reads_a_fresh_process(root: str) -> None:
+    assert_allows(_admission_cap(root, 1), AGENT_RUN_TOOL, {"agent": "a"})
+
+
+def test_agent_usage_does_not_feed_a_user_cap() -> None:
+    assert_allows(
+        _admission_cap(USER_USAGE_ROOT, 50),
+        AGENT_RUN_TOOL,
+        {"agent": "a"},
+        agent_usage=agent_usage_namespace(invocations_1h=99),
+    )

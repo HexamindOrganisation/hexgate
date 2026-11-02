@@ -11,7 +11,10 @@ from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from hexgate.adapters.google.streaming import normalize_google_events
+from hexgate.runtime import HexgateContext
 from hexgate.streaming import (
     BlockDeltaEvent,
     BlockType,
@@ -280,10 +283,12 @@ async def test_astream_decouples_audit_session_from_adk_session(
             new_message: Any,
             hexgate_context: Any,
             session_id: Any = None,
+            user_id: Any = None,
             **_k: Any,
         ) -> AsyncIterator[Any]:
             captured["ctx"] = hexgate_context
             captured["adk_session_id"] = session_id
+            captured["adk_user_id"] = user_id
             if False:  # pragma: no cover — empty async generator
                 yield None
 
@@ -302,6 +307,42 @@ async def test_astream_decouples_audit_session_from_adk_session(
     assert run_ctx.ttl_seconds == 42  # carried through, not dropped
     # ADK gets a minted id, distinct from the caller-facing session id.
     assert captured["adk_session_id"] and captured["adk_session_id"] != "sess-9"
+    assert captured["adk_user_id"] == "alice"
+
+
+@pytest.mark.parametrize("ctx", [None, HexgateContext(user_id="")])
+async def test_astream_keeps_an_anonymous_caller_anonymous(
+    monkeypatch: Any, ctx: HexgateContext | None
+) -> None:
+    # ADK needs a user, so the synthetic id goes to ADK only; the run context
+    # stays anonymous, so the caller is never counted as one shared user.
+    from hexgate.adapters.google.streaming import (
+        ANONYMOUS_ADK_USER_ID,
+        GoogleServeDriver,
+    )
+
+    captured: dict[str, Any] = {}
+
+    class _StubRunner:
+        def __init__(self, **_kw: Any) -> None:
+            pass
+
+        async def run_async(
+            self, *, hexgate_context: Any, user_id: Any = None, **_k: Any
+        ) -> AsyncIterator[Any]:
+            captured["ctx"] = hexgate_context
+            captured["adk_user_id"] = user_id
+            if False:  # pragma: no cover — empty async generator
+                yield None
+
+    monkeypatch.setattr("hexgate.adapters.google.runner.HexgateRunner", _StubRunner)
+    driver = GoogleServeDriver(agent=object(), app_name="app")
+
+    _ = [e async for e in driver.astream(["hi"], ctx, "hi")]
+
+    assert captured["ctx"].user_id == ""
+    assert captured["adk_user_id"] == ANONYMOUS_ADK_USER_ID
+    assert {user for user, _ in driver._created} == {ANONYMOUS_ADK_USER_ID}
 
 
 async def test_full_sequence_brackets_run() -> None:

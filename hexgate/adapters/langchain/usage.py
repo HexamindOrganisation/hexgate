@@ -76,6 +76,16 @@ class HexgateUsageCallbackHandler(BaseCallbackHandler):
         # the response callback carries no prompt, so it has to be handed one.
         self._pending: dict[UUID, _Prompt] = {}
 
+    @property
+    def api_key(self) -> str | None:
+        return self._api_key
+
+    @api_key.setter
+    def api_key(self, value: str | None) -> None:
+        """Re-key later emissions; the native agent learns its platform after
+        construction (``HexgateAgent.hexgate_client``)."""
+        self._api_key = value
+
     # --- Identity -----------------------------------------------------------
 
     def turn_key(self, run_id: UUID | None = None) -> str:

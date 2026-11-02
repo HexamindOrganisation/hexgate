@@ -1,0 +1,20 @@
+# billing-bot's policy, owned by the billing team.
+version: 1
+
+roles:
+  default:
+    tools:
+      view_orders: { mode: allow }
+
+  billing:
+    tools:
+      view_orders: { mode: allow }
+      refund_order:
+        mode: allow
+        constraints:
+          - args.amount <= 250
+          - args.currency == "EUR"
+      wire_transfer:
+        mode: approval_required
+        constraints:
+          - args.amount <= 5000

@@ -351,8 +351,8 @@ class _BarrierBanSource:
 
 
 class _BarrierBinding:
-    # A policy without agent_usage.* paths: the boundary has no usage refresh.
-    enforcer = SimpleNamespace(usage_refresh=lambda: None)
+    # A policy without usage paths: the boundary has no usage refreshes.
+    enforcer = SimpleNamespace(usage_refreshes=lambda _context: ())
 
     def __init__(self, barrier: threading.Barrier) -> None:
         self._barrier = barrier

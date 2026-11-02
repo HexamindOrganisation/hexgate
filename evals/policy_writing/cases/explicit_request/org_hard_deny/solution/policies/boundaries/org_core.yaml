@@ -1,0 +1,8 @@
+# Org boundary, owned by security. It applies to every role and can only take
+# permissions away: a tool it doesn't name is decided by the capabilities, and
+# its `allow` on refund_order is a cap (at most 1000), not a grant.
+default_policy: { mode: allow }
+tools:
+  delete_database: { mode: deny }                       # absolute — no layer can undo
+  delete_customer: { mode: deny }                       # absolute — no layer can undo
+  refund_order: { mode: allow, constraints: ["args.amount <= 1000"] }   # cap

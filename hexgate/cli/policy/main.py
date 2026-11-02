@@ -32,7 +32,12 @@ from hexgate.runtime.context import ContextAttributeValue
 if TYPE_CHECKING:
     from hexgate.manifest.models import AgentManifest
     from hexgate.security.analyzer import PolicyLint
-from hexgate.runtime.agent_usage import AGENT_USAGE_VOCABULARY, KNOWN_AGENT_USAGE_PATHS
+from hexgate.runtime.agent_usage import (
+    AGENT_USAGE_VOCABULARY,
+    KNOWN_AGENT_USAGE_PATHS,
+    KNOWN_USER_USAGE_PATHS,
+    USER_USAGE_VOCABULARY,
+)
 from hexgate.runtime.roles import distinct_roles, resolve_role_set
 from hexgate.runtime.run_facts import KNOWN_RUN_PATHS
 from hexgate.security import (
@@ -43,6 +48,7 @@ from hexgate.security import (
     OpaNotFoundError,
     PolicySetError,
     SignatureError,
+    UsageInputs,
     Verdict,
     WasmCompileError,
     WasmEvalError,
@@ -60,7 +66,12 @@ from hexgate.security import (
     verdict_from_rego,
 )
 from hexgate.security.constraints import ConstraintParseError, parse_constraint
-from hexgate.security.testing import agent_usage_namespace, run_namespace
+from hexgate.security.testing import (
+    agent_usage_namespace,
+    run_namespace,
+    user_usage_namespace,
+)
+from hexgate.security.usage_inputs import AGENT_USAGE_ROOT, USER_USAGE_ROOT
 
 # Same schema ``HexgateContext.attributes`` enforces at runtime, so a bag the
 # simulator accepts is a bag production can actually produce — including the
@@ -261,6 +272,15 @@ def add_parser(subparsers: argparse._SubParsersAction) -> None:
             "Agent usage as a JSON object, exposed to agent_usage.* constraints "
             "(e.g. '{\"invocations_1h\": 99}'). Unset paths read zero, matching "
             "a fresh process. Defaults to {}."
+        ),
+    )
+    p_test.add_argument(
+        "--user-usage",
+        default="{}",
+        help=(
+            "One end user's usage across agents as a JSON object, exposed to "
+            "user_usage.* constraints (e.g. '{\"invocations_1h\": 49}'). Unset paths "
+            "read zero, matching a user this process hasn't seen. Defaults to {}."
         ),
     )
     p_test.add_argument(
@@ -914,9 +934,11 @@ def _main_test(args: argparse.Namespace) -> int:
     try:
         run = _resolve_run_facts(getattr(args, "run_facts", "{}"), args.tool)
         agent_usage = _resolve_agent_usage(getattr(args, "agent_usage", "{}"))
+        user_usage = _resolve_user_usage(getattr(args, "user_usage", "{}"))
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    usage = UsageInputs(agent_usage=agent_usage, user_usage=user_usage)
 
     try:
         policy_set = load_policy_set_from_dict(payload)
@@ -960,15 +982,16 @@ def _main_test(args: argparse.Namespace) -> int:
 
     if engine == "wasm":
         return _test_via_wasm(
-            payload, roles, args.tool, tool_args, attributes, run, agent_usage, label
+            payload, roles, args.tool, tool_args, attributes, run, usage, label
         )
     return _test_via_pydantic(
-        policy_set, roles, args.tool, tool_args, attributes, run, agent_usage, label
+        policy_set, roles, args.tool, tool_args, attributes, run, usage, label
     )
 
 
 _RUN_FACTS_FLAG = "--run-facts"
 _AGENT_USAGE_FLAG = "--agent-usage"
+_USER_USAGE_FLAG = "--user-usage"
 
 
 def _resolve_run_facts(raw: str, tool: str) -> dict[str, Any]:
@@ -990,10 +1013,22 @@ def _resolve_agent_usage(raw: str) -> dict[str, int]:
     return _resolve_namespace_flag(
         _AGENT_USAGE_FLAG,
         raw,
-        root="agent_usage",
+        root=AGENT_USAGE_ROOT,
         known=KNOWN_AGENT_USAGE_PATHS,
         vocabulary=AGENT_USAGE_VOCABULARY,
         build=agent_usage_namespace,
+    )
+
+
+def _resolve_user_usage(raw: str) -> dict[str, int]:
+    """Parse ``--user-usage`` as :func:`_resolve_agent_usage` parses its flag."""
+    return _resolve_namespace_flag(
+        _USER_USAGE_FLAG,
+        raw,
+        root=USER_USAGE_ROOT,
+        known=KNOWN_USER_USAGE_PATHS,
+        vocabulary=USER_USAGE_VOCABULARY,
+        build=user_usage_namespace,
     )
 
 
@@ -1082,7 +1117,7 @@ def _test_via_pydantic(
     tool_args: dict,
     attributes: dict,
     run: dict,
-    agent_usage: dict,
+    usage: UsageInputs,
     label: str,
 ) -> int:
     """Run the decision through the in-process constraint evaluator.
@@ -1093,7 +1128,7 @@ def _test_via_pydantic(
 
     def evaluate(role: str | None) -> Verdict:
         policy: AgentPolicy = policy_set.policy_for(role)
-        # Forward role/attributes/run/agent_usage so their constraints decide the
+        # Forward role/attributes/run/usage so their constraints decide the
         # same as production — omitting any makes the dry-run fail closed.
         return evaluate_tool_call(
             policy,
@@ -1102,7 +1137,7 @@ def _test_via_pydantic(
             role=role,
             attributes=attributes,
             run=run,
-            agent_usage=agent_usage,
+            usage=usage,
         )
 
     verdict, deciding_role = combine_role_verdicts(
@@ -1118,7 +1153,7 @@ def _test_via_wasm(
     tool_args: dict,
     attributes: dict,
     run: dict,
-    agent_usage: dict,
+    usage: UsageInputs,
     label: str,
 ) -> int:
     """Compile to wasm on the fly + evaluate — matches production semantics."""
@@ -1148,7 +1183,7 @@ def _test_via_wasm(
             args=tool_args,
             ctx=attributes,
             run=run,
-            agent_usage=agent_usage,
+            usage=usage,
         )
         return verdict_from_rego(decision, tool_name=tool, role=role_)
 

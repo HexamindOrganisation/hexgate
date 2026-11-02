@@ -1,9 +1,11 @@
 """Project CRUD — create/list under an org, read/rename by project id."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from hexgate_api.constants import OAUTH_NO_PROJECT, OAUTH_SCOPE_KEY
 from hexgate_api.core.db import get_session
+from hexgate_api.deps.identity import oauth_projects
 from hexgate_api.deps.org import require_org_member, require_org_membership
 from hexgate_api.deps.project import require_project_admin
 from hexgate_api.models import OrganizationMember, Project, User
@@ -52,21 +54,34 @@ async def api_create_project(
     return _project_read(project)
 
 
-@router.get("/orgs/{org_id}/projects", tags=["orgs"])
+@router.get(
+    "/orgs/{org_id}/projects",
+    openapi_extra={OAUTH_SCOPE_KEY: "projects:read", OAUTH_NO_PROJECT: True},
+    tags=["orgs"],
+)
 async def api_list_projects(
+    request: Request,
     membership: tuple[User, OrganizationMember] = Depends(require_org_membership),
     session: AsyncSession = Depends(get_session),
 ) -> list[ProjectRead]:
     """List every project inside an org. Any member can list — the
-    dashboard's project picker consumes this."""
+    dashboard's project picker consumes this. An OAuth caller sees only
+    the projects its token names."""
     from hexgate_api.features.projects.service import list_projects
 
     _, caller_member = membership
     rows = await list_projects(session, caller_member.org_id)
+    granted = oauth_projects(request)
+    if granted is not None:
+        rows = [p for p in rows if p.id in granted]
     return [_project_read(p) for p in rows]
 
 
-@router.get("/projects/{project_id}", tags=["projects"])
+@router.get(
+    "/projects/{project_id}",
+    openapi_extra={OAUTH_SCOPE_KEY: "projects:read"},
+    tags=["projects"],
+)
 async def api_get_project(
     project_id: str,
     _user: User = Depends(require_org_member),

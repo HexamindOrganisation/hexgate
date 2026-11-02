@@ -1,0 +1,9 @@
+starting_project: support_bot_single_file
+agent: support-bot
+request: Billing may send wire transfers, but each one needs a human approval, and never above 10000.
+expect:
+  decisions:
+    - { role: billing, tool: wire_transfer, args: { amount: 10000, iban: DE89 }, expect: approval_required }
+    - { role: billing, tool: wire_transfer, args: { amount: 10001, iban: DE89 }, expect: deny }
+    - { role: support, tool: wire_transfer, args: { amount: 100, iban: DE89 }, expect: deny }
+    - { role: billing, tool: wire_transfer, args: { amount: 10, iban: DE89 }, expect: approval_required }

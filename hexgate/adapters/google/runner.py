@@ -312,6 +312,7 @@ class HexgateRunner:
         new_message: types.Content | None = None,
         hexgate_context: HexgateContext,
         session_id: str | None = None,
+        user_id: str | None = None,
         **kwargs: Any,
     ) -> AsyncGenerator[Any, None]:
         """Run the Google ADK agent asynchronously, yielding events.
@@ -320,7 +321,9 @@ class HexgateRunner:
         ``hexgate_context.session_id``. Pass it explicitly to decouple the ADK
         conversation store from the caller-facing session id that lands in audit
         (``hexgate serve`` does this so audit stays correlatable while ADK memory
-        is managed separately).
+        is managed separately). ``user_id`` likewise overrides the ADK session
+        store's user, defaulting to ``hexgate_context.user_id``, so a synthetic
+        id ADK requires never reaches policy, audit or usage.
         """
         self._setup_observability()
         # per-run policy pull; 304 when unchanged
@@ -333,6 +336,7 @@ class HexgateRunner:
         adk_session_id = (
             session_id if session_id is not None else hexgate_context.session_id
         )
+        adk_user_id = user_id if user_id is not None else hexgate_context.user_id
         async with hexgate_context:
             await self._check_admission_async()  # in-scope: reads the caller's role
             with (
@@ -341,7 +345,7 @@ class HexgateRunner:
             ):
                 try:
                     async for event in self._runner.run_async(
-                        user_id=hexgate_context.user_id,
+                        user_id=adk_user_id,
                         session_id=adk_session_id,
                         new_message=new_message,
                         **kwargs,

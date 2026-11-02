@@ -52,6 +52,7 @@ AUDIT_TABLES = (
     "ban_enforcement",
     "agent_run",
     "usage_minute",
+    "usage_minute_user",
 )
 CREATE_DATABASE_RE = re.compile(r"^CREATE\s+DATABASE\b", re.IGNORECASE)
 
@@ -688,3 +689,167 @@ def test_usage_minute_backfill_matches_the_views() -> None:
             client.command(f"TRUNCATE TABLE {database}.usage_minute")
             run_clickhouse_script(client, USAGE_BACKFILL.read_text(), database)
             assert _usage(client, database) == expected
+
+
+# --- usage_minute_user backfill ----------------------------------------------
+
+USER_USAGE_BACKFILL = CLICKHOUSE_BACKFILLS / "0006_usage_minute_user.sql"
+USER_DECISION_COLUMNS = [*DECISION_COLUMNS, "user_id"]
+ANONYMOUS_AGENT = "anon"
+# (user, minute, invocations, tool_calls, denials, llm_calls, input, output):
+# alice is agent "a"'s fixture (2 runs; 4 tool calls and 2 denials, as in
+# EXPECTED_USAGE; 2 LLM calls, 10+20 / 1+2 tokens) plus one search/allow under
+# agent "b" in the same minute: one user across two agents is one row, so
+# tool_calls is 4 + 1. bob: 1 run, 1 search/allow. The '' user has no row.
+EXPECTED_USER_USAGE = [
+    ("alice", 0, 2, 5, 2, 2, 30, 3),
+    ("bob", 1, 1, 1, 0, 0, 0, 0),
+]
+
+
+def _user_usage(client, database: str) -> list[tuple]:
+    return [
+        tuple(row)
+        for row in client.query(
+            "SELECT user_id, minute, sum(invocations), sum(tool_calls), "
+            "sum(denials), sum(llm_calls), sum(input_tokens), sum(output_tokens) "
+            f"FROM {database}.usage_minute_user GROUP BY user_id, minute "
+            "ORDER BY user_id, minute"
+        ).result_rows
+    ]
+
+
+def _expected_user_usage(minutes: Sequence) -> list[tuple]:
+    return [
+        (user, minutes[m].replace(tzinfo=None), *counts)
+        for user, m, *counts in EXPECTED_USER_USAGE
+    ]
+
+
+def _seed_user_usage_sources(client, database: str, minutes: Sequence) -> list:
+    import uuid
+
+    first, second = minutes
+    decisions = [
+        [uuid.uuid4(), first, USAGE_PROJECT, "a", tool, outcome, "alice"]
+        for tool, outcome in AGENT_A_DECISIONS
+    ] + [
+        [uuid.uuid4(), first, USAGE_PROJECT, "b", "search", "allow", "alice"],
+        [uuid.uuid4(), second, USAGE_PROJECT, "b", "search", "allow", "bob"],
+        [uuid.uuid4(), first, USAGE_PROJECT, ANONYMOUS_AGENT, "search", "allow", ""],
+    ]
+    client.insert(
+        "policy_decision",
+        decisions,
+        column_names=USER_DECISION_COLUMNS,
+        database=database,
+    )
+    runs = [
+        [uuid.uuid4(), at, USAGE_PROJECT, agent, uuid.uuid4(), user]
+        for agent, user, at in (
+            ("a", "alice", first),
+            ("a", "alice", first),
+            ("b", "bob", second),
+            (ANONYMOUS_AGENT, "", first),
+        )
+    ]
+    client.insert(
+        "agent_run",
+        runs,
+        column_names=[
+            "event_id",
+            "received_at",
+            "project_id",
+            "agent_name",
+            "run_id",
+            "user_id",
+        ],
+        database=database,
+    )
+    client.insert(
+        "llm_invocation",
+        [
+            [uuid.uuid4(), first, USAGE_PROJECT, "a", "m", 10, 1, "alice"],
+            [uuid.uuid4(), first, USAGE_PROJECT, "a", "m", 20, 2, "alice"],
+            [uuid.uuid4(), first, USAGE_PROJECT, ANONYMOUS_AGENT, "m", 5, 1, ""],
+        ],
+        column_names=[
+            "event_id",
+            "received_at",
+            "project_id",
+            "agent_name",
+            "model",
+            "input_tokens",
+            "output_tokens",
+            "user_id",
+        ],
+        database=database,
+    )
+    return decisions
+
+
+def _assert_no_anonymous_row(client, database: str) -> None:
+    assert not any(row[0] == "" for row in _user_usage(client, database))
+
+
+def _user_usage_minutes() -> list:
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    return [now - timedelta(minutes=2), now - timedelta(minutes=1)]
+
+
+@clickhouse_only
+def test_usage_minute_user_backfill_matches_the_views() -> None:
+    """The user backfill counts exactly what the user views count, a second run
+    inserts nothing, and neither path ever writes a '' row (G4)."""
+    minutes = _user_usage_minutes()
+    expected = _expected_user_usage(minutes)
+
+    with scratch_clickhouse_database("hexgate_ch_user_backfill") as database:
+        with clickhouse_client() as client:
+            run_clickhouse_script(client, CLICKHOUSE_INIT_SCHEMA.read_text(), database)
+            decisions = _seed_user_usage_sources(client, database, minutes)
+            assert _user_usage(client, database) == expected  # built by the views
+            _assert_no_anonymous_row(client, database)
+
+            client.command(f"TRUNCATE TABLE {database}.usage_minute_user")
+            run_clickhouse_script(client, USER_USAGE_BACKFILL.read_text(), database)
+            assert _user_usage(client, database) == expected  # built by the backfill
+            _assert_no_anonymous_row(client, database)
+
+            run_clickhouse_script(client, USER_USAGE_BACKFILL.read_text(), database)
+            assert _user_usage(client, database) == expected, "a rerun inserted rows"
+            _assert_no_anonymous_row(client, database)
+
+            client.insert(
+                "policy_decision",
+                [decisions[0]],
+                column_names=USER_DECISION_COLUMNS,
+                database=database,
+            )
+            assert _user_usage(client, database)[0][3] == expected[0][3] + 1
+            _assert_no_anonymous_row(client, database)
+            client.command(f"TRUNCATE TABLE {database}.usage_minute_user")
+            run_clickhouse_script(client, USER_USAGE_BACKFILL.read_text(), database)
+            assert _user_usage(client, database) == expected
+            _assert_no_anonymous_row(client, database)
+
+
+@clickhouse_only
+def test_the_anonymous_rows_still_reach_usage_minute() -> None:
+    """The '' filter sits on the user views only: the agent rollup still counts
+    an anonymous caller's run, decision and LLM call."""
+    minutes = _user_usage_minutes()
+
+    with scratch_clickhouse_database("hexgate_ch_user_anon") as database:
+        with clickhouse_client() as client:
+            run_clickhouse_script(client, CLICKHOUSE_INIT_SCHEMA.read_text(), database)
+            _seed_user_usage_sources(client, database, minutes)
+            anonymous = [
+                row for row in _usage(client, database) if row[0] == ANONYMOUS_AGENT
+            ]
+
+    assert anonymous == [
+        (ANONYMOUS_AGENT, minutes[0].replace(tzinfo=None), 1, 1, 0, 1, 5, 1)
+    ]

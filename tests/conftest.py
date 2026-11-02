@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
+from types import ModuleType
+from typing import Any
 
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 
+from hexgate.cloud.client import HexgateClient
 from hexgate.runtime.srt import SrtUnavailableError, ensure_srt_available
+from hexgate.security.enforcer import PolicyEnforcer
 from hexgate.tracing import _senders
 
 
@@ -31,6 +36,27 @@ def _no_network_span_export(
     monkeypatch.setattr(
         _senders.AuditSender, "_new_exporter", lambda self: InMemorySpanExporter()
     )
+
+
+@pytest.fixture
+def enforcer_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[[ModuleType], list[HexgateClient | None]]:
+    """Spy on ``build_enforcer`` as ``module`` imported it: returns the list each
+    call's ``client=`` is appended to, while the real enforcer is still built."""
+
+    def spy_on(module: ModuleType) -> list[HexgateClient | None]:
+        clients: list[HexgateClient | None] = []
+        real_build_enforcer = module.build_enforcer
+
+        def spy_build_enforcer(*args: Any, **kwargs: Any) -> PolicyEnforcer:
+            clients.append(kwargs.get("client"))
+            return real_build_enforcer(*args, **kwargs)
+
+        monkeypatch.setattr(module, "build_enforcer", spy_build_enforcer)
+        return clients
+
+    return spy_on
 
 
 def pytest_configure(config: pytest.Config) -> None:

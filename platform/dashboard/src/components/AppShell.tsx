@@ -14,6 +14,7 @@ import {
   Moon,
   Network,
   PanelLeft,
+  Plug,
   Scale,
   ScrollText,
   Settings2,
@@ -42,7 +43,8 @@ import { useLogout, useUser } from "@/lib/auth";
 import { useOrgs } from "@/lib/orgs";
 import { useProjects } from "@/lib/projects";
 import { useUi } from "@/lib/ui";
-import { useTheme } from "@/lib/theme";
+import { isDark, schemeAccent, useTheme, type Scheme } from "@/lib/theme";
+import { usePresentMode } from "@/lib/present";
 import { cn } from "@/lib/utils";
 
 /**
@@ -119,11 +121,21 @@ const workspaceLinks = [
   { to: "/tokens", label: "API keys", icon: KeyRound },
 ];
 
+/** The settings-space pages that belong to the signed-in user, not an org. */
+const USER_SETTINGS_PATHS = new Set(["/settings", "/connected-apps"]);
+
+/** `pathname` without a trailing slash, so `/settings/` (a bookmark, a
+ * hand-typed link) is read like the `/settings` the router renders for it. */
+function trimSlash(pathname: string): string {
+  return pathname.replace(/(.)\/+$/, "$1");
+}
+
 /** Whether a path belongs to the settings space (its own sidebar). Uses a
  * segment boundary so a future sibling like `/orgstats` isn't misread. */
-function isSettingsPath(pathname: string): boolean {
+function isSettingsPath(rawPath: string): boolean {
+  const pathname = trimSlash(rawPath);
   return (
-    pathname === "/settings" ||
+    USER_SETTINGS_PATHS.has(pathname) ||
     pathname === "/orgs" ||
     pathname.startsWith("/orgs/")
   );
@@ -131,14 +143,14 @@ function isSettingsPath(pathname: string): boolean {
 
 /** The org the settings sidebar should scope its org links to: the one in the
  * URL (`/orgs/:id/...`) when present, else the active org — so a deep-link or
- * refresh keeps the sidebar pointed at the org being viewed. On the pure
- * account page (`/settings`) there's no org in play, so we return null and the
- * org-scoped links drop out. */
+ * refresh keeps the sidebar pointed at the org being viewed. On a per-user page
+ * there's no org in play, so we return null and the org-scoped links drop out. */
 function settingsOrgId(
-  pathname: string,
+  rawPath: string,
   activeOrgId: string | null,
 ): string | null {
-  if (pathname === "/settings") return null;
+  const pathname = trimSlash(rawPath);
+  if (USER_SETTINGS_PATHS.has(pathname)) return null;
   return pathname.match(/^\/orgs\/([^/]+)(?:\/|$)/)?.[1] ?? activeOrgId;
 }
 
@@ -162,6 +174,8 @@ function settingsLinks(activeOrgId: string | null) {
         ]
       : []),
     { to: "/settings", label: "Account", icon: CircleUser },
+    // Per user, like Account: the AI clients acting for whoever is signed in.
+    { to: "/connected-apps", label: "Connected apps", icon: Plug },
   ];
 }
 
@@ -223,7 +237,12 @@ export function AppShell() {
 
   // Two sidebar "spaces" share this one shell frame: the product features, and
   // an org/account settings space (its own nav), entered from the account menu.
-  const { pathname } = useLocation();
+  const location = useLocation();
+  const { pathname } = location;
+  // Full-screen "presentation" mode (opened in its own tab from the Playground):
+  // render just the route, no sidebar/nav chrome. Detected from the URL so it
+  // survives a reload of the presentation tab.
+  const present = usePresentMode();
   const inSettings = isSettingsPath(pathname);
   const activeOrgId = useActive((s) => s.activeOrgId);
   // Scope the settings links to the URL's org (falling back to the active one)
@@ -259,6 +278,16 @@ export function AppShell() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [toggleSidebar]);
+
+  if (present) {
+    // No sidebar, no nav — just the route, full-bleed. The playground drops its
+    // negative margins in this mode and renders its own close affordance.
+    return (
+      <div className="h-screen bg-background text-foreground">
+        <Outlet />
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-background text-foreground">
@@ -439,10 +468,10 @@ const MODES = [
   ["system", Monitor, "System"],
 ] as const;
 
-const SCHEMES = [
-  ["blue", "226 78% 65%", "Blue"],
-  ["plum", "313 75% 68%", "Plum"],
-] as const;
+const SCHEMES: [Scheme, string][] = [
+  ["blue", "Blue"],
+  ["plum", "Plum"],
+];
 
 /** Appearance picker inside the account menu: mode (light/dark/system) + accent
  * scheme (blue/plum). Plain buttons so a pick doesn't close the menu. */
@@ -451,6 +480,9 @@ function AppearanceControl() {
   const scheme = useTheme((s) => s.scheme);
   const setMode = useTheme((s) => s.setMode);
   const setScheme = useTheme((s) => s.setScheme);
+  // Resolve the swatch colour for the current palette from theme's single source
+  // so the dots track light/dark like the real --primary token.
+  const dark = isDark(mode);
 
   const seg =
     "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs text-muted-foreground transition-colors hover:text-foreground";
@@ -476,7 +508,7 @@ function AppearanceControl() {
         ))}
       </div>
       <div className="mt-1 flex gap-1">
-        {SCHEMES.map(([s, hsl, label]) => (
+        {SCHEMES.map(([s, label]) => (
           <button
             key={s}
             type="button"
@@ -487,7 +519,7 @@ function AppearanceControl() {
           >
             <span
               className="size-3 rounded-full"
-              style={{ backgroundColor: `hsl(${hsl})` }}
+              style={{ backgroundColor: `hsl(${schemeAccent(s, dark)})` }}
             />
             {label}
           </button>

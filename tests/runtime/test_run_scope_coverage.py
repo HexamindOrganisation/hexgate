@@ -44,11 +44,6 @@ _CHECKS_ADMISSION = "_check_admission"
 _API_KEY_KWARG = "api_key"
 # Calls that open a run scope, and so pick the sender its run_start span leaves on.
 _SCOPE_OPENERS = frozenset({"run_scope", "abind", "bind"})
-# The native agent's decisions and usage leave on HEXGATE_API_KEY even when
-# load_hexgate_agent(api_key=...) binds another key, so its run start follows them
-# there rather than landing in a different project. Lift the exemption only when
-# the enforcer and usage handler take the explicit key too.
-_ENV_KEY_MODULE = "hexgate.agents.factory"
 
 # (module, class, symbol) of every boundary with an admission gate. Admission must
 # precede the scope: entering run_scope is what reports a run, and a refused
@@ -320,9 +315,7 @@ def _scope_opener_calls(source: str) -> list[ast.Call]:
     ]
 
 
-_KEYED_SITES = sorted(
-    {(m, c, symbol) for m, c, _, symbol in SCOPE_SITES if m != _ENV_KEY_MODULE}
-)
+_KEYED_SITES = sorted({(m, c, symbol) for m, c, _, symbol in SCOPE_SITES})
 
 
 @pytest.mark.parametrize(

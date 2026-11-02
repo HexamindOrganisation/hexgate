@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import threading
+from collections.abc import Callable
 from contextlib import contextmanager
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any, AsyncIterator
 
 import pytest
@@ -694,6 +695,19 @@ async def test_distinct_agent_names_get_distinct_bindings(
 
     assert _stub_resolve == ["agent-a", "agent-b"]
     assert set(runner._bindings) == {"agent-a", "agent-b"}
+
+
+def test_binding_for_builds_the_enforcer_from_the_runners_client(
+    enforcer_clients: Callable[[ModuleType], list[Any]],
+) -> None:
+    """The runner's one client, which resolved the policy, also builds the
+    enforcer, so usage reads and audit follow the policy's platform."""
+    runner = HexgateRunner(api_key="k")
+    clients = enforcer_clients(runner_mod)
+
+    runner._binding_for(_make_agent())
+
+    assert clients == [runner._client]
 
 
 def test_binding_for_normalises_none_agent_name_to_default(

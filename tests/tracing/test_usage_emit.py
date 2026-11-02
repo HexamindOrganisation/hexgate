@@ -134,12 +134,13 @@ def test_records_llm_usage_on_the_agent_usage_ledger_without_a_sender(
         MAX_WINDOW_SECONDS,
         UsageLedgers,
         UsageMetric,
+        UsageScopeKind,
         new_usage_ledger,
     )
 
     monkeypatch.setattr(usage_mod, "configure_usage_sender", lambda api_key=None: None)
     ledgers = UsageLedgers(new_usage_ledger)
-    ledgers.enable()
+    ledgers.enable(UsageScopeKind.AGENT)
 
     with run_scope("a", ledgers=ledgers) as facts:
         emit_llm_usage("agent", "gpt-4o", 100, 20)

@@ -58,6 +58,8 @@ from typing import Any
 
 import wasmtime
 
+from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
+
 # OPA bundles encode a major + minor ABI version as exported wasm globals.
 # We only know how to drive ABI v1 (the spec covered above); a major bump
 # means refusing to load rather than mis-evaluating.
@@ -217,14 +219,14 @@ class WasmPolicy:
         args: dict[str, Any],
         ctx: dict[str, Any] | None = None,
         run: dict[str, Any] | None = None,
-        agent_usage: dict[str, Any] | None = None,
+        usage: UsageInputs = NO_USAGE,
     ) -> RegoVerdict:
         """Evaluate one tool-call decision.
 
-        Composes ``input = {role, tool, args, ctx, run, agent_usage}`` and runs
-        the entrypoint. ``ctx``, ``run`` and ``agent_usage`` mirror the pydantic
-        engine's context keys, read by compiled ``input.ctx.*`` / ``input.run.*``
-        / ``input.agent_usage.*`` conditions.
+        Composes ``input = {role, tool, args, ctx, run, <usage roots>}`` and runs
+        the entrypoint. ``ctx``, ``run`` and ``usage.namespaces()`` mirror the
+        pydantic engine's context keys, read by compiled ``input.ctx.*`` /
+        ``input.run.*`` / ``input.<usage root>.*`` conditions.
         Hermetic — heap is reset before each call.
         """
         return self.evaluate(
@@ -234,7 +236,7 @@ class WasmPolicy:
                 "args": args,
                 "ctx": ctx or {},
                 "run": run or {},
-                "agent_usage": agent_usage or {},
+                **usage.namespaces(),
             }
         )
 

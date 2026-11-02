@@ -77,11 +77,12 @@ class GuardRule(BaseModel):
 
 
 class UsagePolicy(BaseModel):
-    """Agent-wide settings for ``agent_usage.*`` constraints.
+    """Agent-wide settings for ``agent_usage.*`` and ``user_usage.*`` constraints.
 
-    ``on_unavailable`` says what a decision reads when the platform's usage snapshot
-    is missing: ``allow`` reads this process's counts alone, ``deny`` leaves the
-    value absent so its constraints fail closed. A model, not a bare value, so a
+    ``on_unavailable`` says what a decision reads when usage is unavailable (no
+    platform snapshot for ``agent_usage.*``, no context user for ``user_usage.*``):
+    ``allow`` reads this process's counts alone (zeros for an absent user), ``deny``
+    leaves the value absent so its constraints fail closed. A model, not a bare value, so a
     later version can add fields without a grammar break; ``on_unavailable`` is
     required because a block states an intent, never an implied default.
     """
@@ -574,5 +575,5 @@ class AgentPolicy(BaseModel):
         return {name: rule.enabled for name, rule in self.guards.items()}
 
     def usage_on_unavailable(self) -> OnUnavailable:
-        """This role's fail mode for ``agent_usage.*``; ``allow`` when unset (G3)."""
+        """This role's fail mode for both usage roots; ``allow`` when unset (G3)."""
         return self.usage.on_unavailable if self.usage else OnUnavailable.ALLOW

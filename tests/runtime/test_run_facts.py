@@ -26,6 +26,8 @@ from hexgate.runtime.agent_usage import (
     MAX_WINDOW_SECONDS,
     UsageLedgers,
     UsageMetric,
+    UsageScope,
+    UsageScopeKind,
     new_usage_ledger,
 )
 from hexgate.runtime.context import HexgateContext
@@ -530,12 +532,24 @@ def test_llm_usage_is_applied_atomically() -> None:
 def _enabled_ledgers() -> UsageLedgers:
     """A fresh registry — never enable the process-wide one, which is one-way."""
     ledgers = UsageLedgers(new_usage_ledger)
-    ledgers.enable()
+    ledgers.enable(UsageScopeKind.AGENT)
     return ledgers
 
 
 def _usage(ledgers: UsageLedgers, agent: str) -> dict[UsageMetric, int]:
-    ledger = ledgers.ledger_for(agent)
+    ledger = ledgers.ledger_for(UsageScope.agent(agent))
+    assert ledger is not None
+    return ledger.within(MAX_WINDOW_SECONDS)
+
+
+def _both_enabled() -> UsageLedgers:
+    ledgers = _enabled_ledgers()
+    ledgers.enable(UsageScopeKind.USER)
+    return ledgers
+
+
+def _user_usage(ledgers: UsageLedgers, user_id: str) -> dict[UsageMetric, int]:
+    ledger = ledgers.ledger_for(UsageScope.user(user_id))
     assert ledger is not None
     return ledger.within(MAX_WINDOW_SECONDS)
 
@@ -551,6 +565,100 @@ def test_run_scope_counts_one_invocation_and_a_join_counts_none() -> None:
 
     assert _usage(ledgers, "a")[UsageMetric.INVOCATIONS] == 1
     assert _usage(ledgers, "b")[UsageMetric.INVOCATIONS] == 1
+
+
+async def test_a_run_counts_on_its_users_ledger() -> None:
+    ledgers = _both_enabled()
+
+    async with HexgateContext(user_id="alice"):
+        with run_scope("a", ledgers=ledgers) as facts:
+            facts.record_execution(_ANY_TOOL)
+            facts.record_denial()
+            facts.record_llm_usage(7, 3)
+
+    assert _user_usage(ledgers, "alice") == _usage(ledgers, "a")
+    assert _user_usage(ledgers, "alice")[UsageMetric.INPUT_TOKENS] == 7
+
+
+async def test_one_users_runs_on_two_agents_share_one_ledger() -> None:
+    ledgers = _both_enabled()
+
+    async with HexgateContext(user_id="alice"):
+        with run_scope("a", ledgers=ledgers) as first:
+            pass
+        with run_scope("b", ledgers=ledgers) as second:
+            pass
+
+    assert first.user_ledger is second.user_ledger
+    assert _user_usage(ledgers, "alice")[UsageMetric.INVOCATIONS] == 2
+    assert _usage(ledgers, "a")[UsageMetric.INVOCATIONS] == 1
+    assert _usage(ledgers, "b")[UsageMetric.INVOCATIONS] == 1
+
+
+async def test_a_child_run_counts_a_second_invocation_for_the_user() -> None:
+    ledgers = _both_enabled()
+
+    async with HexgateContext(user_id="alice"):
+        with run_scope("parent", ledgers=ledgers):
+            with run_scope("child", ledgers=ledgers):
+                pass
+
+    assert _user_usage(ledgers, "alice")[UsageMetric.INVOCATIONS] == 2
+
+
+async def test_an_anonymous_run_binds_no_user_ledger() -> None:
+    ledgers = _both_enabled()
+
+    async with HexgateContext(user_id=""):
+        with run_scope("a", ledgers=ledgers) as facts:
+            assert facts.user_ledger is None
+
+    assert not ledgers._user_ledgers
+    assert _usage(ledgers, "a")[UsageMetric.INVOCATIONS] == 1
+
+
+def test_a_run_outside_any_context_binds_no_user_ledger() -> None:
+    ledgers = _both_enabled()
+
+    with run_scope("a", ledgers=ledgers) as facts:
+        assert facts.user_ledger is None
+
+    assert not ledgers._user_ledgers
+    assert _usage(ledgers, "a")[UsageMetric.INVOCATIONS] == 1
+
+
+async def test_an_agent_only_registry_never_counts_users() -> None:
+    ledgers = _enabled_ledgers()
+
+    async with HexgateContext(user_id="alice"):
+        with run_scope("a", ledgers=ledgers) as facts:
+            assert facts.user_ledger is None
+
+    assert not ledgers._user_ledgers
+
+
+async def test_the_runs_user_is_fixed_at_entry() -> None:
+    ledgers = _both_enabled()
+
+    async with HexgateContext(user_id="alice"):
+        with run_scope("a", ledgers=ledgers) as facts:
+            async with HexgateContext(user_id="bob"):
+                facts.record_execution(_ANY_TOOL)
+
+    assert _user_usage(ledgers, "alice")[UsageMetric.TOOL_CALLS] == 1
+    assert UsageScope.user("bob") not in ledgers._user_ledgers
+
+
+async def test_a_join_counts_no_user_invocation() -> None:
+    ledgers = _both_enabled()
+
+    async with HexgateContext(user_id="alice"):
+        with run_scope("a", ledgers=ledgers) as facts:
+            pass
+        with use_run_facts(facts):
+            pass
+
+    assert _user_usage(ledgers, "alice")[UsageMetric.INVOCATIONS] == 1
 
 
 def test_recorders_forward_their_v1_metrics_to_the_ledger() -> None:
@@ -580,6 +688,10 @@ def test_a_disabled_registry_binds_no_ledger() -> None:
 
 def test_detached_has_no_ledger() -> None:
     assert DETACHED.ledger is None
+
+
+def test_detached_has_no_user_ledger() -> None:
+    assert DETACHED.user_ledger is None
 
 
 def test_consecutive_runs_of_one_agent_share_one_ledger() -> None:
