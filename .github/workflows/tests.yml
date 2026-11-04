@@ -194,6 +194,16 @@ jobs:
           NGINX_CHECK_REQUIRED: "1"
         run: make nginx-check
 
+      # A checkout path with a space must not split the stub's include.
+      - name: nginx-check from a path with a space
+        env:
+          NGINX_CHECK_REQUIRED: "1"
+        run: |
+          dir="$RUNNER_TEMP/path with space/platform"
+          mkdir -p "$dir"
+          cp -R platform/nginx platform/collector "$dir/"
+          bash "$dir/nginx/check.sh"
+
   platform-api-postgres:
     # The platform-api job runs the whole suite on SQLite, never exercising
     # asyncpg. This job sets DATABASE_URL and runs the opt-in Postgres tests:

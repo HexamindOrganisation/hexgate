@@ -33,24 +33,24 @@ check_stage() {
     local stage="$1" api_port="$2"
     local conf="$tmp/$stage.conf"
     cat >"$conf" <<EOF
-pid $tmp/$stage.pid;
-error_log $tmp/$stage-error.log;
+pid "$tmp/$stage.pid";
+error_log "$tmp/$stage-error.log";
 events {}
 http {
     access_log off;
     # Under the temp dir, so the check does not depend on the runner having
     # the build's own temp directories.
-    client_body_temp_path $tmp/body;
-    proxy_temp_path $tmp/proxy;
-    fastcgi_temp_path $tmp/fastcgi;
-    uwsgi_temp_path $tmp/uwsgi;
-    scgi_temp_path $tmp/scgi;
+    client_body_temp_path "$tmp/body";
+    proxy_temp_path "$tmp/proxy";
+    fastcgi_temp_path "$tmp/fastcgi";
+    uwsgi_temp_path "$tmp/uwsgi";
+    scgi_temp_path "$tmp/scgi";
     server {
         listen 127.0.0.1:8080;
         server_name $stage.hexgate.test;
         # The exact path, not the box's wildcard form: here a missing file
         # must fail the check rather than include nothing.
-        include $here/hexgate-$stage.conf;
+        include "$here/hexgate-$stage.conf";
         location / {
             proxy_pass http://127.0.0.1:$api_port;
         }
