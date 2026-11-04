@@ -389,7 +389,7 @@ function labelLookup(graph: PolicyGraph): (id: string) => string {
 }
 
 /** A verdict chip; `constraints` add a "*" with the conditions on hover. */
-function VerdictTag({
+export function VerdictTag({
   verdict,
   constraints = [],
 }: {
