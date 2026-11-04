@@ -8,7 +8,13 @@ import {
   useParams,
 } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { Ban, ChevronRight, ScrollText, ShieldCheck } from "lucide-react";
+import {
+  Ban,
+  ChevronRight,
+  Network,
+  ScrollText,
+  ShieldCheck,
+} from "lucide-react";
 
 import {
   ApiError,
@@ -16,7 +22,9 @@ import {
   type AgentManifestView,
   type AuditDecisionRow,
   type PolicyGraph,
+  type PolicyGraphEdge,
   type PolicyMatrix,
+  type SubagentRef,
 } from "@/lib/api";
 import {
   usePolicyFiles,
@@ -28,9 +36,12 @@ import { useProjectScoped } from "@/lib/active";
 import { useCanManageBans } from "@/lib/bans";
 import { useAuditSummary24h } from "@/lib/audit-summary";
 import { auditUrl } from "@/lib/audit-filters";
-import { agentSubgraph } from "@/lib/agent-graph";
+import { agentReachEdges, agentSubgraph } from "@/lib/agent-graph";
 import { formatDate, pluralise } from "@/lib/format";
-import { PolicyFlow } from "@/components/policy_files/PolicyGraphDialog";
+import {
+  PolicyFlow,
+  VerdictTag,
+} from "@/components/policy_files/PolicyGraphDialog";
 import { ResolvedGrid } from "@/components/policy_files/InspectorTabs";
 import { EventsTable } from "@/components/audit/pieces";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +55,29 @@ import { PlaygroundLive } from "./Playground";
 import { usePlaygroundServedAgent } from "@/lib/playground";
 
 type Activity = { all: number; deny: number; needs_approval: number };
+
+/** Tools + skills + handoff sub-agents. An agent-as-tool sub-agent is already
+ * one of its tools, so only handoffs add to the count. */
+function resourceCount(agent: AgentManifestView) {
+  const m = agent.manifest;
+  const tools = new Set(m?.tools?.map((t) => t.name));
+  const subs = new Set(
+    m?.subagents?.map((s) => s.name).filter((n) => !tools.has(n)),
+  );
+  return tools.size + (m?.skills?.length ?? 0) + subs.size;
+}
+
+/** A sub-agent from the manifest, with its policy edge when the project has a
+ * graph, and its own 24h call count (null until the summary lands). */
+type SubAgentRow = SubagentRef & {
+  edge: PolicyGraphEdge | null;
+  /** No edge names it: denied once the policy declares any reach (closed
+   * world, R-AGENT-002), else never checked. Null without a graph. */
+  unnamed: "denied" | "ungated" | null;
+  /** Registered in this project, so its hub exists. */
+  registered: boolean;
+  calls: number | null;
+};
 
 /**
  * `/agents/:name` — the single-agent hub. This is the first step of the
@@ -67,16 +101,16 @@ export function AgentHub() {
   // 24h activity — shares Home's cache entry.
   const summary = useAuditSummary24h(scope.projectId, { poll: true });
   const summaryData = summary.data;
+  const byAgent = useMemo(
+    () => new Map(summaryData?.by_agent.map((r) => [r.key, r])),
+    [summaryData],
+  );
   const activity: Activity | null = useMemo(
     () =>
       agent && summaryData
-        ? (summaryData.by_agent.find((r) => r.key === agent.name) ?? {
-            all: 0,
-            deny: 0,
-            needs_approval: 0,
-          })
+        ? (byAgent.get(agent.name) ?? { all: 0, deny: 0, needs_approval: 0 })
         : null,
-    [agent, summaryData],
+    [agent, summaryData, byAgent],
   );
 
   // Roles x tools for this agent, as the engine tabulates them. Only projects
@@ -128,6 +162,32 @@ export function AgentHub() {
     () => (graph && agent ? agentSubgraph(graph, agent.name) : null),
     [graph, agent],
   );
+  // Sub-agents come from the manifest (every project has one); the graph only
+  // adds each reach's verdict, where the project composes a policy.
+  const subAgents = useMemo<SubAgentRow[] | null>(() => {
+    const refs = agent?.manifest?.subagents;
+    if (!refs) return null;
+    // agentSubgraph is empty (not null) when the agent isn't in the graph.
+    const edges =
+      subgraph && subgraph.nodes.length > 0
+        ? agentReachEdges(subgraph, agent.name)
+        : null;
+    const names = new Set(manifests.data?.map((m) => m.name));
+    // The manifest may list a (name, via) twice (e.g. two as_tool mounts).
+    const unique = [
+      ...new Map(refs.map((r) => [`${r.name}:${r.via}`, r])).values(),
+    ];
+    return unique.map((r) => {
+      const edge = edges?.get(`${r.name}:${r.via}`) ?? null;
+      return {
+        ...r,
+        edge,
+        unnamed: !edges || edge ? null : edges.size > 0 ? "denied" : "ungated",
+        registered: names.has(r.name),
+        calls: summaryData ? (byAgent.get(r.name)?.all ?? 0) : null,
+      };
+    });
+  }, [agent, manifests.data, subgraph, summaryData, byAgent]);
 
   const canManageBans = useCanManageBans();
 
@@ -185,10 +245,7 @@ export function AgentHub() {
       <Breadcrumb name={agent.name} />
       <AgentHeader agent={agent} canManageBans={canManageBans} />
       <HubTabs
-        resources={
-          (agent.manifest?.tools?.length ?? 0) +
-          (agent.manifest?.skills?.length ?? 0)
-        }
+        resources={resourceCount(agent)}
         playgroundLive={playgroundLive}
       />
       <Outlet
@@ -203,6 +260,7 @@ export function AgentHub() {
             activity,
             activityError: summary.isError && !summary.data,
             subgraph,
+            subAgents,
             graphLoading: graphQuery.isLoading,
             graphError: graphQuery.isError && !graph404,
             playgroundLive,
@@ -230,6 +288,8 @@ export interface HubContext {
   activity: Activity | null;
   activityError: boolean;
   subgraph: PolicyGraph | null;
+  /** The manifest's sub-agents; null when it records none. */
+  subAgents: SubAgentRow[] | null;
   graphLoading: boolean;
   graphError: boolean;
   /** This agent is the one currently served, so its Playground tab is live. */
@@ -255,10 +315,152 @@ export function AgentOverviewTab() {
   );
 }
 
-/** The Resources tab — the manifest's tools, skills and guards. */
+/** The Resources tab — the manifest's tools, guards, skills and the
+ * sub-agents it reaches. */
 export function AgentResourcesTab() {
   const ctx = useOutletContext<HubContext>();
-  return <ManifestView agent={ctx.agent} roleModes={ctx.roleModes} />;
+  return (
+    <ManifestView
+      agent={ctx.agent}
+      roleModes={ctx.roleModes}
+      reaches={
+        <ReachesSection
+          agent={ctx.agent.name}
+          subAgents={ctx.subAgents}
+          unregistered={ctx.agent.manifest === null}
+          // agentSubgraph is empty (not null) when the agent isn't in the graph.
+          inGraph={!!ctx.subgraph && ctx.subgraph.nodes.length > 0}
+          callsError={ctx.activityError}
+        />
+      }
+    />
+  );
+}
+
+const VIA_LABEL: Record<SubagentRef["via"], string> = {
+  tool: "agent-as-tool",
+  handoff: "handoff",
+};
+
+/** Sub-agents count as resources: what they can call is reachable from here.
+ * One row per (sub-agent, via), as the manifest records them. */
+function ReachesSection({
+  agent,
+  subAgents,
+  unregistered,
+  inGraph,
+  callsError,
+}: {
+  agent: string;
+  subAgents: SubAgentRow[] | null;
+  unregistered: boolean;
+  /** The project's policy graph has this agent, so rows carry verdicts. */
+  inGraph: boolean;
+  callsError: boolean;
+}) {
+  return (
+    <section className="rounded-xl border border-border bg-card">
+      <div className="px-5 py-4 border-b border-border flex items-center gap-2">
+        <Network className="size-4 text-muted-foreground" />
+        <span className="text-sm font-medium">Reaches</span>
+        {subAgents !== null && (
+          <Badge variant="outline" className="ml-1 font-mono text-[11px]">
+            {subAgents.length}
+          </Badge>
+        )}
+        {inGraph && (
+          <Link
+            to={`/agents/${encodeURIComponent(agent)}`}
+            className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+          >
+            Open graph →
+          </Link>
+        )}
+      </div>
+      {subAgents === null || subAgents.length === 0 ? (
+        <p className="px-5 py-4 text-xs text-muted-foreground">
+          {unregistered
+            ? "Agent not registered yet — run `hexgate register` to populate."
+            : "No sub-agents recorded on its manifest."}
+        </p>
+      ) : (
+        <ul className="divide-y divide-border">
+          {subAgents.map((s) => (
+            <SubAgentItem
+              key={`${s.name}:${s.via}`}
+              sub={s}
+              callsError={callsError}
+            />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function SubAgentItem({
+  sub,
+  callsError,
+}: {
+  sub: SubAgentRow;
+  callsError: boolean;
+}) {
+  return (
+    <li className="px-5 py-4 flex flex-wrap items-center gap-3">
+      {sub.registered ? (
+        <Link
+          to={`/agents/${encodeURIComponent(sub.name)}`}
+          className="font-mono text-sm text-foreground hover:underline"
+        >
+          {sub.name}
+        </Link>
+      ) : (
+        <span
+          className="font-mono text-sm text-foreground"
+          title="Not registered in this project yet"
+        >
+          {sub.name}
+        </span>
+      )}
+      <Badge variant="outline" className="font-mono text-[10px] py-0">
+        {VIA_LABEL[sub.via]}
+      </Badge>
+      <span className="text-xs text-muted-foreground">
+        {callsError
+          ? "calls unavailable"
+          : `${sub.calls === null ? "—" : sub.calls.toLocaleString()} calls · 24h (all callers)`}
+      </span>
+      {sub.unnamed === "denied" && (
+        <span
+          className="ml-auto"
+          title="No reach rule names it, and reach is closed-world once a policy declares any — so it's denied."
+        >
+          <VerdictTag verdict="deny" />
+        </span>
+      )}
+      {sub.unnamed === "ungated" && (
+        <span
+          className="ml-auto text-[11px] text-muted-foreground"
+          title="Its policy declares no reach, so this isn't checked."
+        >
+          not gated
+        </span>
+      )}
+      {sub.edge && (
+        <span className="ml-auto flex items-center gap-2">
+          {sub.edge.roles.length > 0 && (
+            <span className="font-mono text-[11px] text-muted-foreground">
+              {sub.edge.roles.join(", ")}
+            </span>
+          )}
+          <VerdictTag
+            verdict={sub.edge.verdict}
+            constraints={sub.edge.constraints}
+          />
+        </span>
+      )}
+    </li>
+  );
 }
 
 /** The Policies tab — the engine-resolved roles x tools grid for this agent. */
@@ -437,8 +639,6 @@ function AgentOverview({
   const missing = activity === null;
   const num = (n: number | undefined) =>
     missing ? "—" : (n ?? 0).toLocaleString();
-  const tools = agent.manifest?.tools?.length ?? 0;
-  const skills = agent.manifest?.skills?.length ?? 0;
   const kpis: { label: string; value: string; className?: string }[] = [
     { label: "Calls · 24h", value: num(activity?.all) },
     { label: "Denied", value: num(activity?.deny), className: "text-deny" },
@@ -447,7 +647,7 @@ function AgentOverview({
       value: num(activity?.needs_approval),
       className: "text-approval",
     },
-    { label: "Resources", value: `${tools + skills}` },
+    { label: "Resources", value: `${resourceCount(agent)}` },
   ];
 
   // Caption counts come from the agent's OWN outbound edges in the graph, so
