@@ -11,8 +11,19 @@
 #      cap equal to the collector's own max_request_body_size: if the proxy
 #      allows less, large exports get a 413 from nginx; if more, nginx buffers
 #      bodies the collector then refuses.
-# Needs `nginx` on PATH; writes nothing outside a temp directory.
+# Needs `nginx` on PATH; without it the check is skipped with a notice, unless
+# NGINX_CHECK_REQUIRED is set (the CI job sets it, so a broken install step
+# fails instead of passing). Writes nothing outside a temp directory.
 set -euo pipefail
+
+if ! command -v nginx >/dev/null; then
+    if [[ -n "${NGINX_CHECK_REQUIRED:-}" ]]; then
+        echo "nginx not found, and NGINX_CHECK_REQUIRED is set" >&2
+        exit 1
+    fi
+    echo "nginx not found, skipping nginx-check (CI runs it)"
+    exit 0
+fi
 
 here="$(cd "$(dirname "$0")" && pwd)"
 tmp="$(mktemp -d)"

@@ -187,7 +187,11 @@ jobs:
       - name: Install nginx
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nginx
 
+      # Set, so a missing nginx (a broken install step) fails instead of
+      # being skipped as it is on a developer machine.
       - name: nginx -t and prod/staging drift
+        env:
+          NGINX_CHECK_REQUIRED: "1"
         run: make nginx-check
 
   platform-api-postgres:
