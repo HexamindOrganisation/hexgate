@@ -7,8 +7,11 @@ import { AgentsPage } from "@/routes/Agents";
 import { AiActPage } from "@/routes/AiAct";
 import { AuditPage } from "@/routes/Audit";
 import { BansPage } from "@/routes/Bans";
+import { ConnectedAppsPage } from "@/routes/ConnectedApps";
 import { ForgotPasswordPage } from "@/routes/ForgotPassword";
 import { GraphPage } from "@/routes/Graph";
+import { CONSENT_PATH } from "@/lib/oauth_consent";
+import { OAuthConsentPage } from "@/routes/OAuthConsent";
 import { OrgMembersPage } from "@/routes/OrgMembers";
 import { OrgSettingsPage } from "@/routes/OrgSettings";
 import { OrgsPage } from "@/routes/Orgs";
@@ -47,6 +50,17 @@ export default function App() {
           element={<AcceptInvitationPage />}
         />
 
+        {/* An MCP client's login: signed in, but outside the shell, since
+            the user only came here to approve or deny that client. */}
+        <Route
+          path={CONSENT_PATH}
+          element={
+            <ProtectedRoute>
+              <OAuthConsentPage />
+            </ProtectedRoute>
+          }
+        />
+
         {/* Authenticated dashboard. ProtectedRoute checks /v1/users/me
             and bounces signed-out visitors to /sign-in (preserving the
             requested path in state.from for post-sign-in redirect). */}
@@ -71,6 +85,7 @@ export default function App() {
           <Route path="orgs/:orgId/settings" element={<OrgSettingsPage />} />
           <Route path="orgs/:orgId/members" element={<OrgMembersPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="connected-apps" element={<ConnectedAppsPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

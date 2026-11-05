@@ -31,6 +31,7 @@ from hexgate_api.features.llm_messages.service import (
     verify_schema as verify_messages_schema,
 )
 from hexgate_api.features.members.router import router as members_router
+from hexgate_api.features.oauth import cleanup as oauth_cleanup
 from hexgate_api.features.oauth.provider import build_oauth_provider, oauth_routes
 from hexgate_api.features.oauth.router import router as oauth_router
 from hexgate_api.features.oauth.well_known import router as well_known_router
@@ -211,7 +212,8 @@ async def lifespan(app_: FastAPI):
             "for the seeded admin. Use ONLY in an ephemeral throwaway container, "
             "NEVER on a persistent/real deployment."
         )
-    yield
+    async with oauth_cleanup.purging():
+        yield
 
 
 def create_app() -> FastAPI:
