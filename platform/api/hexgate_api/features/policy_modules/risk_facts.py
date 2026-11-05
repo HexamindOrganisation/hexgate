@@ -1,10 +1,13 @@
 """Risk facts: allowed calls whose risky argument the composed policy leaves open.
 
 Read from one role's effective policy (after inheritance, modules and defaults)
-and the agent's manifest: what the policy allows, not a lint. Two kinds:
+and the agent's manifest: what the policy allows, not a lint. Three kinds:
 
 - ``unbounded_number``: an argument the manifest types as a number that nothing
   caps from above (an optional number the manifest records as a string is missed);
+- ``host_without_allowlist``: a URL or host argument, or HTTP egress, that no
+  constraint pins to a named host. Which arguments are hosts is a guess from
+  the names of top-level string arguments (a URL inside an object is missed);
 - ``destructive_without_approval``: a tool whose name holds a destructive verb,
   allowed with no approval step. A guess from the name.
 
@@ -24,9 +27,12 @@ if TYPE_CHECKING:
     from hexgate.security import AgentPolicy
     from hexgate.security.constraints import Cmp, Node, Operand
 
-FactKind = Literal["unbounded_number", "destructive_without_approval"]
+FactKind = Literal[
+    "unbounded_number", "host_without_allowlist", "destructive_without_approval"
+]
 
 _NUMBER_TYPES = frozenset({"number", "integer"})
+_HOST_WORDS = ("host", "hostname", "domain", "url", "uri", "endpoint", "webhook")
 _DESTRUCTIVE_VERBS = frozenset(
     {
         "delete", "remove", "drop", "destroy", "purge", "truncate", "wipe",
@@ -37,6 +43,16 @@ _DESTRUCTIVE_VERBS = frozenset(
 # with the arg on the right is mirrored first (``500 >= args.amount``).
 _UPPER = frozenset({"<", "<=", "==", "in"})
 _MIRROR = {"<": ">", "<=": ">=", ">": "<", ">=": "<=", "==": "=="}
+# A prefix that fixes the host: scheme, then the whole authority up to its "/".
+_HOST_PREFIX = re.compile(r"^[a-z][a-z0-9+.-]*://[^/]+/", re.I)
+# A suffix that names a domain from its dot (``.example.com``, ``.internal``);
+# its last label has a letter, so an IP's ``.1`` names nothing.
+_DOMAIN_SUFFIX = re.compile(r"^(\.[a-z0-9-]+)*\.[a-z0-9-]*[a-z][a-z0-9-]*$", re.I)
+# ``_HOST_PREFIX`` as an anchored RE2 pattern: a literal authority (dots escaped), and
+# whose "/" is not made optional (``/?`` lets ``api.x.com.evil.net`` through).
+_LITERAL_HOST_PATTERN = re.compile(
+    r"^\^[a-z][a-z0-9-]*://(?:[a-z0-9@:-]|\\\.)+/(?![?*+{])", re.I
+)
 
 
 def facts_for(
@@ -75,11 +91,13 @@ def facts_for(
 
 
 def _tools(policy: AgentPolicy, schemas: dict[str, InputSchema]) -> list[str]:
-    """The tools the agent may call: its manifest's and every authored rule.
+    """The tools the agent may call: its manifest's, every authored rule, and
+    HTTP egress, which a permissive default opens even when no rule names it.
     Agent and skill keys are reach, not calls, so they're left out."""
     from hexgate.security.models import is_reserved_key
+    from hexgate.security.network import NET_HTTP_REQUEST
 
-    names = set(policy.effective_tools) | set(schemas)
+    names = set(policy.effective_tools) | set(schemas) | {NET_HTTP_REQUEST}
     return sorted(name for name in names if not is_reserved_key(name))
 
 
@@ -90,13 +108,42 @@ def _tool_risks(
     consts: dict,
     known: dict,
 ) -> Iterator[tuple[FactKind, str | None]]:
+    from hexgate.security.network import NET_HTTP_REQUEST
+
     if _is_destructive(tool):
         yield "destructive_without_approval", None
+    # HTTP egress only: a TCP egress target is fixed in code (tcp_egress_guard).
+    if tool == NET_HTTP_REQUEST:
+        # A request is pinned by its host or its url. Only the host is parsed;
+        # the url is the request's own URI, so a suffix doesn't pin it. (A url
+        # pin covers plain HTTP: CONNECT's url has no path, so HTTPS is denied.)
+        pinned = ("host", "url")
+        if not any(
+            _pins(node, arg, known, parsed=arg == "host")
+            for node in nodes
+            for arg in pinned
+        ):
+            yield "host_without_allowlist", "host"
+        return
     props = schemas[tool].properties if tool in schemas else {}
     for name, prop in sorted(props.items()):
         if prop.type in _NUMBER_TYPES:
             if not any(_caps(node, name, consts, known) for node in nodes):
                 yield "unbounded_number", name
+        elif prop.type == "string" and _is_host_name(name):
+            if not any(_pins(node, name, known) for node in nodes):
+                yield "host_without_allowlist", name
+
+
+def _is_host_name(name: str) -> bool:
+    """Whether a word of the argument's name names a host, singular or plural
+    (``baseUrl``, ``host_name``, ``allowed_hosts``), or its run-together end does
+    (``targeturl``, ``targetURLs``, ``url2``)."""
+    words = [word.rstrip("0123456789").removesuffix("s") for word in _words(name)]
+    run_together = name.lower().rstrip("0123456789").removesuffix("s")
+    return any(word in _HOST_WORDS for word in words) or run_together.endswith(
+        _HOST_WORDS
+    )
 
 
 def _is_destructive(tool: str) -> bool:
@@ -136,6 +183,37 @@ def _caps(node: Node, arg: str, consts: dict, known: dict) -> bool:
     return _holds(node, leaf_caps, known)
 
 
+def _pins(node: Node, arg: str, known: dict, parsed: bool = False) -> bool:
+    """Whether every call that passes ``node`` has ``args.<arg>`` pinned to a
+    named host: ``==`` / ``in`` a fixed value, or a ``startswith`` or anchored
+    ``matches`` whose literal text runs past the host to its ``/``. A suffix
+    (``endswith(args.host, ".example.com")``) pins only a ``parsed`` host, the
+    one the egress proxy reads off the request: a raw string the model writes
+    can end in it after a ``/`` or ``?``. A scheme-only prefix pins nothing."""
+    from hexgate.security.constraints import Call, Cmp
+
+    def leaf_pins(leaf: Node) -> bool:
+        if isinstance(leaf, Cmp):
+            op, bound = _bound(leaf, arg)
+            return op in ("==", "in") and _is_fixed(bound)
+        if not isinstance(leaf, Call) or not _is_arg(leaf.arg, arg):
+            return False
+        value = leaf.value.value
+        if leaf.fn == "startswith":
+            return bool(_HOST_PREFIX.match(value))
+        if leaf.fn == "matches":
+            return _literal_host_prefix(value)
+        return leaf.fn == "endswith" and parsed and bool(_DOMAIN_SUFFIX.match(value))
+
+    return _holds(node, leaf_pins, known)
+
+
+def _literal_host_prefix(pattern: str) -> bool:
+    """Whether an RE2 ``pattern`` is anchored and its text up to the host's ``/``
+    is literal, with no alternation anywhere."""
+    return "|" not in pattern and bool(_LITERAL_HOST_PATTERN.match(pattern))
+
+
 def _bound(cmp: Cmp, arg: str) -> tuple[str | None, Operand | None]:
     """The operator and value ``cmp`` holds ``args.<arg>`` to, read with the
     arg on the left (``500 >= args.amount`` → ``<=``); Nones otherwise."""
@@ -152,12 +230,12 @@ def _holds(node: Node, leaf, known: dict) -> bool:
     every call passes bounds nothing (``tool != "x" or args.amount <= 5``). A Not
     never counts: a comparison on a missing or mistyped value is False, so its
     negation passes it. Nor does a quantifier, which binds elements."""
-    from hexgate.security.constraints import And, Cmp, Or
+    from hexgate.security.constraints import And, Call, Cmp, Or
 
     decided = _decided(node, known)
     if decided is not None:
         return not decided
-    if isinstance(node, Cmp):
+    if isinstance(node, (Cmp, Call)):
         return leaf(node)
     if isinstance(node, (And, Or)):
         results = (_holds(part, leaf, known) for part in node.parts)
@@ -213,3 +291,13 @@ def _is_arg(operand: Operand, arg: str) -> bool:
     from hexgate.security.constraints import Ref
 
     return isinstance(operand, Ref) and operand.path == ("args", arg)
+
+
+def _is_fixed(operand: Operand | None) -> bool:
+    """A value the caller of the tool doesn't pick: a literal, a const, or a
+    field outside ``args`` (``ctx.*``, ``run.*``)."""
+    from hexgate.security.constraints import ConstRef, Lit, Ref
+
+    if isinstance(operand, (Lit, ConstRef)):
+        return True
+    return isinstance(operand, Ref) and operand.path[:1] != ("args",)
