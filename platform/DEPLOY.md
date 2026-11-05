@@ -217,8 +217,9 @@ answer callers with no credentials by design and `/v1/oauth/authorize` and
 `/token` make the api fetch a client metadata document from whatever host the
 caller names. The comments in `hexgate-<stage>.conf` give each block's reason.
 The MCP server fetches the JWKS from `http://api:8000` on the compose network,
-never through the proxy. `HEXGATE_PUBLIC_URL` and `HEXGATE_MCP_RESOURCE_URL`
-(section 6) must name this same hostname: a client that connects to
+never through the proxy. `HEXGATE_PUBLIC_URL` (section 6) must name this same
+hostname: the compose derives the MCP resource URL from it as
+`HEXGATE_PUBLIC_URL` + `/mcp`, and a client that connects to
 `https://app.hexgate.ai/mcp` is only given a token for the resource URL the MCP
 server advertises.
 
@@ -416,7 +417,6 @@ far that did this:
 | OTLP pipeline (collector/redpanda/enricher) | `HEXGATE_OTLP_PORT` | `7001` prod, `7201` staging |
 | MCP server | `HEXGATE_MCP_PORT` | `7002` prod, `7202` staging |
 | MCP server | `HEXGATE_PUBLIC_URL` | `https://app.hexgate.ai` prod, `https://app.staging.hexgate.ai` staging — no trailing slash (the api and mcp refuse to boot with one) |
-| MCP server | `HEXGATE_MCP_RESOURCE_URL` | `https://app.hexgate.ai/mcp` prod, `https://app.staging.hexgate.ai/mcp` staging |
 
 The MCP server release adds its routes to `platform/nginx/` and a zones file
 per stage, which nginx needs at `http` level first. In the same upgrade, before

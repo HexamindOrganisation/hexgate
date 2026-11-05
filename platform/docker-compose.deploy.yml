@@ -16,10 +16,12 @@
 # The OAuth token issuer and the MCP resource URL. One definition, merged into
 # both the api and mcp environments, so the two services cannot disagree: a
 # token minted with one `iss` or `aud` is refused by a verifier holding the
-# other. Both services refuse a trailing slash on HEXGATE_PUBLIC_URL at boot.
+# other. The resource URL is derived, not a second secret: nginx serves /mcp
+# on the api hostname, so it can only be HEXGATE_PUBLIC_URL + /mcp. Both
+# services refuse a trailing slash on HEXGATE_PUBLIC_URL at boot.
 x-oauth-urls: &oauth-urls
   HEXGATE_PUBLIC_URL: ${HEXGATE_PUBLIC_URL:?HEXGATE_PUBLIC_URL missing - add it to the /hexgate/<stage> secret, then make platform-env-pull STAGE=<stage> (DEPLOY.md section 6)}
-  HEXGATE_MCP_RESOURCE_URL: ${HEXGATE_MCP_RESOURCE_URL:?HEXGATE_MCP_RESOURCE_URL missing - add it to the /hexgate/<stage> secret, then make platform-env-pull STAGE=<stage> (DEPLOY.md section 6)}
+  HEXGATE_MCP_RESOURCE_URL: ${HEXGATE_PUBLIC_URL:?HEXGATE_PUBLIC_URL missing - add it to the /hexgate/<stage> secret, then make platform-env-pull STAGE=<stage> (DEPLOY.md section 6)}/mcp
 
 services:
   postgres:
