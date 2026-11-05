@@ -4,6 +4,7 @@ and a client for the app over its MCP transport."""
 import json
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -24,6 +25,8 @@ JWKS_URL = f"{API_URL}/.well-known/jwks.json"
 PROJECT = "00000000-0000-0000-0000-000000000003"
 OTHER_PROJECT = "00000000-0000-0000-0000-000000000004"
 SETTINGS = Settings(api_url=API_URL, issuer=ISSUER, resource_url=RESOURCE)
+# The API's source, read by tests pinning a copy (this package never imports it).
+API_SOURCE = Path(__file__).parents[2] / "api" / "hexgate_api"
 
 
 class SigningKey:
