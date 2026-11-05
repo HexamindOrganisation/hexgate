@@ -1120,8 +1120,12 @@ def test_preview_resolves_a_draft(client):
     r = client.post(
         f"/v1/projects/{pid}/policy/preview",
         json={
-            "name": "policy.yaml",
-            "content": "tools: { a: { mode: allow }, b: { mode: allow } }\n",
+            "drafts": [
+                {
+                    "name": "policy.yaml",
+                    "content": "tools: { a: { mode: allow }, b: { mode: allow } }\n",
+                }
+            ]
         },
     )
     assert r.status_code == 200, r.text
@@ -1138,7 +1142,9 @@ def test_preview_reports_resolution_error_inline(client):
     _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
     r = client.post(
         f"/v1/projects/{pid}/policy/preview",
-        json={"name": "policy.yaml", "content": "import: [ nope.yaml ]\n"},
+        json={
+            "drafts": [{"name": "policy.yaml", "content": "import: [ nope.yaml ]\n"}]
+        },
     )
     assert r.status_code == 200
     body = r.json()
@@ -1205,9 +1211,13 @@ def test_preview_reports_error_in_a_non_requested_agent(client):
     r = client.post(
         f"/v1/projects/{pid}/policy/preview",
         json={
-            "name": "policy.yaml",
             "agent": "*",
-            "content": "agents:\n  bot:\n    roles:\n      support: { import: [ nope.yaml ] }\n",
+            "drafts": [
+                {
+                    "name": "policy.yaml",
+                    "content": "agents:\n  bot:\n    roles:\n      support: { import: [ nope.yaml ] }\n",
+                }
+            ],
         },
     )
     assert r.status_code == 200
@@ -1406,10 +1416,9 @@ def test_policy_test_reflects_a_draft_overlay(client):
             "role": "default",
             "tool": "b",
             "args": {},
-            "draft": {
-                "name": "policy.yaml",
-                "content": "tools: { b: { mode: allow } }\n",
-            },
+            "drafts": [
+                {"name": "policy.yaml", "content": "tools: { b: { mode: allow } }\n"}
+            ],
         },
     )
     assert drafted.status_code == 200, drafted.text
@@ -1425,10 +1434,88 @@ def test_policy_test_422_when_draft_does_not_compose(client):
             "role": "default",
             "tool": "a",
             "args": {},
-            "draft": {"name": "policy.yaml", "content": "import: [ missing.yaml ]\n"},
+            "drafts": [
+                {"name": "policy.yaml", "content": "import: [ missing.yaml ]\n"}
+            ],
         },
     )
     assert r.status_code == 422, r.text
+
+
+def _caps(export: str, tool: str) -> str:
+    return f"export:\n  {export}:\n    tools: {{ {tool}: {{ mode: allow }} }}\n"
+
+
+def _entry(ref: str) -> str:
+    return f"agents:\n  bot:\n    roles:\n      support: {{ import: [ {ref} ] }}\n"
+
+
+def _drafted(client, pid, route, drafts, **body):
+    return client.post(
+        f"/v1/projects/{pid}/policy/{route}",
+        json={**body, "drafts": [{"name": n, "content": c} for n, c in drafts]},
+    )
+
+
+_PROBE_B = {"role": "support", "agent": "bot", "tool": "b", "args": {}}
+
+
+def test_drafts_apply_together(client):
+    # Renaming an export and its import: either draft alone breaks the import,
+    # so both files must apply to the same check.
+    pid = _project(client)
+    _put_file(client, pid, "caps.yaml", _caps("c", "a"))
+    _put_file(client, pid, "policy.yaml", _entry("caps.yaml#c"))
+    caps, entry = ("caps.yaml", _caps("d", "b")), ("policy.yaml", _entry("caps.yaml#d"))
+    for alone in (caps, entry):
+        assert _drafted(client, pid, "check", [alone]).json()["ok"] is False
+    both = [caps, entry]
+    assert _drafted(client, pid, "check", both).json() == {"ok": True, "lints": []}
+    preview = _drafted(client, pid, "preview", both, agent="bot").json()
+    assert set(preview["resolved"]["support"]["tools"]) == {"b"}
+    tested = _drafted(client, pid, "test", both, **_PROBE_B)
+    assert tested.json()["outcome"] == "allow", tested.text
+
+
+def test_when_a_draft_names_an_unsaved_file_then_it_is_added(client):
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    drafts = [
+        ("caps/new.yaml", _caps("d", "b")),
+        ("policy.yaml", _entry("caps/new.yaml#d")),
+    ]
+    assert _drafted(client, pid, "check", drafts).json()["ok"] is True
+    assert (
+        _drafted(client, pid, "test", drafts, **_PROBE_B).json()["outcome"] == "allow"
+    )
+    assert [
+        f["name"] for f in client.get(f"/v1/projects/{pid}/policy-files").json()
+    ] == ["policy.yaml"]
+
+
+def test_when_the_project_has_no_entry_file_then_drafts_are_refused(client):
+    # The module store (or each agent's own policy) reads no policy files, so a
+    # non-entry draft would change nothing; every route says so instead.
+    pid = _project(client)
+    _put_file(client, pid, "caps.yaml", _caps("c", "a"))
+    drafts = [("caps.yaml", _caps("c", "b"))]
+    check = _drafted(client, pid, "check", drafts).json()
+    assert check["ok"] is False and "no 'policy.yaml'" in check["lints"][0]["message"]
+    preview = _drafted(client, pid, "preview", drafts).json()
+    assert preview["resolved"] is None
+    assert "no 'policy.yaml'" in preview["lints"][0]["message"]
+    tested = _drafted(client, pid, "test", drafts, role="default", tool="b", args={})
+    assert tested.status_code == 422 and "no 'policy.yaml'" in tested.text
+    # Drafting the entry file itself is the one draft such a project accepts.
+    entry = [("policy.yaml", "tools: { b: { mode: allow } }\n")]
+    assert _drafted(client, pid, "check", entry).json()["ok"] is True
+
+
+def test_when_two_drafts_name_one_file_then_422(client):
+    pid = _project(client)
+    drafts = [("policy.yaml", "tools: {}\n")] * 2
+    for route in ("check", "preview"):
+        assert _drafted(client, pid, route, drafts).status_code == 422
 
 
 def test_policy_graph_drops_isolated_generic_agent(client):
@@ -1858,7 +1945,7 @@ async def test_when_a_policy_is_bad_then_every_entry_point_reports_the_sdk_findi
     # /policy/preview and /policy/check — the compose document.
     preview = client.post(
         f"/v1/projects/{pid}/policy/preview",
-        json={"name": "policy.yaml", "content": _PARITY_COMPOSE},
+        json={"drafts": [{"name": "policy.yaml", "content": _PARITY_COMPOSE}]},
     ).json()
     assert _put_file(client, pid, "policy.yaml", _PARITY_COMPOSE).status_code == 200
     check = client.get(f"/v1/projects/{pid}/policy/check").json()
@@ -1959,7 +2046,7 @@ async def test_when_a_stored_manifest_no_longer_validates_then_only_its_checks_s
     ]
     preview = client.post(
         f"/v1/projects/{pid}/policy/preview",
-        json={"name": "policy.yaml", "content": entry},
+        json={"drafts": [{"name": "policy.yaml", "content": entry}]},
     ).json()
     assert preview["resolved"] is not None
     assert [lint["code"] for lint in preview["lints"]] == ["unknown-guard"]
