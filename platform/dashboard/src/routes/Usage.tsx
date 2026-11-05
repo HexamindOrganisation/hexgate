@@ -1,25 +1,23 @@
+import { useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useProjectScoped } from "@/lib/active";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { DashboardRangePicker } from "@/components/ui/dashboard-range-picker";
-import { StatStrip } from "@/components/ui/stat-strip";
 import { displayNoValue, scopeNoValue } from "@/components/audit/chart-tokens";
-import { rangeDays, rangePhrase } from "@/lib/date-range";
+import { rangePhrase } from "@/lib/date-range";
 import {
   UsageActiveChips,
   UsageBreakdownCard,
   UsageFilterBar,
+  UsageStatStrip,
 } from "@/components/usage/pieces";
 import { TopUsersCard } from "@/components/usage/top-users";
-import { useUsageFilters } from "@/lib/usage-filters";
+import { fromUsageSearch, useUsageFilters } from "@/lib/usage-filters";
 import { PageHeader } from "@/components/ui/page-header";
 import { fmtTokens, pluralise } from "@/lib/format";
 import { cn } from "@/lib/utils";
-
-/** Input and output token colours, shared by the tiles and the split bar. */
-const INPUT_SWATCH = "bg-primary/40";
-const OUTPUT_SWATCH = "bg-primary";
 
 export function UsagePage() {
   const projectScope = useProjectScoped();
@@ -28,6 +26,15 @@ export function UsagePage() {
 
   const f = useUsageFilters((s) => s.filters);
   const setF = useUsageFilters((s) => s.setFilters);
+  // A link with filters (e.g. the agent hub's drill-down) seeds the store
+  // once; the query is then dropped so the store stays the source of truth.
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    const linked = fromUsageSearch(params);
+    if (!linked) return;
+    setF(() => linked);
+    setParams({}, { replace: true });
+  }, [params, setF, setParams]);
 
   const scope = {
     window: f.range,
@@ -66,23 +73,6 @@ export function UsagePage() {
   const options = optionsQ.data;
   const scopeFiltered = !!(f.agent || f.model || f.user);
   const rangeTotal = options?.totals.calls ?? 0;
-
-  const nDays = rangeDays(f.range, f.start_date, f.end_date);
-  const hourly = !f.start_date && f.range === "24h";
-  // `fmt` overrides the plain count (e.g. compact tokens). en-US, like
-  // fmtTokens beside it, so one strip never mixes decimal marks.
-  const avgLabel = (
-    count: number,
-    fmt = (n: number) =>
-      n.toLocaleString("en-US", { maximumFractionDigits: hourly ? 1 : 0 }),
-  ) =>
-    `${fmt(hourly ? count / 24 : count / nDays)}/${hourly ? "hr" : "day"} avg`;
-  const inputPct = totals.total_tokens
-    ? Math.round((totals.input_tokens / totals.total_tokens) * 100)
-    : 0;
-  const outputPct = totals.total_tokens
-    ? Math.round((totals.output_tokens / totals.total_tokens) * 100)
-    : 0;
 
   if (projectScope.status === "no-project") {
     return <NoProjectEmptyState resource="LLM usage" />;
@@ -161,49 +151,11 @@ export function UsagePage() {
           summaryQ.isPlaceholderData && "opacity-50",
         )}
       >
-        <StatStrip
-          stats={[
-            {
-              key: "calls",
-              label: "Model calls",
-              value: totals.calls.toLocaleString(),
-              sub: avgLabel(totals.calls),
-            },
-            {
-              key: "input",
-              label: "Input tokens",
-              swatchClass: INPUT_SWATCH,
-              value: fmtTokens(totals.input_tokens),
-              sub: `${inputPct}% of total`,
-            },
-            {
-              key: "output",
-              label: "Output tokens",
-              swatchClass: OUTPUT_SWATCH,
-              value: fmtTokens(totals.output_tokens),
-              sub: `${outputPct}% of total`,
-            },
-            {
-              key: "total",
-              label: "Total tokens",
-              value: fmtTokens(totals.total_tokens),
-              sub: avgLabel(totals.total_tokens, (n) =>
-                fmtTokens(Math.round(n)),
-              ),
-            },
-          ]}
-          split={[
-            {
-              key: "input",
-              value: totals.input_tokens,
-              className: INPUT_SWATCH,
-            },
-            {
-              key: "output",
-              value: totals.output_tokens,
-              className: OUTPUT_SWATCH,
-            },
-          ]}
+        <UsageStatStrip
+          totals={totals}
+          range={f.range}
+          start_date={f.start_date}
+          end_date={f.end_date}
         />
       </div>
 
