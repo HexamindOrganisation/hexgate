@@ -13,6 +13,7 @@ import {
   AgentResourcesTab,
 } from "@/routes/AgentHub";
 import { AgentStatsTab } from "@/routes/AgentStats";
+import { AgentUsageTab } from "@/routes/AgentUsage";
 import { AiActPage } from "@/routes/AiAct";
 import { AuditPage } from "@/routes/Audit";
 import { BansPage } from "@/routes/Bans";
@@ -86,6 +87,7 @@ export default function App() {
           <Route path="agents/:name" element={<AgentHub />}>
             <Route index element={<AgentOverviewTab />} />
             <Route path="stats" element={<AgentStatsTab />} />
+            <Route path="usage" element={<AgentUsageTab />} />
             <Route path="resources" element={<AgentResourcesTab />} />
             <Route path="policies" element={<AgentPoliciesTab />} />
             <Route path="playground" element={<AgentPlaygroundTab />} />

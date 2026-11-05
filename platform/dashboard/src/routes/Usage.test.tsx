@@ -207,6 +207,28 @@ describe("UsagePage", () => {
     expect(await screen.findByText("51.4/hr avg")).toBeInTheDocument();
   });
 
+  it("loads filters a link carries (the agent hub's drill-down)", async () => {
+    const calls = stubFetch();
+    renderWithProviders(<UsagePage />, {
+      initialRoute: "/?range=7d&agent=example_agent&model=gpt-4",
+    });
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (u) =>
+            u.includes("window=7d") &&
+            u.includes("agent=example_agent") &&
+            u.includes("model=gpt-4"),
+        ),
+      ).toBe(true),
+    );
+    expect(useUsageFilters.getState().filters).toMatchObject({
+      agent: "example_agent",
+      model: "gpt-4",
+      range: "7d",
+    });
+  });
+
   it("agent and model filter selections land in the next query URL", async () => {
     const calls = stubFetch();
     const user = userEvent.setup();

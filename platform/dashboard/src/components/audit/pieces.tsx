@@ -20,6 +20,7 @@ import { Card } from "@/components/ui/card";
 import { ALL, FilterSelect } from "@/components/ui/filter-select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
+import { pickDims } from "@/lib/breakdown-dims";
 import { VerdictIcon } from "@/components/ui/verdict-icon";
 import { BreakdownCardShell } from "@/components/ui/breakdown-card";
 import { BreakdownBar, type BreakdownDatum } from "./charts";
@@ -174,9 +175,7 @@ export function BreakdownCard({
    * selected. */
   dims?: [BreakdownDim, ...BreakdownDim[]];
 }) {
-  const shownDims = dims
-    ? dims.map((id) => DIMS.find((d) => d.id === id)!)
-    : DIMS;
+  const shownDims = pickDims(DIMS, dims);
   const [dim, setDim] = useState<BreakdownDim>(shownDims[0].id);
   const [sort, setSort] = useState<"volume" | "denials">("volume");
   const source = dim === "tool" ? byTool : dim === "agent" ? byAgent : byRole;
