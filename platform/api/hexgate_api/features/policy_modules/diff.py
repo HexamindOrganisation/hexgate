@@ -17,6 +17,7 @@ from hexgate_api.features.policy_modules.service import (
     _resolution_for,
     _resolve_all_agents_files,
     compose_error_types,
+    overlay_drafts,
     roles_json,
 )
 from hexgate_api.schemas import PolicyFileDraft
@@ -224,7 +225,7 @@ async def diff_project(
 ) -> dict:
     """:func:`diff_files` of the stored files against them with ``drafts`` applied.
     Raises :class:`~service.InvalidModuleError` when no ``policy.yaml`` is stored
-    (a stored entry is also all ``files_with_drafts`` would refuse without):
+    (so ``overlay_drafts`` never sees a project it would refuse):
     such a project enforces from the module store or each agent's own policy, so
     there is no saved side to compare, and a first ``policy.yaml`` replaces it."""
     saved = await _files_map(session, project_id)
@@ -235,4 +236,4 @@ async def diff_project(
             "would switch every agent onto the file store"
         )
     # One read: both sides come from the same snapshot of the store.
-    return diff_files(saved, saved | {d.name: d.content for d in drafts})
+    return diff_files(saved, overlay_drafts(saved, drafts))
