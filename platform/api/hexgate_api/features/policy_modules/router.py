@@ -39,6 +39,7 @@ from hexgate_api.schemas import (
     PolicyTestRequest,
     PolicyTestResponse,
     ResolvedPolicyResponse,
+    RiskFactsResponse,
     RoleBindingsRead,
     RoleBindingsWrite,
 )
@@ -587,6 +588,33 @@ async def api_policy_graph(
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PolicyGraphResponse(**graph)
+
+
+@router.get(
+    "/projects/{project_id}/policy/risk-facts",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
+async def api_policy_risk_facts(
+    project_id: str,
+    agent: str | None = None,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> RiskFactsResponse:
+    """Allowed calls whose risky argument the composed policy leaves open, per
+    agent, role and tool (``policy_modules.risk_facts``). 422 if the project
+    can't be composed (use /policy/check to see that as a lint); 404 for an
+    ``agent`` it neither declares nor has registered."""
+    try:
+        result = await service.risk_facts(session, project_id, agent=agent)
+    except service.compose_error_types() as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except service.UnknownAgentError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"agent {exc.args[0]!r} is not declared or registered",
+        ) from exc
+    return RiskFactsResponse(**result)
 
 
 @router.post(
