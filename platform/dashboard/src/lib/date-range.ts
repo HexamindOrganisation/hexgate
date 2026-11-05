@@ -43,17 +43,18 @@ export interface BaseDashboardFilters extends RangePickerFilters {
   user: string;
 }
 
-/** Effective day count for a window: explicit custom dates win when both
- * are set, otherwise falls back to the preset range's day count. */
+/** Effective day count for a window: custom dates win (an open-ended start
+ * runs to now), otherwise the preset range's day count. */
 export function rangeDays(
   range: Range,
   start: Date | null,
   end: Date | null,
 ): number {
-  if (start && end) {
+  if (start) {
+    const until = end ?? new Date();
     return Math.max(
       1,
-      Math.round((end.getTime() - start.getTime()) / 86_400_000),
+      Math.round((until.getTime() - start.getTime()) / 86_400_000),
     );
   }
   return RANGE_DAYS[range];
