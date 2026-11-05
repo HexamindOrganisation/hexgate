@@ -9,7 +9,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { PolicyGraph } from "@/lib/api";
@@ -331,6 +331,51 @@ describe("PolicyGraphDialog", () => {
     await userEvent.click(animateBtn);
     expect(
       screen.getByRole("button", { name: /animating/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("narrows to one agent's neighbourhood when given an agent", async () => {
+    stubGraph(GRAPH);
+    renderDialog({ agent: "worker" });
+    await screen.findByTestId("node-agent:worker");
+    // Its caller, its tool and its MCP reach stay; the caller's role drops.
+    expect(screen.getByTestId("node-agent:supervisor")).toBeInTheDocument();
+    expect(screen.getByTestId("node-tool:refund")).toBeInTheDocument();
+    expect(screen.getByTestId("node-mcp:search")).toBeInTheDocument();
+    expect(screen.queryByTestId("node-role:admin")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "worker policy graph" }),
+    ).toBeInTheDocument();
+  });
+
+  it("offers only the roles that touch the agent in agent mode", async () => {
+    stubGraph({ ...GRAPH, roles: ["admin", "support", "guest"] });
+    renderDialog({ agent: "supervisor" });
+    await screen.findByTestId("node-agent:supervisor");
+    const options = within(screen.getByRole("combobox"))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+    expect(options).toEqual(["all roles", "admin"]);
+  });
+
+  it("shows the empty state for an agent with no edges", async () => {
+    stubGraph({
+      nodes: [{ id: "agent:lone", kind: "agent", label: "lone" }],
+      edges: [],
+      roles: [],
+    });
+    renderDialog({ agent: "lone" });
+    expect(
+      await screen.findByText(/no roles, tools or reach for lone/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("node-agent:lone")).not.toBeInTheDocument();
+  });
+
+  it("says so when the agent isn't in the graph", async () => {
+    stubGraph(GRAPH);
+    renderDialog({ agent: "ghost" });
+    expect(
+      await screen.findByText(/no roles, tools or reach for ghost/i),
     ).toBeInTheDocument();
   });
 
