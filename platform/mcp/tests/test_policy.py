@@ -37,7 +37,7 @@ ANSWERS = {
     },
     ("GET", "/policy-roles"): {"roles": {"support": {"*": ["refunds"]}}},
     ("GET", "/policy/check"): {"ok": True, "lints": []},
-    ("POST", "/policy/check"): {"ok": True, "lints": []},
+    ("POST", "/policy/preview"): {"resolved": {}, "lints": []},
     ("POST", "/policy/test"): {"outcome": "allow"},
 }
 # The tools that read the resolved policy, so refuse a project with no store.
@@ -200,9 +200,9 @@ def error(result: dict) -> str:
             {"drafts": [DRAFT]},
             [
                 ("GET", "/policy-files", {}),
-                ("POST", "/policy/check", {"drafts": [DRAFT]}),
+                ("POST", "/policy/preview", {"drafts": [DRAFT]}),
             ],
-            {"ok": True, "lints": []},
+            {"resolved": {}, "lints": []},
             id="check-draft",
         ),
         pytest.param(
@@ -210,8 +210,8 @@ def error(result: dict) -> str:
             # A new file and the policy.yaml importing it, checked together;
             # the entry file starts a compose store: no lookup needed.
             {"drafts": [NEW_FILE_DRAFT, ENTRY_DRAFT]},
-            [("POST", "/policy/check", {"drafts": [NEW_FILE_DRAFT, ENTRY_DRAFT]})],
-            {"ok": True, "lints": []},
+            [("POST", "/policy/preview", {"drafts": [NEW_FILE_DRAFT, ENTRY_DRAFT]})],
+            {"resolved": {}, "lints": []},
             id="check-two-drafts",
         ),
         pytest.param(

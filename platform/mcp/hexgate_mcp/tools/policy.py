@@ -64,8 +64,9 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
                 "each agent enforces its own policy, which this tool does not read"
             )
         if drafts:
-            # The API refuses these too (files_with_drafts), but /policy/check
-            # would answer with a lint the model reads as a policy error.
+            # The API refuses these too (files_with_drafts), but the preview
+            # answers with a lint the model would read as a policy error, and
+            # the test route with a 422 that names no way forward.
             # Not "draft policy.yaml instead": saving a first one moves the
             # whole project's enforcement onto the file store.
             raise ToolError(
@@ -179,14 +180,19 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
     ) -> str:
         """Lint the project's policy: errors such as a policy that does not
         compose, and warnings such as dead grants. Pass `drafts`, each a whole
-        file by `name`, to check them together as if they were saved.
+        file by `name`, to check them together as if they were saved; the
+        answer then also holds the generic (`"*"`) view they resolve to, which
+        leaves out roles declared under `agents:` (policy_dry_run with
+        `agent` evaluates those).
         A file `policy.yaml` does not import is not read: draft a new file
         together with the `policy.yaml` that imports it."""
         await refuse_without_store(project_id, drafts)
         if not drafts:
             return result_text(await read(project_id, "/policy/check"))
+        # The preview, not POST /policy/check: it also returns the generic
+        # view the drafts resolve to, which no other tool shows.
         body = {"drafts": _dump(drafts)}
-        return result_text(await post(project_id, "/policy/check", body))
+        return result_text(await post(project_id, "/policy/preview", body))
 
     @mcp.tool(annotations=READ_ONLY, structured_output=False)
     async def policy_dry_run(

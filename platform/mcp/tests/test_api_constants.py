@@ -52,10 +52,11 @@ def _api_fields(name: str) -> set[str]:
 
 
 # Each request body the policy tools build, beside the API model reading it:
-# the API drops a key it doesn't know, so a renamed field is silently ignored.
+# the API refuses a key it doesn't know (422), so a renamed field fails every
+# call; this catches it before a deploy does.
 REQUEST_KEYS = [
     ("PolicyFileDraft", set(PolicyDraft.model_fields)),
-    ("PolicyCheckRequest", {"drafts"}),
+    ("PolicyPreviewRequest", {"drafts"}),
     # Every argument set, so every key the tool sends (test_policy asserts it).
     ("PolicyTestRequest", set(FULL_DRY_RUN)),
 ]
