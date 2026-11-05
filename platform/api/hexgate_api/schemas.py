@@ -591,6 +591,27 @@ class PolicyGraphResponse(BaseModel):
     roles: list[str] = Field(default_factory=list)
 
 
+class RiskFactOut(BaseModel):
+    """One allowed call whose risky ``argument`` (None for a destructive tool)
+    the policy leaves open; see ``policy_modules.risk_facts``."""
+
+    agent: str
+    role: str
+    tool: str
+    kind: Literal["unbounded_number", "destructive_without_approval"]
+    argument: str | None
+    constraints_present: list[str]
+
+
+class RiskFactsResponse(BaseModel):
+    """Risk facts, plus the agents read without a registered manifest, whose
+    facts can only come from tool names."""
+
+    # First, so a client that cuts a long answer keeps it.
+    agents_without_manifest: list[str] = Field(default_factory=list)
+    facts: list[RiskFactOut] = Field(default_factory=list)
+
+
 class PolicyFileDraft(BaseModel):
     """An unsaved compose file edit, overlaid before test (like the preview draft)."""
 
