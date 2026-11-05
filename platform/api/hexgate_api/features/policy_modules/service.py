@@ -656,22 +656,28 @@ async def _files_map(session: AsyncSession, project_id: str) -> dict[str, str]:
     return {r.name: r.content for r in await list_files(session, project_id)}
 
 
-async def files_with_drafts(
-    session: AsyncSession, project_id: str, drafts: Iterable[PolicyFileDraft]
+def overlay_drafts(
+    stored: dict[str, str], drafts: Iterable[PolicyFileDraft]
 ) -> dict[str, str]:
-    """The project's stored files with ``drafts`` applied over them by name. A
-    draft may name a file not stored yet, so a proposal can add one. Raises
-    :class:`DraftWithoutEntryError` when drafts are given and neither the store
+    """``stored`` (``{name: content}``) with ``drafts`` applied over it by name.
+    A draft may name a file not stored yet, so a proposal can add one. Raises
+    :class:`DraftWithoutEntryError` when drafts are given and neither ``stored``
     nor the drafts hold the entry file."""
-    files = await _files_map(session, project_id)
     drafted = {d.name: d.content for d in drafts}
-    if drafted and ENTRY_FILE not in files and ENTRY_FILE not in drafted:
+    if drafted and ENTRY_FILE not in stored and ENTRY_FILE not in drafted:
         raise DraftWithoutEntryError(
             f"this project has no {ENTRY_FILE!r}, so a draft file cannot apply to "
             f"it; saving a first {ENTRY_FILE!r} would switch every agent onto the "
             "file store"
         )
-    return files | drafted
+    return stored | drafted
+
+
+async def files_with_drafts(
+    session: AsyncSession, project_id: str, drafts: Iterable[PolicyFileDraft]
+) -> dict[str, str]:
+    """The project's stored files with ``drafts`` applied (:func:`overlay_drafts`)."""
+    return overlay_drafts(await _files_map(session, project_id), drafts)
 
 
 def _db_loader(files: dict[str, str]):
