@@ -58,10 +58,24 @@ POLICY = "tools: { a: { mode: allow } }\n"
 CLIENT_NAME = "Hexgate e2e"
 
 
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind((HOST, 0))
-        return s.getsockname()[1]
+def bound_socket() -> socket.socket:
+    """A socket bound to a free loopback port and held open, so nothing else
+    can take the port before its server uses it."""
+    sock = socket.socket()
+    sock.bind((HOST, 0))
+    return sock
+
+
+def free_port(taken: set[int]) -> int:
+    """A free port for the API subprocess, which has to bind it itself: the one
+    port that is released before use. Never one of `taken`, the ports held by
+    the in-process servers."""
+    while True:
+        with socket.socket() as sock:
+            sock.bind((HOST, 0))
+            port = sock.getsockname()[1]
+        if port not in taken:
+            return port
 
 
 @dataclass(frozen=True)
@@ -76,28 +90,52 @@ class Stack:
 @pytest.fixture(scope="module")
 def stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
     tmp = tmp_path_factory.mktemp("e2e")
-    api_port, mcp_port, doc_port = free_port(), free_port(), free_port()
-    s = Stack(
-        api_url=f"http://{HOST}:{api_port}",
-        mcp_url=f"http://{HOST}:{mcp_port}/mcp",
-        # Never contacted: the consent POST must only carry its origin.
-        dashboard_url=f"http://{HOST}:{free_port()}",
-        client_id=f"http://{HOST}:{doc_port}/client.json",
-        # Loopback redirects match on any port, as for a native client.
-        redirect_uri=f"http://{HOST}:{free_port()}/callback",
-    )
-    with (
-        _client_document(doc_port, s),
-        _api(api_port, s, tmp),
-        _mcp_server(mcp_port, s),
-    ):
-        yield s
+    # Held for the whole module, never listened on: the API's ClickHouse port,
+    # refused at once rather than answered by whatever might bind it.
+    with bound_socket() as dead, bound_socket() as mcp_sock:
+        doc = ThreadingHTTPServer((HOST, 0), _ClientDocument)
+        doc_port = doc.server_address[1]
+        mcp_port = mcp_sock.getsockname()[1]
+        dead_port = dead.getsockname()[1]
+        api_port = free_port({doc_port, mcp_port, dead_port})
+        s = Stack(
+            api_url=f"http://{HOST}:{api_port}",
+            mcp_url=f"http://{HOST}:{mcp_port}/mcp",
+            # Never contacted: the consent POST must only carry its origin.
+            dashboard_url=f"http://{HOST}:5173",
+            client_id=f"http://{HOST}:{doc_port}/client.json",
+            # Never bound: loopback redirects match on any port, and the test
+            # reads the code from the consent response, not a callback.
+            redirect_uri=f"http://{HOST}:33418/callback",
+        )
+        with (
+            _serve_client_document(doc, s),
+            _api(api_port, s, tmp, clickhouse_port=dead_port),
+            _mcp_server(mcp_sock, s),
+        ):
+            yield s
+
+
+class _ClientDocument(BaseHTTPRequestHandler):
+    """Serves the client-ID metadata document, as a client such as Claude Code
+    hosts it; the body is set once the server's port is known."""
+
+    body = b""
+
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(self.body)))
+        self.end_headers()
+        self.wfile.write(self.body)
+
+    def log_message(self, *_: object) -> None:
+        pass
 
 
 @contextmanager
-def _client_document(port: int, s: Stack) -> Iterator[None]:
-    """The client-ID metadata document, as a client such as Claude Code hosts it."""
-    body = json.dumps(
+def _serve_client_document(server: ThreadingHTTPServer, s: Stack) -> Iterator[None]:
+    _ClientDocument.body = json.dumps(
         {
             "client_id": s.client_id,
             "client_name": CLIENT_NAME,
@@ -107,19 +145,6 @@ def _client_document(port: int, s: Stack) -> Iterator[None]:
             "token_endpoint_auth_method": "none",
         }
     ).encode()
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *_: object) -> None:
-            pass
-
-    server = ThreadingHTTPServer((HOST, port), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         yield
@@ -129,7 +154,7 @@ def _client_document(port: int, s: Stack) -> Iterator[None]:
 
 
 @contextmanager
-def _api(port: int, s: Stack, tmp: Path) -> Iterator[None]:
+def _api(port: int, s: Stack, tmp: Path, clickhouse_port: int) -> Iterator[None]:
     # None of the shell's own HEXGATE_* settings but the opa binary: the API
     # sees only these. The API's own .env does not override them.
     env = {
@@ -151,7 +176,7 @@ def _api(port: int, s: Stack, tmp: Path) -> Iterator[None]:
         "HEXGATE_OAUTH_ALLOW_INSECURE_CLIENT_IDS": "1",
         # Nothing listens there: the audit endpoints are not on this path.
         "HEXGATE_CLICKHOUSE_HOST": HOST,
-        "HEXGATE_CLICKHOUSE_PORT": str(free_port()),
+        "HEXGATE_CLICKHOUSE_PORT": str(clickhouse_port),
     }
     command = [
         "uv", "run", "--project", str(API_PROJECT), "--frozen",
@@ -203,13 +228,14 @@ def _wait_for(url: str, process: subprocess.Popen[bytes], log: Path) -> None:
 
 
 @contextmanager
-def _mcp_server(port: int, s: Stack) -> Iterator[None]:
+def _mcp_server(sock: socket.socket, s: Stack) -> Iterator[None]:
     settings = Settings(api_url=s.api_url, issuer=s.api_url, resource_url=s.mcp_url)
-    config = uvicorn.Config(
-        create_app(settings), host=HOST, port=port, log_level="warning"
-    )
+    config = uvicorn.Config(create_app(settings), log_level="warning")
     server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, daemon=True)
+    # On the socket already bound, so its port is never released.
+    thread = threading.Thread(
+        target=server.run, kwargs={"sockets": [sock]}, daemon=True
+    )
     thread.start()
     try:
         deadline = time.monotonic() + 10
