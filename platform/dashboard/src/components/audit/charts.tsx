@@ -4,9 +4,9 @@
  * is bound to the allow/deny/needs_approval outcome domain.
  */
 
-import { Check, CircleDashed, X } from "lucide-react";
 import type { AuditOutcome } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { VerdictIcon } from "@/components/ui/verdict-icon";
 import { BarRow } from "@/components/ui/breakdown-card";
 import { OUT_LABEL } from "./chart-tokens";
 
@@ -22,10 +22,9 @@ export interface BreakdownDatum extends Counts {
 }
 
 export function DecisionBadge({ d }: { d: AuditOutcome }) {
-  const OutcomeIcon = d === "allow" ? Check : d === "deny" ? X : CircleDashed;
   return (
     <Badge variant={d === "needs_approval" ? "approval" : d}>
-      <OutcomeIcon className="size-3" strokeWidth={2} />
+      <VerdictIcon verdict={d} />
       {OUT_LABEL[d]}
     </Badge>
   );
