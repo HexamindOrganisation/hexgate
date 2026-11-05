@@ -43,6 +43,7 @@ REGISTRY = {
     ("GET", f"{_P}/policy/resolve"): _READ,
     ("GET", f"{_P}/policy/check"): _READ,
     ("GET", f"{_P}/policy/graph"): _READ,
+    ("GET", f"{_P}/policy/coverage"): _READ,
     ("POST", f"{_P}/policy/test"): _READ,
     ("PUT", f"{_P}/policy-files/{{name:path}}"): {OAUTH_SCOPE_KEY: "policy:write"},
     ("GET", f"{_P}/audit/decisions"): {OAUTH_SCOPE_KEY: "audit:read"},
@@ -140,8 +141,12 @@ def test_when_route_is_marked_then_require_user_accepts_the_token(
     """The token passes ``require_user`` and the route's own gate (the user owns the project)."""
     r = _call(client, method, route, token)
     # 422: no body was sent, and FastAPI validates it only after the
-    # dependencies passed. 503: the audit route with an unreachable or broken ClickHouse.
-    assert r.status_code < 400 or r.status_code in (422, 503), r.text
+    # dependencies passed. 503: the audit route with an unreachable or broken
+    # ClickHouse. 409: coverage on the seeded project, which has no policy store.
+    accepted = {422, 503} | (
+        {409} if route.path.endswith("/policy/coverage") else set()
+    )
+    assert r.status_code < 400 or r.status_code in accepted, r.text
 
 
 @pytest.mark.parametrize(("method", "route"), UNMARKED_USER)
