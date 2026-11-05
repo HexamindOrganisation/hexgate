@@ -12,7 +12,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import yaml
@@ -24,7 +25,8 @@ from hexgate_api.core.ids import new_id
 from hexgate_api.models import PolicyFile, PolicyModule, RoleBinding, utcnow
 
 if TYPE_CHECKING:  # the SDK is imported lazily at run time
-    from hexgate.security import PolicyLint
+    from hexgate.security import PolicyLint, Verdict
+    from hexgate.security.linker import ProjectLinkResult
 
 logger = logging.getLogger("hexgate.platform.policy_modules")
 
@@ -1051,21 +1053,33 @@ async def policy_graph(
     file) vs the tier store — a single files read — and feeds the same builder.
     Raises the SDK's compose errors if the project doesn't resolve."""
     files = await _files_map(session, project_id)
-    if ENTRY_FILE in files:
-        agent_names = _compose_agent_names(files)
-
-        def resolve_for_agent(a: str):
-            return _resolve_files(files, a)
-    else:
-        from hexgate.security import resolve_for_project
-
-        boundaries, capabilities, roles_matrix = await _sdk_inputs(session, project_id)
-        agent_names = sorted(_all_agent_names(roles_matrix))
-
-        def resolve_for_agent(a: str):
-            return resolve_for_project(boundaries, capabilities, roles_matrix, agent=a)
-
+    agent_names, resolve_for_agent = await _agent_resolver(session, project_id, files)
     return _graph_from(agent_names, resolve_for_agent, role=role)
+
+
+async def _agent_resolver(
+    session: AsyncSession, project_id: str, files: dict[str, str]
+) -> tuple[list[str], Callable[[str], ProjectLinkResult]]:
+    """The agents the project declares (``"*"`` included) and a per-agent
+    resolver: compose when ``files`` holds an entry file, else the tier store."""
+    if ENTRY_FILE in files:
+        return _compose_agent_names(files), lambda a: _resolve_files(files, a)
+    from hexgate.security import resolve_for_project
+
+    boundaries, capabilities, roles = await _sdk_inputs(session, project_id)
+    return sorted(_all_agent_names(roles)), lambda a: resolve_for_project(
+        boundaries, capabilities, roles, agent=a
+    )
+
+
+@dataclass(frozen=True)
+class DryRun:
+    """A dry-run's verdict, and whether the policy it ran against declares the
+    agent: an agent it does not declare is evaluated under the generic ``"*"``
+    view, so the same verdict would otherwise read as that agent's own."""
+
+    verdict: Verdict
+    agent_declared: bool
 
 
 async def test_policy(
@@ -1078,7 +1092,7 @@ async def test_policy(
     args: dict,
     attributes: dict | None = None,
     draft: tuple[str, str] | None = None,
-):
+) -> DryRun:
     """Evaluate one tool call against the resolved policy for ``role`` + ``agent``,
     then run the SDK decision engine.
 
@@ -1092,18 +1106,14 @@ async def test_policy(
     files = await _files_map(session, project_id)
     if draft is not None:
         files = {**files, draft[0]: draft[1]}
-    if ENTRY_FILE in files:
-        result = _resolve_files(files, agent)
-    else:
-        from hexgate.security import resolve_for_project
-
-        boundaries, capabilities, roles = await _sdk_inputs(session, project_id)
-        result = resolve_for_project(boundaries, capabilities, roles, agent=agent)
+    declared, resolve_for_agent = await _agent_resolver(session, project_id, files)
+    result = resolve_for_agent(agent)
     if role not in result.policy_set.roles:
         raise UnknownRoleError(role)
-    return result.policy_set.evaluate(
+    verdict = result.policy_set.evaluate(
         role=role, tool=tool, args=dict(args), attributes=attributes
     )
+    return DryRun(verdict=verdict, agent_declared=agent in declared)
 
 
 async def resolved_yaml_by_agent_compose(

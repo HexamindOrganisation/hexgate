@@ -523,7 +523,10 @@ async def api_resolve_policy(
             detail=f"role {role!r} not defined (known: {sorted(result.by_role)})",
         )
 
-    return ResolvedPolicyResponse(roles=service.roles_json(result, role=role))
+    return ResolvedPolicyResponse(
+        roles=service.roles_json(result, role=role),
+        modular=await service.is_modular(session, project_id),
+    )
 
 
 @router.get(
@@ -564,7 +567,9 @@ async def api_policy_graph(
         graph = await service.policy_graph(session, project_id, role=role)
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return PolicyGraphResponse(**graph)
+    return PolicyGraphResponse(
+        **graph, modular=await service.is_modular(session, project_id)
+    )
 
 
 @router.post(
@@ -584,7 +589,7 @@ async def api_test_policy(
     doesn't compose; 404 for an unknown role."""
     draft = (body.draft.name, body.draft.content) if body.draft else None
     try:
-        verdict = await service.test_policy(
+        dry_run = await service.test_policy(
             session,
             project_id,
             role=body.role,
@@ -603,6 +608,7 @@ async def api_test_policy(
             status_code=404, detail=f"role {exc.args[0]!r} not defined"
         ) from exc
 
+    verdict = dry_run.verdict
     return PolicyTestResponse(
         outcome=_OUTCOME_WIRE.get(verdict.outcome.name, verdict.outcome.name.lower()),
         reason=verdict.reason,
@@ -610,4 +616,5 @@ async def api_test_policy(
         # Verdict.hint is a machine-readable dict (file-scope path hint); the wire
         # field is a string, so serialize rather than 500 on a dict.
         hint=json.dumps(verdict.hint) if verdict.hint is not None else None,
+        agent_declared=dry_run.agent_declared,
     )

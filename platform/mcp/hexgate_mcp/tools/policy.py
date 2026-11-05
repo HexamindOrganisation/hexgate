@@ -22,6 +22,13 @@ NOT_IN_FORCE = (
 )
 
 
+# Why an undeclared agent is refused rather than answered.
+UNDECLARED = (
+    'an agent the policy does not declare runs under the generic "*" view, '
+    "which a call without `agent` returns"
+)
+
+
 class PolicyDraft(BaseModel):
     """An unsaved policy file, overlaid on the project's stored files."""
 
@@ -99,8 +106,7 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         if agent not in known:
             raise ToolError(
                 f"agent {agent!r} is not declared in the policy (declared: "
-                f"{known}); an agent the policy does not declare runs under the "
-                'generic "*" view, which a call without `agent` returns'
+                f"{known}); {UNDECLARED}"
             )
 
     # Unstructured, like every tool here: a `str` return otherwise goes out a
@@ -214,9 +220,7 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         `attributes` are the caller's ctx.* values. Pass a `draft` file to
         evaluate against it as if it were saved. A file
         `policy.yaml` does not import is not read, so its draft changes
-        nothing until the import exists. With a `policy.yaml` draft, `agent`
-        is not checked against the draft's own agents: an agent it does not
-        declare is evaluated under the generic view."""
+        nothing until the import exists."""
         await refuse_without_store(project_id, draft)
         # A draft policy.yaml may declare an agent the saved graph lacks.
         if draft is None or draft.name != ENTRY_FILE:
@@ -231,7 +235,14 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         }
         # Unset: left out, so the API applies its own defaults.
         body = {k: v for k, v in body.items() if v is not None}
-        return result_text(await post(project_id, "/policy/test", body))
+        verdict = await post(project_id, "/policy/test", body)
+        # Every call: the only check a draft policy.yaml's agents get.
+        if not verdict["agent_declared"]:
+            raise ToolError(
+                f"agent {agent!r} is not declared in the policy this call was "
+                f"evaluated against; {UNDECLARED}"
+            )
+        return result_text(verdict)
 
 
 def _has_entry(files: list[dict[str, Any]]) -> bool:
