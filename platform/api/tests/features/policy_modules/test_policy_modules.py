@@ -1431,6 +1431,87 @@ def test_policy_test_422_when_draft_does_not_compose(client):
     assert r.status_code == 422, r.text
 
 
+def _store_entry_file(client, pid) -> None:
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+
+
+def _store_role_binding(client, pid) -> None:
+    _put_module(client, pid, "capability", "read_only", READ_ONLY)
+    r = client.put(
+        f"/v1/projects/{pid}/policy-roles",
+        json={"roles": {"member": {"*": ["read_only"], "billing_bot": ["read_only"]}}},
+    )
+    assert r.status_code == 200, r.text
+
+
+def _store_lone_capability(client, pid) -> None:
+    _put_module(client, pid, "capability", "read_only", READ_ONLY)
+
+
+@pytest.mark.parametrize("route", ["resolve", "graph"])
+@pytest.mark.parametrize(
+    ("store", "modular"),
+    [
+        (_store_entry_file, True),
+        (_store_role_binding, True),
+        # A half-built library flips nothing: each agent keeps its policy_yaml.
+        (_store_lone_capability, False),
+    ],
+)
+def test_when_project_has_a_store_then_resolve_and_graph_report_modular(
+    client, route, store, modular
+):
+    pid = _project(client)
+    store(client, pid)
+    r = client.get(f"/v1/projects/{pid}/policy/{route}")
+    assert r.status_code == 200, r.text
+    assert r.json()["modular"] is modular
+
+
+@pytest.mark.parametrize(
+    ("agent", "declared"),
+    [("*", True), ("bot", True), ("ghost", False)],
+)
+def test_when_draft_entry_declares_agents_then_policy_test_reports_agent_declared(
+    client, agent, declared
+):
+    # The saved policy.yaml declares no agent: "bot" is declared by the draft
+    # alone, so the answer is about the policy the call ran against.
+    pid = _project(client)
+    _store_entry_file(client, pid)
+    draft = (
+        "tools: { a: { mode: allow } }\n"
+        "agents:\n  bot:\n    roles:\n      default:\n        tools: { a: { mode: allow } }\n"
+    )
+    r = client.post(
+        f"/v1/projects/{pid}/policy/test",
+        json={
+            "role": "default",
+            "tool": "a",
+            "agent": agent,
+            "draft": {"name": "policy.yaml", "content": draft},
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["agent_declared"] is declared
+
+
+@pytest.mark.parametrize(
+    ("agent", "declared"), [("billing_bot", True), ("triage_bot", False)]
+)
+def test_when_role_bindings_name_agents_then_policy_test_reports_agent_declared(
+    client, agent, declared
+):
+    pid = _project(client)
+    _store_role_binding(client, pid)
+    r = client.post(
+        f"/v1/projects/{pid}/policy/test",
+        json={"role": "member", "tool": "view_orders", "agent": agent},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["agent_declared"] is declared
+
+
 def test_policy_graph_drops_isolated_generic_agent(client):
     # With named agents and no top-level grant, the generic "*" column has no
     # edges — its sentinel node is pruned, not shown as a literal "*" agent.

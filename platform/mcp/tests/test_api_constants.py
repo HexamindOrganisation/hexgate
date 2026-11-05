@@ -7,8 +7,7 @@ from pathlib import Path
 from hexgate_mcp.auth import ACCESS_TOKEN_TYPE
 from hexgate_mcp.scopes import OAUTH_SCOPES
 from hexgate_mcp.tools.policy import ENTRY_FILE
-
-API = Path(__file__).parents[2] / "api" / "hexgate_api"
+from tests.conftest import API_SOURCE as API
 
 
 def _api_constant(path: Path, name: str) -> ast.expr:
