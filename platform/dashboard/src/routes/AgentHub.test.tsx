@@ -5,7 +5,7 @@
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Routes } from "react-router-dom";
+import { Route, Routes, useLocation } from "react-router-dom";
 
 import { useActive } from "@/lib/active";
 import { agentHubRoute } from "@/routes/agent-hub-routes";
@@ -106,6 +106,8 @@ const DECISION = {
   attributes: null,
   run_id: null,
 };
+// Every URL the stub served, for asserting the query a tab sent.
+const fetched: URL[] = [];
 
 function stubFetch(
   role: string,
@@ -115,6 +117,7 @@ function stubFetch(
   matrixError = false,
   graph: "default" | "subAgent" | "none" = "default",
   subAgent: false | "tool" | "handoff" = graph === "subAgent" && "tool",
+  tsError = false,
 ) {
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -130,6 +133,7 @@ function stubFetch(
           status: o.status,
           headers: { "Content-Type": "application/json" },
         });
+      fetched.push(url);
       switch (url.pathname) {
         case "/v1/orgs":
           return json([{ id: "org-1", slug: "acme", name: "Acme Inc", role }]);
@@ -269,6 +273,22 @@ function stubFetch(
             by_tool: [],
             by_user: [],
           });
+        case `/v1/projects/${PROJECT}/audit/timeseries`:
+          if (tsError) return new Response("boom", { status: 500 });
+          return json([
+            {
+              bucket: "2026-11-05T10:00:00Z",
+              allow: 4,
+              deny: 1,
+              needs_approval: 0,
+            },
+            {
+              bucket: "2026-11-05T11:00:00Z",
+              allow: 6,
+              deny: 3,
+              needs_approval: 1,
+            },
+          ]);
         default:
           return new Response("not found", { status: 404 });
       }
@@ -286,6 +306,7 @@ function renderHub(
     matrixError = false,
     graph = "default",
     subAgent = graph === "subAgent" && "tool",
+    tsError = false,
     tab = "",
   }: {
     role?: string;
@@ -296,7 +317,15 @@ function renderHub(
     graph?: "default" | "subAgent" | "none";
     /** The manifest records billing_bot, reached this way. */
     subAgent?: false | "tool" | "handoff";
-    tab?: "" | "/resources" | "/policies" | "/playground" | "/decisions";
+    tsError?: boolean;
+    tab?:
+      | ""
+      | "/stats"
+      | "/stats?range=7d"
+      | "/resources"
+      | "/policies"
+      | "/playground"
+      | "/decisions";
   } = {},
 ) {
   stubFetch(
@@ -307,10 +336,15 @@ function renderHub(
     matrixError,
     graph,
     subAgent,
+    tsError,
   );
-  return renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
-    initialRoute: `/agents/${name}${tab}`,
-  });
+  return renderWithProviders(
+    <Routes>
+      {agentHubRoute()}
+      <Route path="/audit" element={<AuditProbe />} />
+    </Routes>,
+    { initialRoute: `/agents/${name}${tab}` },
+  );
 }
 
 /** The hub for support_bot, with `/policy/graph` answering `graph`. */
@@ -336,8 +370,14 @@ const graphEdge = (
   roles: [],
 });
 
+/** Stands in for /audit: shows the filters a drill-down navigated with. */
+function AuditProbe() {
+  return <div data-testid="audit-url">{useLocation().search}</div>;
+}
+
 describe("AgentHub", () => {
   beforeEach(() => {
+    fetched.length = 0;
     served.agentName = null;
     served.online = false;
     act(() => {
@@ -524,6 +564,84 @@ describe("AgentHub", () => {
       await screen.findByText(
         /Nothing in the policy maps roles, tools or reach/,
       ),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the agent's audit stats, scoped to it, on the Stats tab", async () => {
+    renderHub("support_bot", { tab: "/stats" });
+    expect(await screen.findByText("Decisions per hour")).toBeInTheDocument();
+    expect(screen.getByText("26.7% deny rate")).toBeInTheDocument();
+    // Both the summary and the timeseries carry the agent filter (the hub's
+    // own 24h summary is unscoped, so look for the scoped request).
+    for (const path of ["audit/summary", "audit/timeseries"]) {
+      expect(
+        fetched.some(
+          (u) =>
+            u.pathname.endsWith(path) &&
+            u.searchParams.get("agent") === "support_bot",
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("refetches the Stats tab for a new range", async () => {
+    renderHub("support_bot", { tab: "/stats" });
+    await screen.findByText("Decisions per hour");
+    await userEvent.click(screen.getByText("7d"));
+    await vi.waitFor(() =>
+      expect(
+        fetched.some(
+          (u) =>
+            u.pathname.endsWith("audit/timeseries") &&
+            u.searchParams.get("window") === "7d" &&
+            u.searchParams.get("agent") === "support_bot",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("drills a Stats tile into /audit filtered to the agent", async () => {
+    renderHub("support_bot", { tab: "/stats" });
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Denied/ }),
+    );
+    const search = new URLSearchParams(
+      (await screen.findByTestId("audit-url")).textContent ?? "",
+    );
+    expect(search.get("agent")).toBe("support_bot");
+    expect(search.get("outcome")).toBe("deny");
+    expect(search.get("range")).toBe("24h");
+  });
+
+  it("reads the Stats range from the URL", async () => {
+    renderHub("support_bot", { tab: "/stats?range=7d" });
+    await screen.findByText("26.7% deny rate");
+    expect(
+      fetched.some(
+        (u) =>
+          u.pathname.endsWith("audit/summary") &&
+          u.searchParams.get("agent") === "support_bot" &&
+          u.searchParams.get("window") === "7d",
+      ),
+    ).toBe(true);
+    expect(screen.getByRole("radio", { name: "7d" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+
+  it("says the chart failed, not that there were no decisions", async () => {
+    renderHub("support_bot", { tab: "/stats", tsError: true });
+    expect(
+      await screen.findByText(/Couldn't load the chart/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No decisions in this range.")).toBeNull();
+  });
+
+  it("says so when the Stats tab can't load", async () => {
+    renderHub("support_bot", { tab: "/stats", summaryError: true });
+    expect(
+      await screen.findByText(/Couldn't load this agent's stats/),
     ).toBeInTheDocument();
   });
 

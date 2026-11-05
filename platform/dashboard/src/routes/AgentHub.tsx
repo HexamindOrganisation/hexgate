@@ -548,6 +548,9 @@ function HubTabs({
       <NavLink to="." end className={cls}>
         Overview
       </NavLink>
+      <NavLink to="stats" className={cls}>
+        Stats
+      </NavLink>
       <NavLink to="resources" className={cls}>
         Resources
         {resources !== null && (
