@@ -22,6 +22,7 @@ FULL_DRY_RUN = {
     "attributes": {"tier": "gold"},
     "draft": DRAFT,
 }
+RISK_FACTS = {"agents_without_manifest": ["billing"], "facts": []}
 # What the API answers on each route these tools call.
 ANSWERS = {
     ("GET", "/policy-files"): [ENTRY, CAP],
@@ -37,6 +38,7 @@ ANSWERS = {
     },
     ("GET", "/policy-roles"): {"roles": {"support": {"*": ["refunds"]}}},
     ("GET", "/policy/check"): {"ok": True, "lints": []},
+    ("GET", "/policy/risk-facts"): RISK_FACTS,
     ("POST", "/policy/preview"): {"resolved": {}, "lints": []},
     ("POST", "/policy/test"): {"outcome": "allow"},
 }
@@ -45,6 +47,7 @@ RESOLVED = [
     ("policy_resolve", {}, "/policy/resolve"),
     ("policy_graph", {}, "/policy/graph"),
     ("policy_check", {}, "/policy/check"),
+    ("policy_risk_facts", {}, "/policy/risk-facts"),
     ("policy_dry_run", DRY_RUN, "/policy/test"),
 ]
 # One call of every tool here, each with the arguments it needs.
@@ -55,6 +58,7 @@ CALLS = [
     ("policy_graph", {}),
     ("policy_list_roles", {}),
     ("policy_check", {}),
+    ("policy_risk_facts", {}),
     ("policy_dry_run", DRY_RUN),
 ]
 
@@ -209,6 +213,16 @@ def error(result: dict) -> str:
             [("POST", "/policy/preview", ENTRY_DRAFT)],
             {"resolved": {}, "lints": []},
             id="check-entry-draft",
+        ),
+        pytest.param(
+            "policy_risk_facts",
+            {"agent": "billing"},
+            [
+                ("GET", "/policy-files", {}),
+                ("GET", "/policy/risk-facts", {"agent": "billing"}),
+            ],
+            RISK_FACTS,
+            id="risk_facts-agent",
         ),
         pytest.param(
             "policy_dry_run",
