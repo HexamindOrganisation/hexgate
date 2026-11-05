@@ -1511,6 +1511,25 @@ def test_when_the_project_has_no_entry_file_then_drafts_are_refused(client):
     assert _drafted(client, pid, "check", entry).json()["ok"] is True
 
 
+_OLD_DRAFT = {"name": "policy.yaml", "content": "tools: {}\n"}
+
+
+@pytest.mark.parametrize(
+    ("route", "body"),
+    [
+        ("preview", _OLD_DRAFT),
+        ("check", {"draft": _OLD_DRAFT}),
+        ("test", {"role": "default", "tool": "a", "draft": _OLD_DRAFT}),
+    ],
+)
+def test_when_a_body_has_the_old_single_draft_shape_then_422(client, route, body):
+    # Ignored, the draft would be dropped and the saved policy answered.
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    r = client.post(f"/v1/projects/{pid}/policy/{route}", json=body)
+    assert r.status_code == 422, r.text
+
+
 def test_when_two_drafts_name_one_file_then_422(client):
     pid = _project(client)
     drafts = [("policy.yaml", "tools: {}\n")] * 2

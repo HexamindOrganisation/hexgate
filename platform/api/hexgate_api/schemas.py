@@ -565,8 +565,13 @@ def _unique_draft_names(drafts: list[PolicyFileDraft]) -> list[PolicyFileDraft]:
 PolicyFileDrafts = Annotated[list[PolicyFileDraft], AfterValidator(_unique_draft_names)]
 
 
+# The request models below refuse unknown keys: a client still sending the
+# old single-file body would otherwise have its draft dropped and be answered
+# for the saved policy.
 class PolicyPreviewRequest(BaseModel):
     """Draft files to resolve without saving — the editor's live preview."""
+
+    model_config = ConfigDict(extra="forbid")
 
     drafts: PolicyFileDrafts = Field(default_factory=list)
     agent: str = "*"
@@ -574,6 +579,8 @@ class PolicyPreviewRequest(BaseModel):
 
 class PolicyCheckRequest(BaseModel):
     """Draft files to lint as if they were saved."""
+
+    model_config = ConfigDict(extra="forbid")
 
     drafts: PolicyFileDrafts = Field(default_factory=list)
 
@@ -618,6 +625,8 @@ class PolicyGraphResponse(BaseModel):
 
 class PolicyTestRequest(BaseModel):
     """A tool call to evaluate against the resolved policy for ``role`` + ``agent``."""
+
+    model_config = ConfigDict(extra="forbid")
 
     role: str
     # The executing agent, "*" (the generic column) by default — matches
