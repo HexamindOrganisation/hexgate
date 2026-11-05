@@ -630,14 +630,16 @@ class RiskFactOut(BaseModel):
     agent: str
     role: str
     tool: str
-    kind: Literal["unbounded_number", "destructive_without_approval"]
+    kind: Literal[
+        "unbounded_number", "host_without_allowlist", "destructive_without_approval"
+    ]
     argument: str | None
     constraints_present: list[str]
 
 
 class RiskFactsResponse(BaseModel):
     """Risk facts, plus the agents read without a registered manifest, whose
-    facts can only come from tool names."""
+    facts can only come from tool names and HTTP egress."""
 
     # First, so a client that cuts a long answer keeps it.
     agents_without_manifest: list[str] = Field(default_factory=list)

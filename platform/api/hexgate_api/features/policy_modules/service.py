@@ -1136,7 +1136,7 @@ async def risk_facts(
     ``agent`` alone, else every declared or registered agent, each against its
     latest manifest; the generic ``"*"`` view only when the project has none.
     ``agents_without_manifest`` lists the agents read without one, whose facts
-    can only come from tool names. Raises the SDK's compose
+    can only come from tool names and HTTP egress. Raises the SDK's compose
     errors if the project doesn't resolve, and :class:`UnknownAgentError` for an
     ``agent`` neither declared nor registered."""
     from hexgate.security import DEFAULT_ROLE_NAME
