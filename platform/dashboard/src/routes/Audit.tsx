@@ -5,19 +5,10 @@ import { api, type AuditOutcome } from "@/lib/api";
 import { useProjectScoped } from "@/lib/active";
 import { useCanManageBans } from "@/lib/bans";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
-import { Card } from "@/components/ui/card";
 import { DashboardRangePicker } from "@/components/ui/dashboard-range-picker";
-import { type ChartBucket, StackedBars } from "@/components/ui/charts";
-import { StatStrip } from "@/components/ui/stat-strip";
 import { AuditOnboarding } from "@/components/audit/onboarding";
 import { burstFilters } from "@/components/audit/anomalies";
-import { type Counts } from "@/components/audit/charts";
-import {
-  displayNoValue,
-  OUT_SWATCH,
-  OUTCOME_SERIES,
-  scopeNoValue,
-} from "@/components/audit/chart-tokens";
+import { displayNoValue, scopeNoValue } from "@/components/audit/chart-tokens";
 import {
   EMPTY_AUDIT_FILTERS,
   fromAuditSearch,
@@ -27,7 +18,7 @@ import {
   useAuditFilters,
   withAuditFilters,
 } from "@/lib/audit-filters";
-import { rangeDays, rangePhrase } from "@/lib/date-range";
+import { rangePhrase } from "@/lib/date-range";
 import { DetailDrawer } from "@/components/audit/drawer";
 import { useDecisionLog } from "@/lib/decision-log";
 import {
@@ -38,17 +29,11 @@ import {
   FilterBar,
 } from "@/components/audit/pieces";
 import { PageHeader } from "@/components/ui/page-header";
-
-const ZERO_COUNTS: Counts = { allow: 0, deny: 0, needs_approval: 0, total: 0 };
-
-/** "day", "hour", "6 hours", "15 minutes" for a bucket width. */
-function bucketUnit(minutes: number): string {
-  if (minutes >= 1440 && minutes % 1440 === 0)
-    return minutes === 1440 ? "day" : `${minutes / 1440} days`;
-  if (minutes % 60 === 0)
-    return minutes === 60 ? "hour" : `${minutes / 60} hours`;
-  return minutes === 1 ? "minute" : `${minutes} minutes`;
-}
+import { DecisionsChartCard, OutcomeStatStrip } from "@/components/audit/stats";
+import {
+  useAuditStatsQueries,
+  useOutcomeStats,
+} from "@/components/audit/outcome-stats";
 
 // ————————————————————————————————————————————— Root
 export function AuditPage() {
@@ -154,20 +139,7 @@ export function AuditPage() {
     queryFn: () => api.getAuditSummary(optionsScope, projectId as string),
   });
   // Scoped summary/timeseries: stat strip, chart, breakdown.
-  const summaryQ = useQuery({
-    queryKey: ["audit", "summary", projectId, scope],
-    enabled: !!projectId,
-    queryFn: () => api.getAuditSummary(scope, projectId as string),
-    placeholderData: keepPreviousData,
-    refetchInterval: 30_000,
-  });
-  const tsQ = useQuery({
-    queryKey: ["audit", "ts", projectId, scope],
-    enabled: !!projectId,
-    queryFn: () => api.getAuditTimeseries(scope, projectId as string),
-    placeholderData: keepPreviousData,
-    refetchInterval: 30_000,
-  });
+  const { summaryQ, tsQ } = useAuditStatsQueries(scope, projectId);
   const listFilters = {
     ...scope,
     outcome: f.outcome || undefined,
@@ -206,61 +178,14 @@ export function AuditPage() {
   });
 
   const summary = summaryQ.data;
-  const counts: Counts = summary
-    ? {
-        allow: summary.totals.allow,
-        deny: summary.totals.deny,
-        needs_approval: summary.totals.needs_approval,
-        total: summary.totals.all,
-      }
-    : ZERO_COUNTS;
-
-  // The server says how wide its buckets are (an older one doesn't: then
-  // the gap between neighbours); null when there's nothing to tell by.
-  const bucketMinutes = useMemo(() => {
-    const d = tsQ.data;
-    if (d?.[0]?.bucket_minutes) return d[0].bucket_minutes;
-    if (!d || d.length < 2) return null;
-    return Math.round((+new Date(d[1].bucket) - +new Date(d[0].bucket)) / 6e4);
-  }, [tsQ.data]);
-  const days: ChartBucket[] = useMemo(
-    () =>
-      (tsQ.data ?? []).map((p) => ({
-        label: new Date(p.bucket),
-        mode: (bucketMinutes ?? 0) >= 1440 ? "day" : "hour",
-        values: {
-          allow: p.allow,
-          deny: p.deny,
-          needs_approval: p.needs_approval,
-        },
-        total: p.allow + p.deny + p.needs_approval,
-      })),
-    [tsQ.data, bucketMinutes],
+  const stats = useOutcomeStats(
+    summary,
+    tsQ.data,
+    f.range,
+    f.start_date,
+    f.end_date,
   );
-  const spark = useMemo(
-    () => ({
-      total: days.map((d) => d.total),
-      allow: days.map((d) => d.values.allow),
-      deny: days.map((d) => d.values.deny),
-      needs_approval: days.map((d) => d.values.needs_approval),
-    }),
-    [days],
-  );
-
-  const denyRate = counts.total
-    ? ((counts.deny / counts.total) * 100).toFixed(1)
-    : "0.0";
-  const allowPct = counts.total
-    ? Math.round((counts.allow / counts.total) * 100)
-    : 0;
-  const apprPct = counts.total
-    ? Math.round((counts.needs_approval / counts.total) * 100)
-    : 0;
-  const nDays = rangeDays(f.range, f.start_date, f.end_date);
-  const avgLabel =
-    !f.start_date && f.range === "24h"
-      ? `${(counts.total / 24).toFixed(1)}/hr avg`
-      : `${(counts.total / nDays).toFixed(0)}/day avg`;
+  const { counts, denyRate } = stats;
   const setOutcome = (o: AuditOutcome) =>
     setF((p) => ({ ...p, outcome: p.outcome === o ? "" : o }));
 
@@ -350,59 +275,10 @@ export function AuditPage() {
           />
         ) : (
           <div className="space-y-4">
-            <StatStrip
-              stats={[
-                {
-                  key: "total",
-                  label: "Decisions",
-                  value: counts.total.toLocaleString(),
-                  sub: avgLabel,
-                  spark: spark.total,
-                  sparkColor: "hsl(var(--muted-foreground))",
-                },
-                {
-                  key: "deny",
-                  label: "Denied",
-                  swatchClass: OUT_SWATCH.deny,
-                  value: counts.deny.toLocaleString(),
-                  valueClass: "text-deny",
-                  sub: `${denyRate}% deny rate`,
-                  spark: spark.deny,
-                  sparkColor: "hsl(var(--semantic-deny))",
-                  onClick: () => setOutcome("deny"),
-                  active: f.outcome === "deny",
-                },
-                {
-                  key: "needs_approval",
-                  label: "Needs approval",
-                  swatchClass: OUT_SWATCH.needs_approval,
-                  value: counts.needs_approval.toLocaleString(),
-                  valueClass: "text-approval",
-                  sub: `${apprPct}% of decisions`,
-                  spark: spark.needs_approval,
-                  sparkColor: "hsl(var(--semantic-approval))",
-                  onClick: () => setOutcome("needs_approval"),
-                  active: f.outcome === "needs_approval",
-                },
-                {
-                  key: "allow",
-                  label: "Allowed",
-                  swatchClass: OUT_SWATCH.allow,
-                  value: counts.allow.toLocaleString(),
-                  sub: `${allowPct}% of decisions`,
-                  spark: spark.allow,
-                  sparkColor: "hsl(var(--semantic-allow))",
-                  onClick: () => setOutcome("allow"),
-                  active: f.outcome === "allow",
-                },
-              ]}
-              split={(["deny", "needs_approval", "allow"] as const).map(
-                (key) => ({
-                  key,
-                  value: counts[key],
-                  className: OUT_SWATCH[key],
-                }),
-              )}
+            <OutcomeStatStrip
+              stats={stats}
+              onOutcome={setOutcome}
+              activeOutcome={f.outcome}
             />
 
             {!!anomaliesQ.data?.length && (
@@ -421,43 +297,10 @@ export function AuditPage() {
             )}
 
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
-              <Card className="p-5">
-                <div className="mb-5 flex flex-wrap items-baseline justify-between gap-2">
-                  <h2 className="text-body font-semibold">
-                    {bucketMinutes === null
-                      ? "Decisions over time"
-                      : `Decisions per ${bucketUnit(bucketMinutes)}`}
-                    {/* Server day buckets are UTC days; say so, since the
-                        log below groups by local day. */}
-                    {bucketMinutes !== null && bucketMinutes >= 1440 && (
-                      <span className="ml-1.5 text-meta font-normal text-muted-foreground">
-                        UTC
-                      </span>
-                    )}
-                  </h2>
-                  <div className="flex gap-3.5 text-xs text-muted-foreground">
-                    {[...OUTCOME_SERIES].reverse().map((s) => (
-                      <span key={s.key} className="flex items-center gap-1.5">
-                        <span
-                          className={`size-2 rounded-sm ${s.swatchClass}`}
-                        />
-                        {s.label}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                {days.some((d) => d.total > 0) ? (
-                  <StackedBars
-                    buckets={days}
-                    series={OUTCOME_SERIES}
-                    bucketMinutes={bucketMinutes ?? undefined}
-                  />
-                ) : (
-                  <div className="flex h-52 items-center justify-center text-meta text-muted-foreground">
-                    No decisions in this range.
-                  </div>
-                )}
-              </Card>
+              <DecisionsChartCard
+                stats={stats}
+                status={tsQ.isError && !tsQ.data ? "error" : undefined}
+              />
               <BreakdownCard
                 byTool={summary?.by_tool ?? []}
                 byAgent={summary?.by_agent ?? []}
