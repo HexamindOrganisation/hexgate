@@ -504,6 +504,10 @@ class ResolvedPolicyResponse(BaseModel):
     """The composed effective policy per role. Each value is an AgentPolicy dump."""
 
     roles: dict[str, dict] = Field(default_factory=dict)
+    # Whether the project enforces this store at all (an entry policy.yaml or a
+    # role binding). False: each agent enforces its own policy_yaml, and this
+    # answer is the store's default view, which nothing enforces.
+    modular: bool
 
 
 class PolicyLintOut(BaseModel):
@@ -621,6 +625,7 @@ class PolicyGraphResponse(BaseModel):
     nodes: list[PolicyGraphNode] = Field(default_factory=list)
     edges: list[PolicyGraphEdge] = Field(default_factory=list)
     roles: list[str] = Field(default_factory=list)
+    modular: bool  # as on ResolvedPolicyResponse
 
 
 class PolicyTestRequest(BaseModel):
@@ -645,6 +650,9 @@ class PolicyTestResponse(BaseModel):
     reason: str | None = None
     violations: list[str] = Field(default_factory=list)
     hint: str | None = None
+    # Whether the policy (the draft included) declares the request's agent; an
+    # agent it does not declare was evaluated under the generic "*" view.
+    agent_declared: bool
 
 
 # --- Agent manifest registration ---------------------------------------------
