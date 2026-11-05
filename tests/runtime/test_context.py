@@ -326,7 +326,7 @@ def test_context_has_no_primary_role_helper() -> None:
 
 
 def test_attributes_default_empty_and_roundtrip() -> None:
-    """The ABAC bag defaults to ``{}`` and stores values verbatim (inert in PR 1)."""
+    """The ABAC bag defaults to ``{}`` and stores values verbatim."""
     assert HexgateContext(user_id="a").attributes == {}
     ctx = HexgateContext(
         user_id="a",

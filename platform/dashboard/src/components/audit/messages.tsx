@@ -116,7 +116,7 @@ function Part({ part }: { part: LlmMessagePart }) {
   if (part == null || typeof part !== "object")
     return <Pre>{String(part)}</Pre>;
   const type = part.type;
-  // `content` is the key the spec's TextPart uses and the one every adapter
+  // `content` is the key a TextPart uses and the one every adapter
   // writes (adapters/_messages.py:text_part). A part that says "text" and
   // carries none is therefore not something to render as text — falling
   // through to the whole-part printer below shows what actually arrived,

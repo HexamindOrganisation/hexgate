@@ -2,8 +2,7 @@
 runs, at an invoke-time gate independent of ``PolicyEnforcer.decide()``.
 
 The ban feed is project-scoped, so its source and sink are shared per api-key
-(module registries), unlike the per-agent policy source. See
-``plans/kill-switch-phase2.md``.
+(module registries), unlike the per-agent policy source.
 """
 
 from __future__ import annotations
@@ -323,7 +322,7 @@ def resolve_ban_gate(
 
     ``None`` for all "no platform" cases: HEXGATE_LOCAL_MODE (no cloud writes),
     HEXGATE_LOCAL_POLICY (offline local-policy dev), or no key — so the offline
-    dev loop never stalls on a ``GET /v1/bans`` round-trip (plan §4.11).
+    dev loop never stalls on a ``GET /v1/bans`` round-trip.
     """
     if _local_mode_active() or os.environ.get(_LOCAL_POLICY_ENV_VAR):
         return None

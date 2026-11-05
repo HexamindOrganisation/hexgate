@@ -381,7 +381,7 @@ class PolicyBundle:
 
     def usage_on_unavailable(self) -> OnUnavailable:
         """Read the fail mode from the signed manifest. Absent (the default, or an
-        older bundle) reads ``allow`` (G3). A value this SDK doesn't know (a newer
+        older bundle) reads ``allow``. A value this SDK doesn't know (a newer
         builder) also reads ``allow``, with a warning: an unknown mode must not turn
         a platform blip into an outage."""
         section = self.manifest.get(_USAGE_KEY)

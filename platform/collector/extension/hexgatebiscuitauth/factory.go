@@ -17,7 +17,7 @@ func NewFactory() extension.Factory {
 		createDefaultConfig,
 		createExtension,
 		// Development: this has never run against real traffic. Raise once
-		// it has been exercised end-to-end in staging (design doc PR #6).
+		// it has been exercised end-to-end in staging.
 		component.StabilityLevelDevelopment,
 	)
 }

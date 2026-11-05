@@ -868,10 +868,9 @@ class LlmMessageEvent(AuditEnvelope):
     model: str = Field(min_length=1, max_length=256)
     # Identifies the message list this event appends to. One session can hold
     # several: the main run, each sub-agent and each handoff keeps its own, and
-    # message_seq restarts at 0 in each. The design has the SDK derive it from
-    # the framework's own run identity plus the agent name (see the LLM message
-    # logging spec), which keeps it under agent_name's cap plus an id prefix;
-    # the bound is sized for that, not for a session-wide path.
+    # message_seq restarts at 0 in each. Each adapter builds it from a run id,
+    # mostly plus the agent name, so it stays under agent_name's cap plus an id
+    # prefix; the bound is sized for that, not for a session-wide path.
     turn_key: str = Field(min_length=1, max_length=512)
     # Counter within ``turn_key``; UInt32 column, same reasoning as the token
     # bounds on LlmInvocationEvent.
@@ -1111,7 +1110,7 @@ class AuditAnomaly(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# AI Act evidence report (https://app.notion.com/p/3e2fb45dbae281f794fefa40ff4a1a8d)
+# AI Act evidence report
 # ---------------------------------------------------------------------------
 
 
@@ -1120,7 +1119,7 @@ class AiActReportCreate(BaseModel):
     full retention window ending now, and clamps whatever is supplied to what
     the store can actually hold.
 
-    Field names are ``from``/``to`` on the wire (the spec's body shape) and
+    Field names are ``from``/``to`` on the wire and
     ``period_start``/``period_end`` in Python, where ``from`` is a keyword.
     """
 

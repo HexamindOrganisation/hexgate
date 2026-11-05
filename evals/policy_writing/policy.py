@@ -355,7 +355,7 @@ def _split(lints: list[PolicyLint]) -> tuple[list[PolicyLint], list[str]]:
     """`lints` as (drift for the name checks, `valid`'s failures)."""
     # A warning fails, not only an error: the write-policy skill tells the agent
     # to validate with `--max-severity warning` (for `policy check` on a module
-    # tree it doesn't yet; the spec aligns the skill in PR 11).
+    # tree it doesn't yet).
     drift = [lint for lint in lints if lint.code in DRIFT_CODES]
     failures = [
         format_lint(lint)

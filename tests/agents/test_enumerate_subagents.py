@@ -86,7 +86,7 @@ def test_unknown_object_yields_no_links() -> None:
 
 def test_link_is_hashable_over_target_and_via() -> None:
     # `child` is excluded from hash/eq, so a link carrying an unhashable framework
-    # agent is still hashable and dedups by (target, via) — what PR4 relies on.
+    # agent is still hashable and dedups by (target, via) — recursion relies on it.
     class _Unhashable:
         __hash__ = None  # type: ignore[assignment]
 
@@ -171,7 +171,7 @@ def test_openai_bare_handoff_descriptor_recovers_live_child() -> None:
     parent = agents.Agent(name="parent", handoffs=[agents.handoff(child)])
     (link,) = enumerate_subagents(parent)
     assert (link.target, link.via) == ("billing_bot", "handoff")
-    assert link.child is child  # recovered from Handoff._agent_ref, so PR4 can recurse
+    assert link.child is child  # from Handoff._agent_ref, so registration can recurse
 
 
 def test_openai_nameless_handoff_maps_to_default() -> None:

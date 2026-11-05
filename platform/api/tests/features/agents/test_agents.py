@@ -421,7 +421,7 @@ def test_validate_accumulates_errors_across_roles(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /validate warnings — the permissive-default lint (D14) in the editor
+# /validate warnings — the permissive-default lint in the editor
 # ---------------------------------------------------------------------------
 
 _PERMISSIVE_DEFAULT_YAML = (
@@ -1760,7 +1760,7 @@ def test_register_endpoint_accepts_manifest_without_skills_key(
 
 
 def test_manifest_hash_is_unchanged_by_the_new_field() -> None:
-    """The G2 guard: adding ``skills`` mints no version for agents without any.
+    """Adding ``skills`` mints no version for agents without any.
 
     ``compute_manifest_hash`` excludes None, so a pre-skills payload and the
     same payload carrying an explicit ``skills: null`` hash identically — an

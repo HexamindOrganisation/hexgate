@@ -357,7 +357,7 @@ class SubagentTool(BaseTool):
         # A refusal raises (AgentNotAdmittedError / ReachNotAllowedError / AgentBannedError);
         # _arun catches and renders it as tool output, so a refused delegation is not
         # recorded as a successful execution by the guard pipeline.
-        # NB (PR 1): the parent run config is not threaded into the child, so a
+        # NB: the parent run config is not threaded into the child, so a
         # sub-agent must not use a checkpointer and its run is not nested in the
         # parent trace — config/trace threading is a follow-up.
         result = await self.child.ainvoke(

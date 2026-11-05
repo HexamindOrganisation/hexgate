@@ -579,10 +579,6 @@ in follow-up PRs:
 - `hexgate/agents/loader.py:488`, `hexgate/agents/factory.py` — native-factory wiring
 - `hexgate/adapters/{openai,google,langchain,pydantic_ai}/…` — per-adapter enforcement call sites
 
-**Design plans (rationale):**
-- `plans/kill-switch.md` (master design), `kill-switch-phase1.md` (API), `kill-switch-phase2.md`
-  (SDK enforcement), `kill-switch-phase3.md` (dashboard)
-
 **Tests:**
 - `platform/api/tests/features/bans/test_bans.py`, `tests/features/audit/test_audit.py`
 - `tests/security/test_bans.py`, `tests/agents/test_platform_bundle.py`

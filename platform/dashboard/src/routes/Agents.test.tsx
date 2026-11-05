@@ -1,5 +1,5 @@
 /**
- * Tests for the /agents page — the "ban agent" cross-page tie-in (§9.6)
+ * Tests for the /agents page — the "ban agent" cross-page tie-in
  * and the skills section, whose point is the distinction between resources
  * a framework did not enumerate and a skill that ships none.
  */

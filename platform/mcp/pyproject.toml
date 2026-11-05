@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Hexgate MCP server — policy, audit and agent tools over the platform API, as the logged-in user"
 requires-python = ">=3.13"
 dependencies = [
-    # 2.x renamed FastMCP to MCPServer; the spec and the API's auth routes are
+    # 2.x renamed FastMCP to MCPServer; this server and the API's auth routes are
     # written against the 1.x surface. 1.30 is the first with
     # AuthSettings.validate_token_resource, which older versions silently drop.
     "mcp>=1.30,<2",

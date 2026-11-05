@@ -1,8 +1,5 @@
 """AI Act compliance evidence report.
 
-Spec: https://app.notion.com/p/3e2fb45dbae281f794fefa40ff4a1a8d — it is the
-canonical copy, and the repo no longer carries one.
-
 One signed document per project, evidencing the controls Hexgate enforces on
 the project's agents and the events it recorded about them over a period.
 

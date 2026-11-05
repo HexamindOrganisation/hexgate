@@ -1,8 +1,8 @@
 """Tests for the platform term of ``agent_usage.*`` — ``hexgate.security.usage_source``.
 
 A fake fetcher, a fake clock and fake executors, so nothing sleeps or races. The
-gates pinned here fail silently in production: G3 (fail open by default), G4 / F5
-(a path missing from the snapshot never denies the rest) and G7 (the ingest margin).
+properties pinned here fail silently in production: fail open by default, a path
+missing from the snapshot never denies the rest, and the ingest margin.
 """
 
 from __future__ import annotations
@@ -517,7 +517,7 @@ def test_a_fresh_snapshot_adds_the_local_term() -> None:
 
 
 def test_an_event_inside_the_ingest_margin_is_counted_once_more() -> None:
-    """G7: recorded just before the fetch and not yet in the platform's value."""
+    """Recorded just before the fetch and not yet in the platform's value."""
     rig = _rig()
     rig.clock.now -= USAGE_INGEST_MARGIN_SECONDS / 3
     rig.ledger.record({UsageMetric.INVOCATIONS: 1})
@@ -535,7 +535,7 @@ def test_an_event_inside_the_ingest_margin_is_counted_once_more() -> None:
     ids=["no-snapshot", "older-than-max-staleness"],
 )
 def test_an_unavailable_snapshot_fails_open_by_default(seed: bool) -> None:
-    """G3: ledger-only values, never an absent namespace."""
+    """Ledger-only values, never an absent namespace."""
     rig = _seeded(_HeldExecutor()) if seed else _rig(_HeldExecutor())
     rig.clock.now += _MAX_STALENESS
     rig.ledger.record({UsageMetric.INVOCATIONS: 2})
@@ -556,7 +556,7 @@ def test_an_unavailable_snapshot_under_deny_reads_nothing() -> None:
 
 
 def test_a_path_missing_from_the_snapshot_reads_ledger_only() -> None:
-    """G4 / F5: a policy adding a path must not deny every run until a refresh."""
+    """A policy adding a path must not deny every run until a refresh."""
     executor = _HeldExecutor()
     rig = _seeded(executor)
     rig.ledger.record({UsageMetric.TOOL_CALLS: 1})
@@ -937,7 +937,7 @@ def test_a_user_snapshot_younger_than_min_refresh_schedules_nothing() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Users: the LRU (F5)
+# Users: the LRU
 # ---------------------------------------------------------------------------
 
 
@@ -968,7 +968,7 @@ def test_reading_a_user_keeps_it_from_eviction() -> None:
 
 
 def test_eviction_drops_everything_known_about_a_user() -> None:
-    """F5: the side state goes with the snapshot."""
+    """The side state goes with the snapshot."""
     rig = _user_rig()
     rig.source.refresh(_user("a"), _ONE_PATH)
     rig.source.refresh(_user("a"), _ONE_PATH)
@@ -1009,7 +1009,7 @@ def test_agents_are_never_evicted() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Users: the shared back-off (F6)
+# Users: the shared back-off
 # ---------------------------------------------------------------------------
 
 
@@ -1154,7 +1154,7 @@ def test_an_agent_failure_still_backs_off_that_agent_only() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Users: the ID pre-check and G10
+# Users: the ID pre-check and keeping user IDs out of logs
 # ---------------------------------------------------------------------------
 
 
@@ -1224,7 +1224,7 @@ def _fail_in_transport(rig: _Rig) -> None:
 def test_no_log_line_carries_a_user_id(
     arrange: Callable[[_Rig], None], key: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """G10: an ID in a log line can't be recalled."""
+    """An ID in a log line can't be recalled."""
     rig = _user_rig()
     arrange(rig)
 
@@ -1268,7 +1268,7 @@ def test_the_shared_source_sizes_users_from_the_user_cache_variable(
 
 
 def test_agent_scopes_alone_never_touch_the_user_kind() -> None:
-    """G3 for this PR: nothing about users runs until a user scope is asked for."""
+    """Nothing about users runs until a user scope is asked for."""
     clock = _FakeClock()
     agent, user = _FakeFetcher(clock, _PLATFORM_VALUES), _FakeFetcher(clock, {})
     source = get_usage_source("k", _client(agent=agent.fetch, user=user.fetch))

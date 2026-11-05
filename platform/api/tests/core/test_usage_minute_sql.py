@@ -5,7 +5,7 @@ defined by which keys the SDK decides outside the guard runner. A renamed SDK
 key would silently fold those decisions back into the counts.
 
 usage_minute_user is usage_minute rekeyed by user_id with anonymous rows
-filtered out (README G12). Any other difference is drift.
+filtered out. Any other difference is drift.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ USER_ROLLUP_SUBSTITUTIONS: Final = (
     (AGENT_ROLLUP_TABLE, f"hexgate_audit.{USER_ROLLUP_NAME}"),
     ("agent_name LowCardinality(String)", "user_id String"),
     ("agent_name", "user_id"),
-    # G4, views
+    # Views drop rows with no user_id
     (
         "FROM hexgate_audit.agent_run GROUP BY",
         "FROM hexgate_audit.agent_run WHERE user_id != '' GROUP BY",
@@ -52,7 +52,7 @@ USER_ROLLUP_SUBSTITUTIONS: Final = (
         "FROM hexgate_audit.llm_invocation GROUP BY",
         "FROM hexgate_audit.llm_invocation WHERE user_id != '' GROUP BY",
     ),
-    # G4, backfill (each branch's received_at bound)
+    # Backfill drops them too (each branch's received_at bound)
     ("INTERVAL 30 DAY", "INTERVAL 30 DAY AND user_id != ''"),
 )
 

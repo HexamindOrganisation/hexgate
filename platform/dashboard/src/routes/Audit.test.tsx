@@ -751,7 +751,7 @@ describe("AuditPage", () => {
   });
 
   it("when a text part carries no content then the part is shown, not a blank", async () => {
-    // `content` is the key the spec and every adapter use, so this is a row
+    // `content` is the key every adapter uses, so this is a row
     // written by something that did not — an older or future SDK. Rendering
     // it as text put `JSON.stringify(undefined)` on screen: an empty box with
     // nothing to say prose had gone missing.

@@ -218,7 +218,7 @@ def test_parse_paths(src: str, path: tuple[str, ...]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# AST node shape (PR 1 operand model)
+# AST node shape (operand model)
 # ---------------------------------------------------------------------------
 
 
