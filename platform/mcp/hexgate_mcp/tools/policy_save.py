@@ -39,7 +39,8 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         error says why. A project with no `policy.yaml` enforces either each
         agent's own policy or its role bindings; saving the first one replaces
         that with the composed files, so ask the user first. Run policy_check
-        on the draft first."""
+        on every changed file together first, then save a new file before the
+        `policy.yaml` that imports it."""
         token = caller("policy:write", project_id=project_id)
         path = file_path(project_id, name)
         # The saved file without its text, which the model just sent.
