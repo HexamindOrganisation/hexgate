@@ -181,42 +181,57 @@ def diff_files(saved: Mapping[str, str], drafted: Mapping[str, str]) -> dict:
     """Compare the saved project with the drafted one. When either side does not
     compose there is nothing to compare: ``changes`` is empty and ``composes``
     says which side failed (``/policy/check`` reports why)."""
-    from hexgate.security import DEFAULT_ROLE_NAME
-
     old = _resolve(saved)
     new = old if drafted == saved else _resolve(drafted)
-    changes: list[dict] = []
-    role_changes: list[dict] = []
-    gate_changes: list[dict] = []
-    if old is not None and new is not None and new is not old:
-        for agent in sorted(set(old) | set(new)):
-            a, b = _resolution_for(old, agent), _resolution_for(new, agent)
-            agent_keys = _agent_keys(a, b)
-            gates_a, gates_b = _gates(a), _gates(b)
-            gate_changes += [
-                {"agent": agent, "gate": g, "before": gates_a[g], "after": gates_b[g]}
-                for g in GATES
-                if gates_a[g] != gates_b[g]
-            ]
-            side_a = (a, _open_keys(gates_a, agent_keys))
-            side_b = (b, _open_keys(gates_b, agent_keys))
-            shown = _shown(gates_a, gates_b)
-            # The serializer /policy/resolve uses, so a value reads the same there.
-            json_a, json_b = roles_json(a), roles_json(b)
-            for role in sorted(set(a.by_role) | set(b.by_role)):
-                changes += _tool_changes(agent, role, side_a, side_b, shown)
-                # A role one side lacks falls back to its `default`, as at runtime.
-                was = json_a.get(role) or json_a[DEFAULT_ROLE_NAME]
-                now = json_b.get(role) or json_b[DEFAULT_ROLE_NAME]
-                role_changes += _field_changes(agent, role, was, now)
+    composes = {"before": old is not None, "after": new is not None}
+    if old is None or new is None or new is old:
+        return _response([], [], [], composes)
+    changes, role_changes, gate_changes = [], [], []
+    for agent in sorted(set(old) | set(new)):
+        tools, roles, gates = _diff_agent(
+            agent, _resolution_for(old, agent), _resolution_for(new, agent)
+        )
+        changes += tools
+        role_changes += roles
+        gate_changes += gates
+    return _response(changes, role_changes, gate_changes, composes)
+
+
+def _diff_agent(agent: str, a, b) -> tuple[list, list, list]:
+    """One agent's tool, role-field and gate changes between two resolutions."""
+    from hexgate.security import DEFAULT_ROLE_NAME
+
+    gates_a, gates_b = _gates(a), _gates(b)
+    gate_changes = [
+        {"agent": agent, "gate": g, "before": gates_a[g], "after": gates_b[g]}
+        for g in GATES
+        if gates_a[g] != gates_b[g]
+    ]
+    agent_keys = _agent_keys(a, b)
+    side_a = (a, _open_keys(gates_a, agent_keys))
+    side_b = (b, _open_keys(gates_b, agent_keys))
+    shown = _shown(gates_a, gates_b)
+    # The serializer /policy/resolve uses, so a value reads the same there.
+    json_a, json_b = roles_json(a), roles_json(b)
+    changes, role_changes = [], []
+    for role in sorted(set(a.by_role) | set(b.by_role)):
+        changes += _tool_changes(agent, role, side_a, side_b, shown)
+        # A role one side lacks falls back to its `default`, as at runtime.
+        was = json_a.get(role) or json_a[DEFAULT_ROLE_NAME]
+        now = json_b.get(role) or json_b[DEFAULT_ROLE_NAME]
+        role_changes += _field_changes(agent, role, was, now)
+    return changes, role_changes, gate_changes
+
+
+def _response(changes, role_changes, gate_changes, composes) -> dict:
+    """The wire dict; ``agents_affected`` is every agent the three lists name."""
+    touched = {c["agent"] for c in changes + role_changes + gate_changes}
     return {
         "changes": changes,
         "role_changes": role_changes,
         "gate_changes": gate_changes,
-        "agents_affected": sorted(
-            {c["agent"] for c in changes + role_changes + gate_changes}
-        ),
-        "composes": {"before": old is not None, "after": new is not None},
+        "agents_affected": sorted(touched),
+        "composes": composes,
     }
 
 
