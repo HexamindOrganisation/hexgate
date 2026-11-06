@@ -21,16 +21,32 @@ import { AlertTriangle, Maximize2, Network, Play, X } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { usePolicyGraph } from "@/lib/policy_files";
 import { agentSubgraph } from "@/lib/agent-graph";
-import type { PolicyGraph, PolicyGraphEdge } from "@/lib/api";
+import type {
+  PolicyGraph,
+  PolicyGraphEdge,
+  PolicyTestOutcome,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { VerdictIcon } from "@/components/ui/verdict-icon";
 import { HEX_H, HEX_W, layeredLayout } from "@/lib/graph-layout";
 
-// Verdict → edge color (green allow, amber approval, red deny) — mid-tone
-// hexes that read on both the light and dark graph ground.
+// Verdict → edge color (warm green allow, amber approval, red deny) —
+// mid-tone hexes for strokes on both the light and dark graph ground. Colour
+// isn't the only cue: edge labels, the legend and verdict tags carry a check /
+// cross (VerdictIcon), and deny edges are dimmed. Hex, not CSS vars: ReactFlow
+// builds marker ids from the color string.
 const VERDICT: Record<string, string> = {
-  allow: "#3f9166",
+  allow: "#6a8a40",
   approval_required: "#b9802a",
   deny: "#c84d62",
+};
+
+// Verdict tags are text, so they use the mode-aware theme tokens (AA in light
+// and dark) rather than the canvas hexes above.
+const VERDICT_TEXT: Record<string, string> = {
+  allow: "hsl(var(--semantic-allow))",
+  approval_required: "hsl(var(--semantic-approval))",
+  deny: "hsl(var(--semantic-deny))",
 };
 
 // Hexagon palette per node kind, as CSS vars (see --gr-* in index.css) so the
@@ -269,6 +285,11 @@ function PolicyEdge({
       : data?.kind === "admission"
         ? "admit"
         : "";
+  // Every labelled edge carries its verdict's icon; an unlabelled approval
+  // edge gets an icon-only label, so approval never relies on amber alone
+  // (deny is dashed and dimmed; allow is the plain default).
+  const verdict = data?.verdict ?? "allow";
+  const showLabel = !!label || verdict === "approval_required";
   const active = selected || hovered;
   // Resting width sits close to the focused width (3.4) so edges read clearly at
   // a glance; the focus state still stands out via its glow + full 3.4 stroke.
@@ -312,10 +333,10 @@ function PolicyEdge({
           />
         </circle>
       )}
-      {label && (
+      {showLabel && (
         <EdgeLabelRenderer>
           <div
-            className="nodrag nopan pointer-events-none rounded px-1.5 py-0.5 font-mono text-[9px]"
+            className="nodrag nopan pointer-events-none flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9px]"
             style={{
               position: "absolute",
               transform: `translate(-50%,-50%) translate(${labelX}px,${labelY}px)`,
@@ -325,6 +346,7 @@ function PolicyEdge({
               opacity: dimmed ? 0.15 : 1,
             }}
           >
+            <VerdictIcon verdict={verdict} className="size-2.5" />
             {label}
           </div>
         </EdgeLabelRenderer>
@@ -359,18 +381,19 @@ export function VerdictTag({
   verdict,
   constraints = [],
 }: {
-  verdict: string;
+  verdict: PolicyTestOutcome;
   constraints?: string[];
 }) {
   return (
     <span
-      className="shrink-0 rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider"
+      className="inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider"
       title={constraints.join(" ∧ ") || undefined}
       style={{
-        color: VERDICT[verdict],
-        border: `1px solid ${VERDICT[verdict]}66`,
+        color: VERDICT_TEXT[verdict],
+        border: `1px solid color-mix(in srgb, ${VERDICT_TEXT[verdict]} 40%, transparent)`,
       }}
     >
+      <VerdictIcon verdict={verdict} className="size-2.5" />
       {verdictLabel(verdict)}
       {constraints.length > 0 && " *"}
     </span>
@@ -857,6 +880,11 @@ export function PolicyFlow({ graph }: { graph: PolicyGraph }) {
                 <i
                   className="inline-block h-2 w-4 rounded"
                   style={{ background: VERDICT[v] }}
+                />
+                <VerdictIcon
+                  verdict={v}
+                  className="size-2.5"
+                  style={{ color: VERDICT[v] }}
                 />
                 {verdictLabel(v)}
               </span>

@@ -99,10 +99,12 @@
   --raised: 0 0% 100%;
   --success: 154 72% 30%;
 
-  /* Deny is the only loud colour; allow is a quiet neutral that still reads
-     as small text (~5:1 on white). */
-  --semantic-allow: 214 18% 43%;
-  --semantic-allow-fill: 214 22% 74%;
+  /* Deny is the only loud colour; allow is a quiet warm olive (~7.4:1 on
+     white), less saturated than --success's cooler green, which means health.
+     Red-green colour blindness pulls allow and deny together, so neither is
+     shown by colour alone: marks pair it with a check / cross (VerdictIcon). */
+  --semantic-allow: 88 28% 28%;
+  --semantic-allow-fill: 88 22% 66%;
   --semantic-deny: 14 84% 43%;
   --semantic-approval: 39 82% 49%;
 
@@ -174,8 +176,9 @@
   --raised: 222 25% 22%;
   --success: 152 58% 48%;
 
-  --semantic-allow: 217 15% 62%;
-  --semantic-allow-fill: 217 20% 32%;
+  /* A low-chroma sage, quieter than deny; the icon carries the difference. */
+  --semantic-allow: 90 16% 52%;
+  --semantic-allow-fill: 90 14% 30%;
   --semantic-deny: 14 76% 53%;
   --semantic-approval: 39 86% 59%;
 
@@ -215,8 +218,8 @@
    The scheme axis only swaps the accent (--primary/--ring); the mode axis
    above owns every neutral and decision colour. Applied via `data-scheme` on
    <html>; blue is the :root/.dark default. Keep in sync with SCHEME_ACCENTS
-   in lib/theme.ts. No red, amber or green: those mean deny, approval and
-   connected, and no grey: allow is grey. */
+   in lib/theme.ts. No red, amber or green: those mean deny, approval,
+   allow (warm olive) and connected (cool green). */
 [data-scheme="violet"] {
   --primary: 254 71% 59%;
   --ring: 254 71% 59%;
