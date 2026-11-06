@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PolicyGraph } from "@/lib/api";
-import { agentReach, agentSubgraph } from "./agent-graph";
+import { agentReach, agentReachEdges, agentSubgraph } from "./agent-graph";
 
 const edge = (
   source: string,
@@ -84,5 +84,27 @@ describe("agentReach", () => {
 
   it("is empty for an agent not in the graph", () => {
     expect(agentReach(G, "ghost")).toEqual({ reaches: [], calledBy: [] });
+  });
+});
+
+describe("agentReachEdges", () => {
+  it("keys its outbound agent edges by target and via", () => {
+    const reach = {
+      ...edge("agent:a", "agent:b", "reach"),
+      via: "tool" as const,
+      verdict: "approval_required" as const,
+      roles: ["support"],
+    };
+    const g: PolicyGraph = { ...G, edges: [...G.edges, reach] };
+    const out = agentReachEdges(g, "a");
+    expect(out.get("b:tool")).toEqual(reach);
+    // The fixture's via-less a→b edge can't be matched, so it's skipped.
+    expect(out.size).toBe(1);
+  });
+
+  it("ignores inbound callers and is empty off-graph", () => {
+    // s reaches into a; that's a's caller, not its sub-agent.
+    expect(agentReachEdges(G, "b").size).toBe(0);
+    expect(agentReachEdges(G, "ghost").size).toBe(0);
   });
 });

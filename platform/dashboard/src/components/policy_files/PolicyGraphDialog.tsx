@@ -354,7 +354,7 @@ const verdictLabel = (v: string) =>
   v === "approval_required" ? "approval" : v;
 
 /** A verdict chip; `constraints` add a "*" with the conditions on hover. */
-function VerdictTag({
+export function VerdictTag({
   verdict,
   constraints = [],
 }: {

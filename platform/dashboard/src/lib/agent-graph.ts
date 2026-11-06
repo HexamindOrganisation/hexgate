@@ -1,4 +1,4 @@
-import type { PolicyGraph } from "@/lib/api";
+import type { PolicyGraph, PolicyGraphEdge } from "@/lib/api";
 
 /** The agent's neighbourhood in the project graph: the agent node plus every
  * node one edge away (its roles, the tools it calls and the agents it reaches
@@ -51,13 +51,8 @@ export function agentReach(
   graph: PolicyGraph,
   agentName: string,
 ): { reaches: string[]; calledBy: string[] } {
-  const self = graph.nodes.find(
-    (n) => n.kind === "agent" && n.label === agentName,
-  );
+  const { self, agentLabel } = agentNodes(graph, agentName);
   if (!self) return { reaches: [], calledBy: [] };
-  const agentLabel = new Map(
-    graph.nodes.filter((n) => n.kind === "agent").map((n) => [n.id, n.label]),
-  );
   const reaches = new Set<string>();
   const calledBy = new Set<string>();
   for (const e of graph.edges) {
@@ -69,4 +64,32 @@ export function agentReach(
     }
   }
   return { reaches: [...reaches], calledBy: [...calledBy] };
+}
+
+/** The agent's outbound reach edges, keyed `<target>:<via>` (the graph merges
+ * one edge per pair across roles). Edges with no via (a reach lowered to a
+ * call) can't be matched, so are skipped. */
+export function agentReachEdges(
+  graph: PolicyGraph,
+  agentName: string,
+): Map<string, PolicyGraphEdge> {
+  const { self, agentLabel } = agentNodes(graph, agentName);
+  const out = new Map<string, PolicyGraphEdge>();
+  if (!self) return out;
+  for (const e of graph.edges) {
+    if (e.source === self.id && agentLabel.has(e.target) && e.via) {
+      out.set(`${agentLabel.get(e.target)}:${e.via}`, e);
+    }
+  }
+  return out;
+}
+
+function agentNodes(graph: PolicyGraph, agentName: string) {
+  const self = graph.nodes.find(
+    (n) => n.kind === "agent" && n.label === agentName,
+  );
+  const agentLabel = new Map(
+    graph.nodes.filter((n) => n.kind === "agent").map((n) => [n.id, n.label]),
+  );
+  return { self, agentLabel };
 }
