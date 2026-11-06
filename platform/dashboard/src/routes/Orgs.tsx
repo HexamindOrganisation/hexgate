@@ -1,21 +1,13 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { Building2, Plus, ArrowRight } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Building2, ChevronRight, Plus } from "lucide-react";
 
 import { CreateOrgDialog } from "@/components/CreateOrgDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { PageHeader } from "@/components/ui/page-header";
 import { useActive } from "@/lib/active";
 import { useOrgs, type OrgWithRole, type Role } from "@/lib/orgs";
-import { PageHeader } from "@/components/ui/page-header";
 
 /**
  * `/orgs` — list every organization the caller belongs to with their
@@ -47,76 +39,52 @@ export function OrgsPage() {
         description="All organizations you belong to. Roles determine what you can change."
         actions={
           <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" />
+            <Plus className="size-4" />
             Create organization
           </Button>
         }
       />
 
-      <div className="rounded-lg border border-border bg-card">
-        {orgsQuery.isLoading && (
-          <div className="p-6 text-sm text-muted-foreground">Loading…</div>
-        )}
-        {orgsQuery.isError && (
-          <div className="p-6 text-sm text-destructive">
-            Could not load organizations. Try refreshing the page.
-          </div>
-        )}
-        {orgsQuery.data && orgsQuery.data.length === 0 && (
-          <EmptyState onCreate={() => setCreateOpen(true)} />
-        )}
-        {orgsQuery.data && orgsQuery.data.length > 0 && (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Slug</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead className="w-[100px] text-right" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {orgsQuery.data.map((org) => (
-                <TableRow
-                  key={org.id}
-                  className="cursor-pointer"
-                  onClick={() => openOrg(org)}
-                >
-                  <TableCell>
-                    <div className="flex items-center gap-2 font-medium">
-                      <Building2 className="h-4 w-4 text-primary" />
-                      {org.name}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {org.slug}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    <RoleBadge role={org.role} />
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button asChild variant="ghost" size="sm">
-                      <Link
-                        to={`/orgs/${org.id}/settings`}
-                        onClick={(e) => {
-                          // Stop the row's onClick from also firing.
-                          e.stopPropagation();
-                          setActiveOrg(org.id);
-                        }}
-                      >
-                        Open
-                        <ArrowRight className="h-3.5 w-3.5" />
-                      </Link>
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </div>
+      {orgsQuery.isError && (
+        <div className="rounded-xl border border-border bg-card p-6 text-sm text-deny">
+          Could not load organizations. Try refreshing the page.
+        </div>
+      )}
+
+      {orgsQuery.isLoading && (
+        <div className="rounded-xl border border-border bg-card p-6 text-sm text-muted-foreground">
+          Loading…
+        </div>
+      )}
+
+      {orgsQuery.data && orgsQuery.data.length === 0 && (
+        <EmptyState onCreate={() => setCreateOpen(true)} />
+      )}
+
+      {orgsQuery.data && orgsQuery.data.length > 0 && (
+        <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
+          {orgsQuery.data.map((org) => (
+            <button
+              key={org.id}
+              type="button"
+              onClick={() => openOrg(org)}
+              className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent"
+            >
+              <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
+                <Building2 className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium">{org.name}</div>
+                <div className="truncate font-mono text-xs text-muted-foreground">
+                  {org.slug}
+                </div>
+              </div>
+              <RoleBadge role={org.role} />
+              <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+            </button>
+          ))}
+        </div>
+      )}
 
       <CreateOrgDialog
         open={createOpen}
@@ -136,15 +104,17 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
   // land here. Still possible (e.g., they joined another org and left
   // their personal one), so render a useful zero-state.
   return (
-    <div className="flex flex-col items-center gap-3 p-10 text-center">
-      <Building2 className="h-10 w-10 text-muted-foreground" />
-      <h2 className="text-lg font-medium">No organizations yet</h2>
+    <div className="flex flex-col items-center gap-3 rounded-xl border border-border bg-card p-10 text-center">
+      <span className="grid size-11 place-items-center rounded-xl bg-action text-action-foreground">
+        <Building2 className="size-5" />
+      </span>
+      <h2 className="text-base font-medium">No organizations yet</h2>
       <p className="max-w-md text-sm text-muted-foreground">
         Create one to start a workspace. You'll be the owner — you can invite
         teammates afterwards.
       </p>
-      <Button onClick={onCreate} className="mt-2">
-        <Plus className="h-4 w-4" />
+      <Button onClick={onCreate} className="mt-1">
+        <Plus className="size-4" />
         Create organization
       </Button>
     </div>
@@ -152,16 +122,18 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
 }
 
 function RoleBadge({ role }: { role: Role }) {
-  // Reuse the existing dashboard Badge palette. Owners get the
-  // primary tint (load-bearing role); admins the neutral default
-  // (the secondary in shadcn parlance), members the outline-only.
+  // Owners get the primary tint (load-bearing role); admins the neutral
+  // default; members the outline-only.
   const variant: Record<Role, "primary" | "default" | "outline"> = {
     owner: "primary",
     admin: "default",
     member: "outline",
   };
   return (
-    <Badge variant={variant[role]} className="font-normal capitalize">
+    <Badge
+      variant={variant[role]}
+      className="ml-auto shrink-0 font-normal capitalize"
+    >
       {role}
     </Badge>
   );
