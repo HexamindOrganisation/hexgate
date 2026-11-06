@@ -11,8 +11,10 @@ import { Route, Routes } from "react-router-dom";
 
 import { useActive } from "@/lib/active";
 import {
+  AgentDecisionsTab,
   AgentHub,
   AgentOverviewTab,
+  AgentPoliciesTab,
   AgentResourcesTab,
 } from "@/routes/AgentHub";
 import { renderWithProviders } from "@/test/render";
@@ -55,6 +57,7 @@ function stubFetch(
   manifestError = false,
   summaryError = false,
   noAgentInGraph = false,
+  matrixError = false,
 ) {
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -83,6 +86,7 @@ function stubFetch(
             },
           ]);
         case `/v1/projects/${PROJECT}/policy/matrix`:
+          if (matrixError) return new Response("boom", { status: 500 });
           return json({
             roles: ["guest", "support"],
             tools: ["refund"],
@@ -133,6 +137,34 @@ function stubFetch(
               },
             ],
           });
+        case `/v1/projects/${PROJECT}/audit/decisions`:
+          return json({
+            rows: [
+              {
+                event_id: "evt-1",
+                occurred_at: "2026-06-01T12:00:00Z",
+                received_at: "2026-06-01T12:00:01Z",
+                agent_name: "support_bot",
+                agent_version_id: "av-1",
+                session_id: "sess-1",
+                user_id: "u-1",
+                tool_name: "refund",
+                user_roles: ["guest"],
+                deciding_role: "",
+                outcome: "deny",
+                error_type: "",
+                reason: "Guests can't refund.",
+                violations: ["refund: role guest denied"],
+                hint: null,
+                arguments: null,
+                attributes: null,
+                run_id: null,
+              },
+            ],
+            total: 1,
+            limit: 50,
+            offset: 0,
+          });
         case `/v1/projects/${PROJECT}/audit/summary`:
           if (summaryError) return new Response("boom", { status: 500 });
           return json({
@@ -164,21 +196,25 @@ function renderHub(
     manifestError = false,
     summaryError = false,
     noAgentInGraph = false,
+    matrixError = false,
     tab = "",
   }: {
     role?: string;
     manifestError?: boolean;
     summaryError?: boolean;
     noAgentInGraph?: boolean;
-    tab?: "" | "/resources";
+    matrixError?: boolean;
+    tab?: "" | "/resources" | "/policies" | "/decisions";
   } = {},
 ) {
-  stubFetch(role, manifestError, summaryError, noAgentInGraph);
+  stubFetch(role, manifestError, summaryError, noAgentInGraph, matrixError);
   return renderWithProviders(
     <Routes>
       <Route path="/agents/:name" element={<AgentHub />}>
         <Route index element={<AgentOverviewTab />} />
         <Route path="resources" element={<AgentResourcesTab />} />
+        <Route path="policies" element={<AgentPoliciesTab />} />
+        <Route path="decisions" element={<AgentDecisionsTab />} />
       </Route>
     </Routes>,
     { initialRoute: `/agents/${name}${tab}` },
@@ -248,6 +284,40 @@ describe("AgentHub", () => {
     // The tool row and the guest chip render from the same matrix.
     expect(screen.getByText("refund")).toBeInTheDocument();
     expect(screen.getByText("guest")).toBeInTheDocument();
+  });
+
+  it("shows the resolved roles x tools grid on the Policies tab", async () => {
+    renderHub("support_bot", { tab: "/policies" });
+    expect(
+      await screen.findByText(/How each role may use/),
+    ).toBeInTheDocument();
+    // The engine grid cell carries the constraint as its title + an allow mode
+    // (awaited — the matrix loads after the static header).
+    expect(await screen.findByTitle("args.amount <= 50")).toHaveTextContent(
+      "allow",
+    );
+    // The governing file is listed.
+    expect(screen.getByText("policy.yaml")).toBeInTheDocument();
+  });
+
+  it("shows a grid error, not an endless spinner, when the matrix fails", async () => {
+    renderHub("support_bot", { tab: "/policies", matrixError: true });
+    // usePolicyMatrix retries 5xx twice (≈3s of backoff) before it errors.
+    expect(
+      await screen.findByText(/Couldn't load the grid/, undefined, {
+        timeout: 5000,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Loading grid/)).not.toBeInTheDocument();
+  });
+
+  it("lists the agent's decisions on the Decision log tab", async () => {
+    renderHub("support_bot", { tab: "/decisions" });
+    expect(await screen.findByText("Guests can't refund.")).toBeInTheDocument();
+    // Scoped, with a way out to the full audit log.
+    expect(
+      screen.getByRole("link", { name: /full audit log/i }),
+    ).toHaveAttribute("href", expect.stringContaining("agent=support_bot"));
   });
 
   it("links Ban agent to the prefilled /bans route for an admin", async () => {
