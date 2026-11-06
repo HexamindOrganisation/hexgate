@@ -10,3 +10,9 @@ export function fmtTokens(n: number): string {
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return n.toLocaleString();
 }
+
+/** Human date-time for timestamps; echoes the raw string if it won't parse. */
+export function formatDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
