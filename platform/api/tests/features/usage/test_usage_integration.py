@@ -24,6 +24,7 @@ from hexgate_api.features.usage.top_users import (
     TOP_USERS_WINDOW_SECONDS,
     read_top_users,
 )
+from hexgate_api.models import as_utc
 
 _COLUMNS = [
     "project_id",
@@ -50,7 +51,7 @@ def _minute(ago: timedelta) -> datetime:
 
 def _clickhouse_now(clickhouse) -> datetime:
     now = clickhouse.query("SELECT now('UTC')").result_rows[0][0]
-    return now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+    return as_utc(now)
 
 
 def _clickhouse_now_early_in_a_minute(clickhouse) -> datetime:
