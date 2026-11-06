@@ -20,7 +20,7 @@ FULL_DRY_RUN = {
     "agent": "billing",
     "args": {"amount": 500},
     "attributes": {"tier": "gold"},
-    "draft": DRAFT,
+    "drafts": [DRAFT],
 }
 # What the API answers on each route these tools call.
 ANSWERS = {
@@ -197,18 +197,22 @@ def error(result: dict) -> str:
         ),
         pytest.param(
             "policy_check",
-            {"draft": DRAFT},
-            [("GET", "/policy-files", {}), ("POST", "/policy/preview", DRAFT)],
+            {"drafts": [DRAFT]},
+            [
+                ("GET", "/policy-files", {}),
+                ("POST", "/policy/preview", {"drafts": [DRAFT]}),
+            ],
             {"resolved": {}, "lints": []},
             id="check-draft",
         ),
         pytest.param(
             "policy_check",
-            {"draft": ENTRY_DRAFT},
-            # The entry file starts a compose store: no lookup needed.
-            [("POST", "/policy/preview", ENTRY_DRAFT)],
+            # A new file and the policy.yaml importing it, checked together;
+            # the entry file starts a compose store: no lookup needed.
+            {"drafts": [NEW_FILE_DRAFT, ENTRY_DRAFT]},
+            [("POST", "/policy/preview", {"drafts": [NEW_FILE_DRAFT, ENTRY_DRAFT]})],
             {"resolved": {}, "lints": []},
-            id="check-entry-draft",
+            id="check-two-drafts",
         ),
         pytest.param(
             "policy_dry_run",
@@ -232,12 +236,16 @@ def error(result: dict) -> str:
         pytest.param(
             "policy_dry_run",
             # A draft policy.yaml may declare a new agent: no agent lookup.
-            {**DRY_RUN, "agent": "triage", "draft": ENTRY_DRAFT},
+            {**DRY_RUN, "agent": "triage", "drafts": [NEW_FILE_DRAFT, ENTRY_DRAFT]},
             [
                 (
                     "POST",
                     "/policy/test",
-                    {**DRY_RUN, "agent": "triage", "draft": ENTRY_DRAFT},
+                    {
+                        **DRY_RUN,
+                        "agent": "triage",
+                        "drafts": [NEW_FILE_DRAFT, ENTRY_DRAFT],
+                    },
                 )
             ],
             {"outcome": "allow"},
@@ -337,8 +345,8 @@ def test_when_project_has_role_bindings_only_then_resolved_views_answer(
 @pytest.mark.parametrize(
     ("name", "arguments"),
     [
-        ("policy_check", {"draft": DRAFT}),
-        ("policy_dry_run", {**DRY_RUN, "draft": DRAFT}),
+        ("policy_check", {"drafts": [DRAFT]}),
+        ("policy_dry_run", {**DRY_RUN, "drafts": [DRAFT]}),
     ],
 )
 @pytest.mark.parametrize(
@@ -402,7 +410,7 @@ def test_when_project_is_not_granted_then_refused_before_any_request(
 
 @pytest.mark.parametrize(
     ("name", "arguments"),
-    [("policy_list_files", {}), ("policy_check", {"draft": ENTRY_DRAFT})],
+    [("policy_list_files", {}), ("policy_check", {"drafts": [ENTRY_DRAFT]})],
 )
 @respx.mock
 def test_when_project_id_holds_a_slash_then_it_is_sent_percent_encoded(
@@ -419,18 +427,37 @@ def test_when_project_id_holds_a_slash_then_it_is_sent_percent_encoded(
 @pytest.mark.parametrize(
     ("name", "arguments"),
     [
-        ("policy_check", {"draft": NEW_FILE_DRAFT}),
-        ("policy_dry_run", {**DRY_RUN, "draft": NEW_FILE_DRAFT}),
+        ("policy_check", {"drafts": [NEW_FILE_DRAFT]}),
+        ("policy_dry_run", {**DRY_RUN, "drafts": [NEW_FILE_DRAFT]}),
     ],
 )
-def test_when_draft_is_a_file_not_stored_then_it_is_refused(token, name, arguments):
-    # Nothing imports a new file yet, so the API would answer for the saved policy.
+def test_when_every_draft_is_a_file_not_stored_then_it_is_refused(
+    token, name, arguments
+):
+    # Nothing stored imports it, so the API would answer for the saved policy.
     mock_api()
 
-    message = error(call(token, name, **arguments))
-
-    assert "save it first with policy_save" in message
+    assert "nothing imports ['caps/billing.yaml']" in error(
+        call(token, name, **arguments)
+    )
     assert {r.method for r in api_requests()} == {"GET"}
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        ("policy_check", {"drafts": [NEW_FILE_DRAFT, DRAFT]}),
+        ("policy_dry_run", {**DRY_RUN, "drafts": [NEW_FILE_DRAFT, DRAFT]}),
+    ],
+)
+def test_when_a_new_file_comes_with_a_stored_one_then_both_are_sent(
+    token, name, arguments
+):
+    # The stored file's draft may import the new one.
+    mock_api()
+
+    assert not call(token, name, **arguments)["isError"]
+    assert sent(api_requests()[-1])[2]["drafts"] == [NEW_FILE_DRAFT, DRAFT]
 
 
 def test_when_agent_is_not_declared_then_policy_dry_run_refuses(token):

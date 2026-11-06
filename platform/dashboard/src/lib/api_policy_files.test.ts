@@ -72,13 +72,13 @@ describe("policy-file api requests", () => {
     });
   });
 
-  it("previews a draft with {name, content, agent}", async () => {
+  it("previews a draft as a one-element drafts list", async () => {
     const calls = capture({ resolved: null, lints: [] });
     await api.previewPolicy(P, { name: "policy.yaml", content: "x" }, "bot");
     expect(calls[0]).toMatchObject({
       url: "/v1/projects/p1/policy/preview",
       method: "POST",
-      body: { name: "policy.yaml", content: "x", agent: "bot" },
+      body: { drafts: [{ name: "policy.yaml", content: "x" }], agent: "bot" },
     });
   });
 
