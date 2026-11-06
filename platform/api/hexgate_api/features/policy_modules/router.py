@@ -23,11 +23,12 @@ from hexgate_api.core.db import get_session
 from hexgate_api.core.locks import project_lock
 from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.project import require_project_admin
-from hexgate_api.features.policy_modules import service
+from hexgate_api.features.policy_modules import coverage, service
 from hexgate_api.models import OrganizationMember, PolicyFile, PolicyModule, User
 from hexgate_api.schemas import (
     PolicyCheckRequest,
     PolicyCheckResponse,
+    PolicyCoverageResponse,
     PolicyFileRead,
     PolicyFileWrite,
     PolicyGraphResponse,
@@ -587,6 +588,36 @@ async def api_policy_graph(
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PolicyGraphResponse(**graph)
+
+
+@router.get(
+    "/projects/{project_id}/policy/coverage",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
+async def api_policy_coverage(
+    project_id: str,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> PolicyCoverageResponse:
+    """Per registered agent, the manifest tools and sub-agents no rule in any
+    role names, what decides them instead (``default_policy`` for a tool; for a
+    sub-agent, a deny when ``reach_gated``, else nothing), and whether the
+    policy has a section for the agent at all. 409 when the project has no policy store
+    (each agent enforces its own policy); 422 if it can't be composed."""
+    try:
+        agents = await coverage.project_coverage(session, project_id)
+    except coverage.NotModularError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"the project has no {service.ENTRY_FILE!r} and no role bindings, "
+                "so each agent enforces its own policy"
+            ),
+        ) from exc
+    except service.compose_error_types() as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PolicyCoverageResponse(agents=agents)
 
 
 @router.post(

@@ -954,9 +954,9 @@ async def compose_preview(
     return roles_json(requested), lints
 
 
-def _graph_from(agent_names, resolve_for_agent, role: str | None = None) -> dict:
-    """Build the node/edge graph from a per-agent resolver — model-agnostic, fed
-    either the compose or the tier resolver. An agent's effective tools split into
+def _graph_from(resolved: dict, role: str | None = None) -> dict:
+    """Build the node/edge graph from every agent's resolution
+    (:func:`resolve_every_agent`), compose or tier alike. An agent's effective tools split into
     tool *calls*, lowered *reach* keys (``agent.tool:``/``agent.handoff:`` → an
     agent→agent edge tagged by ``via``), and the *admission* key (``agent.run`` → a
     role→agent ingress edge); a ``mcp-`` tool is an ``mcp`` node. ``role`` filters
@@ -1014,9 +1014,8 @@ def _graph_from(agent_names, resolve_for_agent, role: str | None = None) -> dict
                 prev["roles"].append(at_role)
         # else: strictly less permissive — ignore (a real allow already stands)
 
-    for agent in sorted(agent_names):
+    for agent, result in sorted(resolved.items()):
         add_node(f"agent:{agent}", "agent", agent)
-        result = resolve_for_agent(agent)
         # In the union view (role=None) the same edge can appear under several
         # roles; we keep the MOST-permissive verdict (a role that allows it wins
         # over one the closed world denies). The per-edge ``roles`` list (and the
@@ -1086,29 +1085,32 @@ def _graph_from(agent_names, resolve_for_agent, role: str | None = None) -> dict
     }
 
 
+async def resolve_every_agent(session: AsyncSession, project_id: str) -> dict:
+    """``"*"`` and every agent the policy gives a section of its own (one the
+    entry file declares, or a roles column names), each resolved, keyed by
+    agent. Compose (an entry file) or the tier store, from a single files read.
+    An agent not in the result enforces the ``"*"`` resolution. Raises the
+    SDK's compose errors if any agent doesn't resolve."""
+    files = await _files_map(session, project_id)
+    if ENTRY_FILE in files:
+        return _resolve_all_agents_files(files)
+    from hexgate.security import resolve_for_project
+
+    boundaries, capabilities, roles = await _sdk_inputs(session, project_id)
+    return {
+        agent: resolve_for_project(boundaries, capabilities, roles, agent=agent)
+        for agent in sorted(_all_agent_names(roles))
+    }
+
+
 async def policy_graph(
     session: AsyncSession, project_id: str, role: str | None = None
 ) -> dict:
     """A node/edge graph of the project's agents, tools, and reach/admission edges,
-    for one ``role`` (or the union across roles). Auto-dispatches compose (an entry
-    file) vs the tier store — a single files read — and feeds the same builder.
-    Raises the SDK's compose errors if the project doesn't resolve."""
-    files = await _files_map(session, project_id)
-    if ENTRY_FILE in files:
-        agent_names = _compose_agent_names(files)
-
-        def resolve_for_agent(a: str):
-            return _resolve_files(files, a)
-    else:
-        from hexgate.security import resolve_for_project
-
-        boundaries, capabilities, roles_matrix = await _sdk_inputs(session, project_id)
-        agent_names = sorted(_all_agent_names(roles_matrix))
-
-        def resolve_for_agent(a: str):
-            return resolve_for_project(boundaries, capabilities, roles_matrix, agent=a)
-
-    return _graph_from(agent_names, resolve_for_agent, role=role)
+    for one ``role`` (or the union across roles). Raises the SDK's compose errors
+    if the project doesn't resolve."""
+    resolved = await resolve_every_agent(session, project_id)
+    return _graph_from(resolved, role=role)
 
 
 async def test_policy(
