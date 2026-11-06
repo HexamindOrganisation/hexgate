@@ -16,9 +16,8 @@ import {
   type AuditOutcome,
   LLM_MESSAGE_PAGE,
 } from "@/lib/api";
-import { useActive, useProjectScoped } from "@/lib/active";
+import { useProjectScoped } from "@/lib/active";
 import { useCanManageBans } from "@/lib/bans";
-import { useProjects } from "@/lib/projects";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -410,14 +409,10 @@ function DetailDrawer({
 export function AuditPage() {
   const projectScope = useProjectScoped();
   const projectId = projectScope.projectId;
-  const activeOrgId = useActive((s) => s.activeOrgId);
   const navigate = useNavigate();
   const canManageBans = useCanManageBans();
-  // Resolve the active project's display name for the page subtitle
-  // (already cached by the AppShell bootstrap; falls back to the id).
-  const projectsQ = useProjects(activeOrgId);
-  const projectName =
-    projectsQ.data?.find((p) => p.id === projectId)?.name ?? projectId;
+  // Display name for the page subtitle; falls back to the id.
+  const projectName = projectScope.projectName ?? projectId;
   // Filter + paging state lives in a zustand store (see lib/audit-filters)
   // so the dialled-in slice survives route switches; drawer selection is
   // ephemeral and stays local.

@@ -6,8 +6,7 @@ import {
   Sigma,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { useActive, useProjectScoped } from "@/lib/active";
-import { useProjects } from "@/lib/projects";
+import { useProjectScoped } from "@/lib/active";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { DashboardRangePicker } from "@/components/ui/dashboard-range-picker";
 import { KpiCard } from "@/components/audit/pieces";
@@ -33,10 +32,7 @@ function fmtTokens(n: number): string {
 export function UsagePage() {
   const projectScope = useProjectScoped();
   const projectId = projectScope.projectId;
-  const activeOrgId = useActive((s) => s.activeOrgId);
-  const projectsQ = useProjects(activeOrgId);
-  const projectName =
-    projectsQ.data?.find((p) => p.id === projectId)?.name ?? projectId;
+  const projectName = projectScope.projectName ?? projectId;
 
   const f = useUsageFilters((s) => s.filters);
   const setF = useUsageFilters((s) => s.setFilters);

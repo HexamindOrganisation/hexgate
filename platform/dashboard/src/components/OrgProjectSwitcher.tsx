@@ -1,4 +1,4 @@
-import { Check, ChevronsUpDown, FolderPlus, Plus } from "lucide-react";
+import { Check, ChevronsUpDown, FolderPlus, Hexagon, Plus } from "lucide-react";
 
 import {
   DropdownMenu,
@@ -19,9 +19,8 @@ import { cn } from "@/lib/utils";
  * projects nested) in a single dropdown. "+ New project" /
  * "+ New organization" footer actions open the corresponding dialogs.
  *
- * Renders as a two-line block — project name on top, org name beneath — so
- * the project reads as the primary context (OpenAI-style) even though one
- * dropdown still switches both.
+ * Renders as a card: the org as a small caption above the project name, which
+ * is the larger, primary line even though one dropdown switches both.
  *
  * Two state pieces:
  *   - which orgs/projects exist (from React Query)
@@ -63,22 +62,25 @@ export function OrgProjectSwitcher({
         <button
           type="button"
           className={cn(
-            "flex w-full flex-col gap-0.5 rounded-md px-2 py-1 text-left",
+            "flex w-full items-center gap-2.5 rounded-xl border border-border bg-card p-1.5 text-left",
             "transition-colors hover:bg-accent",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           )}
         >
-          <span className="flex w-full items-center gap-1">
-            <span className="truncate text-sm font-medium text-foreground">
+          <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-action text-action-foreground">
+            <Hexagon className="size-4" strokeWidth={2} />
+          </span>
+          <span className="flex min-w-0 flex-1 flex-col">
+            {label.org && (
+              <span className="truncate text-caption text-muted-foreground">
+                {label.org}
+              </span>
+            )}
+            <span className="truncate font-mono text-[13px] font-medium text-foreground">
               {label.project}
             </span>
-            <ChevronsUpDown className="ml-auto size-3 shrink-0 text-muted-foreground" />
           </span>
-          {label.org && (
-            <span className="truncate text-xs text-muted-foreground">
-              {label.org}
-            </span>
-          )}
+          <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
         </button>
       </DropdownMenuTrigger>
 

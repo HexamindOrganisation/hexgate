@@ -28,6 +28,9 @@ function bansKey(projectId: string | null, includeRevoked: boolean) {
 
 interface UseBansOptions {
   includeRevoked?: boolean;
+  /** Poll and refetch on focus — for always-mounted views like the nav
+   * count, which no page visit would otherwise refresh. */
+  live?: boolean;
 }
 
 /** Bans for a project. Disabled while ``projectId`` is null so pages
@@ -39,6 +42,10 @@ export function useBans(projectId: string | null, options?: UseBansOptions) {
     queryFn: () => api.listBans(projectId as string, includeRevoked),
     enabled: !!projectId,
     staleTime: 30_000,
+    ...(options?.live && {
+      refetchInterval: 60_000,
+      refetchOnWindowFocus: true,
+    }),
   });
 }
 
