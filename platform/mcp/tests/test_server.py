@@ -125,6 +125,7 @@ def test_when_tools_are_listed_then_only_policy_save_writes(key):
         "policy_list_roles": read_only,
         "policy_check": read_only,
         "policy_dry_run": read_only,
+        "policy_diff": read_only,
         "audit_decisions": read_only,
         "agents_list": read_only,
         "policy_save": {
