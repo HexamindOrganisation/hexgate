@@ -3,7 +3,7 @@
  * (ResizeObserver, measured DOM) that jsdom lacks, so it's replaced with a
  * light stub that still renders each node via `nodeTypes` and each edge via
  * `edgeTypes` and forwards the click/hover handlers. That keeps the component's
- * OWN logic under test: force layout, node/edge construction, the verdict /
+ * OWN logic under test: layered layout, node/edge construction, the verdict /
  * constraint / legend panels, role filtering, the constraint-bypass warning,
  * and the node-click transitive trace.
  */
@@ -355,5 +355,37 @@ describe("PolicyGraphDialog", () => {
     await waitFor(() =>
       expect(screen.getByText(/no agents bound yet/i)).toBeInTheDocument(),
     );
+  });
+
+  it("explains a pinned agent in a side panel", async () => {
+    stubGraph(GRAPH);
+    renderDialog();
+    await userEvent.click(await screen.findByTestId("node-agent:supervisor"));
+    const panel = screen.getByRole("complementary", {
+      name: "agent supervisor",
+    });
+    expect(panel).toHaveTextContent(
+      "Calls 1 of 1 tools — 1 with constraints, 1 behind approval.",
+    );
+    expect(panel).toHaveTextContent("Admitted roles");
+    expect(panel).toHaveTextContent("admin");
+    expect(panel).toHaveTextContent("worker · handoff");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Close details" }),
+    );
+    expect(
+      screen.queryByRole("complementary", { name: "agent supervisor" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("labels the columns; clicking one clears like the canvas", async () => {
+    stubGraph(GRAPH);
+    renderDialog();
+    const heading = await screen.findByText("Caller roles");
+    expect(screen.getByText("Agents · hop 1")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("node-agent:supervisor"));
+    expect(screen.getByRole("complementary")).toBeInTheDocument();
+    await userEvent.click(heading);
+    expect(screen.queryByRole("complementary")).toBeNull();
   });
 });
