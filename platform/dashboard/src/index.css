@@ -32,6 +32,9 @@
   --color-action-foreground: hsl(var(--action-foreground));
   /* Health only ("Connected", "Enforcing") — never an allow decision. */
   --color-success: hsl(var(--success));
+  /* A control raised off a recessed track (selected segment): white in
+     light, one step lighter than the track in dark. */
+  --color-raised: hsl(var(--raised));
 
   --color-allow: hsl(var(--semantic-allow));
   --color-deny: hsl(var(--semantic-deny));
@@ -93,6 +96,7 @@
 
   --action: 223 36% 11%;
   --action-foreground: 0 0% 100%;
+  --raised: 0 0% 100%;
   --success: 154 72% 30%;
 
   /* Deny is the only loud colour; allow is a quiet neutral that still reads
@@ -167,6 +171,7 @@
 
   --action: 218 33% 93%;
   --action-foreground: 220 29% 6%;
+  --raised: 222 25% 22%;
   --success: 152 58% 48%;
 
   --semantic-allow: 217 15% 62%;
