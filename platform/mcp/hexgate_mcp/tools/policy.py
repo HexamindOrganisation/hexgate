@@ -54,7 +54,18 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         module store they would change nothing."""
         if _drafts_entry(drafts):
             return
-        if _has_entry(await read(project_id, "/policy-files")):
+        files = await read(project_id, "/policy-files")
+        if _has_entry(files):
+            # A stored file cannot import one that isn't saved yet, so drafts
+            # that are all new files are read by nothing: the API would answer
+            # for the saved policy as if they were fine.
+            stored = {f["name"] for f in files}
+            if drafts and all(d.name not in stored for d in drafts):
+                raise ToolError(
+                    f"nothing imports {sorted(d.name for d in drafts)}, so the "
+                    "drafts would not be read; draft each together with the "
+                    f"file that imports it (such as {ENTRY_FILE!r})"
+                )
             return
         # Bindings first: without them a retry without the drafts is refused
         # too, so the draft refusal would send the model round once for nothing.
@@ -184,7 +195,7 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         answer then also holds the generic (`"*"`) view they resolve to, which
         leaves out roles declared under `agents:` (policy_dry_run with
         `agent` evaluates those).
-        A file `policy.yaml` does not import is not read: draft a new file
+        A file nothing imports is not read: draft a new file
         together with the `policy.yaml` that imports it."""
         await refuse_without_store(project_id, drafts)
         if not drafts:
@@ -212,7 +223,7 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         With a `policy.yaml` draft, `agent` is not checked against the draft's
         own agents: an agent it does not declare is evaluated under the
         generic view.
-        A file `policy.yaml` does not import is not read: draft a new file
+        A file nothing imports is not read: draft a new file
         together with the `policy.yaml` that imports it."""
         await refuse_without_store(project_id, drafts)
         # A draft policy.yaml may declare an agent the saved graph lacks.

@@ -431,12 +431,33 @@ def test_when_project_id_holds_a_slash_then_it_is_sent_percent_encoded(
         ("policy_dry_run", {**DRY_RUN, "drafts": [NEW_FILE_DRAFT]}),
     ],
 )
-def test_when_draft_is_a_file_not_stored_then_it_is_sent(token, name, arguments):
-    # Beside a stored policy.yaml, a proposal may add a file.
+def test_when_every_draft_is_a_file_not_stored_then_it_is_refused(
+    token, name, arguments
+):
+    # Nothing stored imports it, so the API would answer for the saved policy.
+    mock_api()
+
+    assert "nothing imports ['caps/billing.yaml']" in error(
+        call(token, name, **arguments)
+    )
+    assert {r.method for r in api_requests()} == {"GET"}
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        ("policy_check", {"drafts": [NEW_FILE_DRAFT, DRAFT]}),
+        ("policy_dry_run", {**DRY_RUN, "drafts": [NEW_FILE_DRAFT, DRAFT]}),
+    ],
+)
+def test_when_a_new_file_comes_with_a_stored_one_then_both_are_sent(
+    token, name, arguments
+):
+    # The stored file's draft may import the new one.
     mock_api()
 
     assert not call(token, name, **arguments)["isError"]
-    assert sent(api_requests()[-1])[2]["drafts"] == [NEW_FILE_DRAFT]
+    assert sent(api_requests()[-1])[2]["drafts"] == [NEW_FILE_DRAFT, DRAFT]
 
 
 def test_when_agent_is_not_declared_then_policy_dry_run_refuses(token):
