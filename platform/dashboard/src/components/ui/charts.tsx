@@ -1,12 +1,12 @@
 /**
- * Dependency-free SVG chart primitives — an area chart, a donut, and a
- * sparkline cover what the dashboard needs without ~80KB of charting
+ * Dependency-free chart primitives — stacked bars and a sparkline cover
+ * what the dashboard needs without ~80KB of charting
  * library. Series-agnostic: callers describe their stack once as a
  * ``ChartSeries[]`` (see ``components/audit/chart-tokens.ts`` for the
  * outcome stack) and pass per-bucket values keyed by ``series.key``.
  */
 
-import { useLayoutEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 /** One stacked series: colours for SVG strokes/fills plus the Tailwind
  * class used for legend swatches. */
@@ -18,8 +18,6 @@ export interface ChartSeries {
   /** Tailwind background class for legend dots (static — the scanner
    * can't see interpolated class names). */
   swatchClass: string;
-  /** Stacked-area layer fill opacity (default 0.3). */
-  fillOpacity?: number;
 }
 
 /** One x-axis bucket; ``values`` is keyed by ``ChartSeries.key``. */
@@ -28,19 +26,6 @@ export interface ChartBucket {
   mode: "hour" | "day";
   values: Record<string, number>;
   total: number;
-}
-
-function useMeasure() {
-  const ref = useRef<HTMLDivElement>(null);
-  const [w, setW] = useState(0);
-  useLayoutEffect(() => {
-    if (!ref.current) return;
-    const ro = new ResizeObserver((ents) => setW(ents[0].contentRect.width));
-    ro.observe(ref.current);
-    setW(ref.current.clientWidth);
-    return () => ro.disconnect();
-  }, []);
-  return [ref, w] as const;
 }
 
 // ——— Sparkline (single series area) ———
@@ -85,274 +70,164 @@ export function Sparkline({
   );
 }
 
-// ——— Stacked area chart with hover tooltip ———
-export function AreaChart({
+// ——— Stacked bars (one column per bucket) with hover readout ———
+/** First series sits at the bottom; the last is drawn on top, so put the
+ * series that matters most last (the outcome stack ends with deny). */
+export function StackedBars({
   buckets,
   series,
-  height = 240,
+  height = 200,
 }: {
   buckets: ChartBucket[];
   series: ChartSeries[];
   height?: number;
 }) {
-  const [ref, w] = useMeasure();
   const [hover, setHover] = useState<number | null>(null);
-  const padL = 8,
-    padR = 8,
-    padT = 14,
-    padB = 26;
-  const W = Math.max(w, 320);
-  const innerW = W - padL - padR;
-  const innerH = height - padT - padB;
-  const maxTotal = Math.max(...buckets.map((d) => d.total), 1);
-  const x = (i: number) =>
-    padL + (i / Math.max(buckets.length - 1, 1)) * innerW;
-  const y = (v: number) => padT + innerH - (v / maxTotal) * innerH;
-
-  const cum = buckets.map(() => 0);
-  const layers: {
-    key: string;
-    color: string;
-    fillOpacity: number;
-    path: string;
-  }[] = [];
-  for (const s of series) {
-    const top = buckets.map((d, i) => cum[i] + (d.values[s.key] ?? 0));
-    const bottom = cum.slice();
-    const path =
-      top.map((v, i) => `${i === 0 ? "M" : "L"}${x(i)},${y(v)}`).join(" ") +
-      " " +
-      bottom
-        .map(
-          (_, i) =>
-            `L${x(buckets.length - 1 - i)},${y(bottom[buckets.length - 1 - i])}`,
-        )
-        .join(" ") +
-      " Z";
-    layers.push({
-      key: s.key,
-      color: s.color,
-      fillOpacity: s.fillOpacity ?? 0.3,
-      path,
-    });
-    buckets.forEach((_, i) => (cum[i] = top[i]));
-  }
-
-  const n = buckets.length;
-  const mode = (buckets[0] && buckets[0].mode) || "day";
+  const max = Math.max(...buckets.map((b) => b.total), 1);
   const ticks = (() => {
-    const want = Math.min(5, n);
+    const n = buckets.length;
     if (n <= 1) return [0];
+    const want = Math.min(5, n);
     const step = (n - 1) / (want - 1);
-    const s = new Set<number>();
-    for (let i = 0; i < want; i++) s.add(Math.round(i * step));
-    return [...s].sort((a, b) => a - b);
+    return [
+      ...new Set(Array.from({ length: want }, (_, i) => Math.round(i * step))),
+    ];
   })();
-  const fmt = (dt: Date) =>
-    mode === "hour"
-      ? dt
+  // Sub-day buckets over several days tick by date; the tooltip always
+  // carries the full time.
+  const spansDays =
+    buckets.length > 1 &&
+    +buckets.at(-1)!.label - +buckets[0].label > 30 * 36e5;
+  const tick = (b: ChartBucket) =>
+    b.mode === "hour" && !spansDays
+      ? b.label
           .toLocaleTimeString("en-US", { hour: "numeric", hour12: true })
           .replace(" ", "")
           .toLowerCase()
-      : dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      : b.label.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          timeZone: b.mode === "day" ? "UTC" : undefined,
+        });
+  const full = (b: ChartBucket) =>
+    b.mode === "hour"
+      ? b.label.toLocaleString("en-US", {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : // Day buckets start at UTC midnight; label them in UTC so a user
+        // west of UTC doesn't see every bar one day early.
+        b.label.toLocaleDateString("en-US", {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          timeZone: "UTC",
+        });
+  // Each non-zero segment keeps a few pixels, so a handful of denials next
+  // to thousands of allows still shows without hovering.
+  const MIN_SEGMENT = 3;
+  const barHeight = (b: ChartBucket) =>
+    Math.max(
+      (b.total / max) * height,
+      series.filter((s) => (b.values[s.key] ?? 0) > 0).length * MIN_SEGMENT,
+    );
+  // Keep the readout inside the card at the edges.
+  const tipAnchor = (i: number) =>
+    i < buckets.length / 4
+      ? "left-0"
+      : i >= (buckets.length * 3) / 4
+        ? "right-0"
+        : "left-1/2 -translate-x-1/2";
+  const describe = (b: ChartBucket) =>
+    `${full(b)}: ${b.total.toLocaleString()} total, ` +
+    series.map((s) => `${b.values[s.key] ?? 0} ${s.label}`).join(", ");
 
   return (
-    <div
-      ref={ref}
-      className="relative w-full"
-      onMouseLeave={() => setHover(null)}
-      onMouseMove={(e) => {
-        const rect = e.currentTarget.getBoundingClientRect();
-        const rx = e.clientX - rect.left - padL;
-        const i = Math.round((rx / innerW) * (buckets.length - 1));
-        setHover(Math.max(0, Math.min(buckets.length - 1, i)));
-      }}
-    >
-      <svg width={W} height={height} className="block">
-        {[0.25, 0.5, 0.75, 1].map((f) => (
-          <line
-            key={f}
-            x1={padL}
-            x2={W - padR}
-            y1={padT + innerH * (1 - f)}
-            y2={padT + innerH * (1 - f)}
-            stroke="hsl(var(--border))"
-            strokeOpacity="0.5"
-            strokeDasharray="2 4"
-          />
-        ))}
-        {layers.map((l) => (
-          <path key={l.key} d={l.path} fill={l.color} opacity={l.fillOpacity} />
-        ))}
-        {(() => {
-          const c2 = buckets.map(() => 0);
-          return series.map((s) => {
-            const top = buckets.map((d, i) => c2[i] + (d.values[s.key] ?? 0));
-            const line = top
-              .map((v, i) => `${i === 0 ? "M" : "L"}${x(i)},${y(v)}`)
-              .join(" ");
-            buckets.forEach((_, i) => (c2[i] = top[i]));
-            return (
-              <path
-                key={s.key}
-                d={line}
-                fill="none"
-                stroke={s.color}
-                strokeWidth="1.5"
-                strokeOpacity="0.9"
-              />
-            );
-          });
-        })()}
-        {hover != null && (
-          <g>
-            <line
-              x1={x(hover)}
-              x2={x(hover)}
-              y1={padT}
-              y2={padT + innerH}
-              stroke="hsl(var(--muted-foreground))"
-              strokeOpacity="0.5"
-            />
-            <circle
-              cx={x(hover)}
-              cy={y(cum[hover])}
-              r="3"
-              fill="hsl(var(--primary))"
-            />
-          </g>
-        )}
-        {ticks.map((t) => (
-          <text
-            key={t}
-            x={x(t)}
-            y={height - 8}
-            fontSize="10.5"
-            fill="hsl(var(--muted-foreground))"
-            textAnchor={t === 0 ? "start" : t === n - 1 ? "end" : "middle"}
-            fontFamily="var(--font-mono)"
-          >
-            {fmt(buckets[t].label)}
-          </text>
-        ))}
-      </svg>
-      {hover != null && (
+    <div className="w-full">
+      <div
+        className={`relative flex items-end border-b border-border pt-5 ${buckets.length > 60 ? "gap-px" : "gap-[3px]"}`}
+        style={{ height: height + 20 }}
+        onMouseLeave={() => setHover(null)}
+      >
+        <div className="pointer-events-none absolute inset-x-0 top-5 border-t border-dashed border-border" />
         <div
-          className="pointer-events-none absolute top-2 z-[5] min-w-[130px] rounded-lg border border-border bg-popover px-2.5 py-2 text-xs shadow-xl"
-          style={{ left: Math.min(Math.max(x(hover) + 10, 8), W - 150) }}
-        >
-          <div className="mb-1 text-[11px] text-muted-foreground">
-            {mode === "hour"
-              ? buckets[hover].label.toLocaleTimeString("en-US", {
-                  hour: "numeric",
-                  minute: "2-digit",
-                  hour12: true,
-                })
-              : buckets[hover].label.toLocaleDateString("en-US", {
-                  weekday: "short",
-                  month: "short",
-                  day: "numeric",
-                })}
-          </div>
-          {series
-            .slice()
-            .reverse()
-            .map((s) => (
-              <div
-                key={s.key}
-                className="flex items-center gap-1.5 leading-[1.7]"
-              >
-                <span className={`size-2 rounded-sm ${s.swatchClass}`} />
-                <span className="flex-1 text-muted-foreground">{s.label}</span>
-                <span className="font-mono text-foreground">
-                  {buckets[hover].values[s.key] ?? 0}
-                </span>
-              </div>
-            ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ——— Donut with centred total + per-series legend ———
-export function Donut({
-  values,
-  total,
-  series,
-  caption,
-  size = 168,
-  stroke = 20,
-}: {
-  values: Record<string, number>;
-  total: number;
-  series: ChartSeries[];
-  caption: string;
-  size?: number;
-  stroke?: number;
-}) {
-  const r = (size - stroke) / 2;
-  const cx = size / 2,
-    cy = size / 2;
-  const circ = 2 * Math.PI * r;
-  const frac = (k: string) => (total ? (values[k] ?? 0) / total : 0);
-  // Cumulative offset via prefix sum (no render-time reassignment).
-  const segs = series.map((s, i) => ({
-    s,
-    dash: frac(s.key) * circ,
-    offset:
-      series.slice(0, i).reduce((sum, ss) => sum + frac(ss.key), 0) * circ,
-  }));
-  return (
-    <div className="flex items-center gap-[18px]">
-      <svg width={size} height={size} className="shrink-0 -rotate-90">
-        <circle
-          cx={cx}
-          cy={cy}
-          r={r}
-          fill="none"
-          stroke="hsl(var(--secondary))"
-          strokeWidth={stroke}
+          className="pointer-events-none absolute inset-x-0 border-t border-dashed border-border"
+          style={{ top: 20 + height / 2 }}
         />
-        {segs.map(({ s, dash, offset }) => (
-          <circle
-            key={s.key}
-            cx={cx}
-            cy={cy}
-            r={r}
-            fill="none"
-            stroke={s.color}
-            strokeWidth={stroke}
-            strokeDasharray={`${dash} ${circ - dash}`}
-            strokeDashoffset={-offset}
-            strokeLinecap="butt"
-          />
-        ))}
-      </svg>
-      <div className="min-w-0 flex-1">
-        <div className="text-[26px] font-semibold leading-none tracking-tight">
-          {total.toLocaleString()}
-        </div>
-        <div className="mb-3 text-xs text-muted-foreground">{caption}</div>
-        {series.map((s) => {
-          const v = values[s.key] ?? 0;
-          const pct = total ? Math.round((v / total) * 100) : 0;
-          return (
+        <span className="absolute right-0 top-0 font-mono text-[11px] text-muted-foreground">
+          {max.toLocaleString()}
+        </span>
+        {buckets.map((b, i) => (
+          <div
+            key={i}
+            role="img"
+            aria-label={describe(b)}
+            onMouseEnter={() => setHover(i)}
+            className="relative flex h-full min-w-0 flex-1 flex-col justify-end"
+          >
+            {/* The bar is sized to the bucket total; segments share it, so
+                the tallest bar never passes the top line. */}
             <div
-              key={s.key}
-              className="flex items-center gap-2 py-[3px] text-meta"
+              className={`flex flex-col-reverse overflow-hidden rounded-t-[3px] transition-opacity ${hover !== null && hover !== i ? "opacity-60" : ""}`}
+              style={{ height: barHeight(b) }}
             >
-              <span className={`size-[9px] rounded-sm ${s.swatchClass}`} />
-              <span className="flex-1 text-foreground">{s.label}</span>
-              <span className="font-mono text-foreground">
-                {v.toLocaleString()}
-              </span>
-              <span className="w-[34px] text-right font-mono text-muted-foreground">
-                {pct}%
-              </span>
+              {series.map((s) => {
+                const v = b.values[s.key] ?? 0;
+                return v ? (
+                  <div
+                    key={s.key}
+                    className="border-t border-card first:border-t-0"
+                    style={{
+                      flexGrow: v,
+                      flexBasis: 0,
+                      minHeight: MIN_SEGMENT,
+                      background: s.color,
+                    }}
+                  />
+                ) : null;
+              })}
             </div>
-          );
-        })}
+            {hover === i && (
+              <div
+                className={`pointer-events-none absolute bottom-full z-10 mb-2 whitespace-nowrap ${tipAnchor(i)}`}
+              >
+                <div className="rounded-lg border border-border bg-popover px-2.5 py-1.5 text-xs shadow-md">
+                  <div className="font-medium">{full(b)}</div>
+                  {[...series].reverse().map((s) => (
+                    <div key={s.key} className="flex items-center gap-1.5">
+                      <span className={`size-2 rounded-sm ${s.swatchClass}`} />
+                      <span className="text-muted-foreground">{s.label}</span>
+                      <span className="ml-auto pl-3 font-mono">
+                        {(b.values[s.key] ?? 0).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="relative mt-2 h-4 font-mono text-[11px] text-muted-foreground">
+        {ticks.map((i) => (
+          <span
+            key={i}
+            className={
+              buckets.length === 1
+                ? "absolute left-1/2 -translate-x-1/2 whitespace-nowrap"
+                : "absolute -translate-x-1/2 whitespace-nowrap first:translate-x-0 last:-translate-x-full"
+            }
+            style={
+              buckets.length === 1
+                ? undefined
+                : { left: `${((i + 0.5) / buckets.length) * 100}%` }
+            }
+          >
+            {tick(buckets[i])}
+          </span>
+        ))}
       </div>
     </div>
   );

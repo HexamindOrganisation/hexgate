@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import deque
 from collections.abc import Sequence
 
@@ -360,8 +360,12 @@ def bucket_minutes_for_timedelta(delta: timedelta) -> int:
         return 1440
 
 
+def _zero_outcomes() -> dict[str, int]:
+    return {e.value: 0 for e in AuditOutcome}
+
+
 def _zero_counts() -> dict[str, int]:
-    return {"all": 0, **{e.value: 0 for e in AuditOutcome}}
+    return {"all": 0, **_zero_outcomes()}
 
 
 def _scope(
@@ -569,8 +573,10 @@ def timeseries(
     start_date: datetime | None = None,
     end_date: datetime | None = None,
 ) -> list[dict]:
-    """Per-bucket outcome counts, ordered by bucket. Sparse: empty buckets are
-    omitted. Returns ``[{bucket, allow, deny, needs_approval}]``."""
+    """Per-bucket outcome counts, ordered by bucket, one point for every
+    bucket in the window (empty ones as zeros), so a quiet stretch reads as a
+    gap and the client never has to re-derive the bucketing. Returns
+    ``[{bucket, allow, deny, needs_approval}]``."""
     where, params = _scope(
         project_id,
         since_hours,
@@ -593,14 +599,44 @@ def timeseries(
         "GROUP BY t, outcome ORDER BY t"
     )
     result = client.query(ts_sql, parameters=params)
-    points: dict[object, dict] = {}
+    # Keyed by epoch seconds, the same grid toStartOfInterval uses.
+    points: dict[int, dict] = {}
     for t, outcome, n in result.result_rows:
-        point = points.setdefault(
-            t, {"bucket": t, **{e.value: 0 for e in AuditOutcome}}
-        )
+        # The driver returns DateTime64(3, 'UTC') as a NAIVE datetime holding
+        # UTC; stamp it, or timestamp() reads it in the host's local zone and
+        # the JSON carries no offset.
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        point = points.setdefault(int(t.timestamp()), {"bucket": t, **_zero_outcomes()})
         if outcome in point:
             point[outcome] = int(n)
-    return [points[t] for t in sorted(points)]
+    if "start_date" in params:
+        window = (params["start_date"], params["end_date"])
+    else:
+        # The snapshot the query bound, not a second clock read.
+        window = (params["since"], params["since"] + timedelta(hours=since_hours))
+    return _fill_buckets(points, *window, bucket_minutes)
+
+
+def _fill_buckets(
+    points: dict[int, dict], start: datetime, end: datetime, bucket_minutes: int
+) -> list[dict]:
+    """Every epoch-aligned bucket from ``start``'s to ``end``'s, zeros where
+    the query found nothing. Stops at now: a bucket that hasn't started is not
+    a quiet one. Points outside the grid are kept, never dropped."""
+    step = bucket_minutes * 60
+    start, end = (
+        d if d.tzinfo else d.replace(tzinfo=timezone.utc) for d in (start, end)
+    )
+    t = int(start.timestamp()) // step * step
+    last = int(min(end, datetime.now(timezone.utc)).timestamp())
+    while t <= last:
+        points.setdefault(
+            t,
+            {"bucket": datetime.fromtimestamp(t, timezone.utc), **_zero_outcomes()},
+        )
+        t += step
+    return [points[k] for k in sorted(points)]
 
 
 # run_id rides along so the detail drawer can scope the transcript read for

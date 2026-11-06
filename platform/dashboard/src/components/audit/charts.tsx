@@ -1,6 +1,6 @@
 /**
- * Audit-specific chart pieces. The reusable SVG primitives (AreaChart,
- * Donut, Sparkline) live in ``components/ui/charts.tsx``; what stays here
+ * Audit-specific chart pieces. The reusable primitives (StackedBars,
+ * Sparkline) live in ``components/ui/charts.tsx``; what stays here
  * is bound to the allow/deny/needs_approval outcome domain.
  */
 
