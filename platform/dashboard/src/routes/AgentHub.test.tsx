@@ -14,6 +14,7 @@ import {
   AgentDecisionsTab,
   AgentHub,
   AgentOverviewTab,
+  AgentPlaygroundTab,
   AgentPoliciesTab,
   AgentResourcesTab,
 } from "@/routes/AgentHub";
@@ -25,6 +26,34 @@ vi.mock("@/components/policy_files/PolicyGraphDialog", () => ({
   PolicyFlow: ({ graph }: { graph: { nodes: unknown[] } }) => (
     <div data-testid="agent-graph">{graph.nodes.length} nodes</div>
   ),
+}));
+
+// The Playground tab embeds the live chat (a WebSocket). Stub it — its own
+// behaviour is covered in Playground.test; here we only check the tab mounts
+// embedded and project-scoped.
+vi.mock("@/routes/Playground", () => ({
+  PlaygroundLive: ({
+    projectId,
+    embedded,
+  }: {
+    projectId: string;
+    embedded?: boolean;
+  }) => (
+    <div data-testid="embedded-playground">
+      playground:{projectId}:{String(embedded)}
+    </div>
+  ),
+}));
+
+// Which agent the serve relay currently exposes. The hub gates the Playground
+// tab on this; drive it per test instead of opening a real WebSocket.
+const served = vi.hoisted(() => ({
+  agentName: null as string | null,
+  online: false,
+}));
+vi.mock("@/lib/playground", async (importActual) => ({
+  ...(await importActual<typeof import("@/lib/playground")>()),
+  usePlaygroundServedAgent: () => served,
 }));
 
 const PROJECT = "p1";
@@ -204,7 +233,7 @@ function renderHub(
     summaryError?: boolean;
     noAgentInGraph?: boolean;
     matrixError?: boolean;
-    tab?: "" | "/resources" | "/policies" | "/decisions";
+    tab?: "" | "/resources" | "/policies" | "/playground" | "/decisions";
   } = {},
 ) {
   stubFetch(role, manifestError, summaryError, noAgentInGraph, matrixError);
@@ -214,6 +243,7 @@ function renderHub(
         <Route index element={<AgentOverviewTab />} />
         <Route path="resources" element={<AgentResourcesTab />} />
         <Route path="policies" element={<AgentPoliciesTab />} />
+        <Route path="playground" element={<AgentPlaygroundTab />} />
         <Route path="decisions" element={<AgentDecisionsTab />} />
       </Route>
     </Routes>,
@@ -223,6 +253,8 @@ function renderHub(
 
 describe("AgentHub", () => {
   beforeEach(() => {
+    served.agentName = null;
+    served.online = false;
     act(() => {
       useActive.setState({ activeOrgId: "org-1", activeProjectId: PROJECT });
     });
@@ -318,6 +350,46 @@ describe("AgentHub", () => {
     expect(
       screen.getByRole("link", { name: /full audit log/i }),
     ).toHaveAttribute("href", expect.stringContaining("agent=support_bot"));
+  });
+
+  it("embeds the playground on the tab when this agent is being served", async () => {
+    served.agentName = "support_bot";
+    served.online = true;
+    renderHub("support_bot", { tab: "/playground" });
+    // Embedded (not full-screen) and keyed to this project.
+    expect(await screen.findByTestId("embedded-playground")).toHaveTextContent(
+      `playground:${PROJECT}:true`,
+    );
+    // Framed as a live session with this agent.
+    expect(screen.getByText(/Live session with/)).toBeInTheDocument();
+  });
+
+  it("mutes the Playground tab when this agent isn't served", async () => {
+    // served is off by default — the nav tab is a disabled span, not a link.
+    renderHub("support_bot");
+    expect(
+      await screen.findByRole("heading", { name: "support_bot" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Playground" }),
+    ).not.toBeInTheDocument();
+    const muted = screen.getByText("Playground", { selector: "span" });
+    expect(muted).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("shows a not-served state, not a live chat, when this agent isn't served", async () => {
+    renderHub("support_bot", { tab: "/playground" });
+    expect(await screen.findByText(/isn't being served/)).toBeInTheDocument();
+    expect(screen.queryByTestId("embedded-playground")).not.toBeInTheDocument();
+  });
+
+  it("names the agent currently being served when it isn't this one", async () => {
+    served.agentName = "other_bot";
+    served.online = true;
+    renderHub("support_bot", { tab: "/playground" });
+    expect(await screen.findByText(/currently serving/)).toBeInTheDocument();
+    expect(screen.getByText("other_bot")).toBeInTheDocument();
+    expect(screen.queryByTestId("embedded-playground")).not.toBeInTheDocument();
   });
 
   it("links Ban agent to the prefilled /bans route for an admin", async () => {

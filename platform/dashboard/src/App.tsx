@@ -8,6 +8,7 @@ import {
   AgentDecisionsTab,
   AgentHub,
   AgentOverviewTab,
+  AgentPlaygroundTab,
   AgentPoliciesTab,
   AgentResourcesTab,
 } from "@/routes/AgentHub";
@@ -85,6 +86,7 @@ export default function App() {
             <Route index element={<AgentOverviewTab />} />
             <Route path="resources" element={<AgentResourcesTab />} />
             <Route path="policies" element={<AgentPoliciesTab />} />
+            <Route path="playground" element={<AgentPlaygroundTab />} />
             <Route path="decisions" element={<AgentDecisionsTab />} />
           </Route>
           <Route path="policies" element={<PoliciesPage />} />

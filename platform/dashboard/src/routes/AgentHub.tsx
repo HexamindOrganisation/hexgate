@@ -40,6 +40,8 @@ import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { cn } from "@/lib/utils";
 import { DetailDrawer } from "./Audit";
 import { ManifestView, type RoleMode } from "./Agents";
+import { PlaygroundLive } from "./Playground";
+import { usePlaygroundServedAgent } from "@/lib/playground";
 
 type Activity = { all: number; deny: number; needs_approval: number };
 
@@ -129,6 +131,13 @@ export function AgentHub() {
 
   const canManageBans = useCanManageBans();
 
+  // The playground relay is project-scoped (one `hexgate serve` at a time), so
+  // this agent's Playground tab is only live when it is the agent being served.
+  // Gate on the agent name (stable across socket blips), not the transient
+  // `online` flag — else a reconnect would flap the tab and drop the chat.
+  const served = usePlaygroundServedAgent({ projectId: scope.projectId ?? "" });
+  const playgroundLive = !!agent && served.agentName === agent.name;
+
   if (scope.status === "no-project") {
     return <NoProjectEmptyState resource="agents" />;
   }
@@ -180,6 +189,7 @@ export function AgentHub() {
           (agent.manifest?.tools?.length ?? 0) +
           (agent.manifest?.skills?.length ?? 0)
         }
+        playgroundLive={playgroundLive}
       />
       <Outlet
         context={
@@ -195,6 +205,9 @@ export function AgentHub() {
             subgraph,
             graphLoading: graphQuery.isLoading,
             graphError: graphQuery.isError && !graph404,
+            playgroundLive,
+            servedAgent: served.agentName,
+            serveOnline: served.online,
           } satisfies HubContext
         }
       />
@@ -219,6 +232,12 @@ export interface HubContext {
   subgraph: PolicyGraph | null;
   graphLoading: boolean;
   graphError: boolean;
+  /** This agent is the one currently served, so its Playground tab is live. */
+  playgroundLive: boolean;
+  /** The agent the serve relay currently exposes (any), or null if none. */
+  servedAgent: string | null;
+  /** A serve is attached, even if it hasn't announced its agent yet. */
+  serveOnline: boolean;
 }
 
 /** The Overview tab — the agent's graph + KPI strip. */
@@ -262,7 +281,76 @@ export function AgentDecisionsTab() {
   return <AgentDecisions agent={ctx.agent} />;
 }
 
-function HubTabs({ resources }: { resources: number }) {
+/** The Playground tab — a live chat with THIS agent, embedded in the hub. The
+ * relay is project-scoped (one `hexgate serve` at a time), so the tab only
+ * shows a session when this agent is the one being served; otherwise it's a
+ * muted "not served" state (the nav tab is unclickable, but a direct URL or a
+ * mid-session serve-switch can still land here). */
+export function AgentPlaygroundTab() {
+  const ctx = useOutletContext<HubContext>();
+  const { projectId } = useProjectScoped();
+  if (!projectId) return null;
+  if (!ctx.playgroundLive) {
+    return (
+      <PlaygroundNotServed
+        agent={ctx.agent.name}
+        servedAgent={ctx.servedAgent}
+        serveOnline={ctx.serveOnline}
+      />
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <p className="text-meta text-muted-foreground">
+        Live session with{" "}
+        <span className="font-mono text-foreground">{ctx.agent.name}</span>.
+        Every tool call is checked against its policy and recorded in Audit.
+      </p>
+      <PlaygroundLive projectId={projectId} embedded />
+    </div>
+  );
+}
+
+/** Shown on the Playground tab when this agent isn't the one being served. */
+function PlaygroundNotServed({
+  agent,
+  servedAgent,
+  serveOnline,
+}: {
+  agent: string;
+  servedAgent: string | null;
+  serveOnline: boolean;
+}) {
+  const otherAgent = servedAgent && servedAgent !== agent ? servedAgent : null;
+  return (
+    <Card className="grid place-items-center gap-2 p-12 text-center text-sm text-muted-foreground">
+      <span>
+        <span className="font-mono text-foreground">{agent}</span> isn't being
+        served.
+      </span>
+      <span>
+        Run <span className="font-mono text-foreground">hexgate serve</span> for
+        this agent to test it here.
+      </span>
+      {otherAgent ? (
+        <span className="text-meta">
+          The playground is currently serving{" "}
+          <span className="font-mono text-foreground">{otherAgent}</span>.
+        </span>
+      ) : serveOnline ? (
+        <span className="text-meta">A serve session is starting…</span>
+      ) : null}
+    </Card>
+  );
+}
+
+function HubTabs({
+  resources,
+  playgroundLive,
+}: {
+  resources: number;
+  playgroundLive: boolean;
+}) {
   const tab =
     "border-b-2 px-3 py-2 text-sm transition-colors -mb-px flex items-center gap-1.5";
   const cls = ({ isActive }: { isActive: boolean }) =>
@@ -289,6 +377,24 @@ function HubTabs({ resources }: { resources: number }) {
       <NavLink to="policies" className={cls}>
         Policies
       </NavLink>
+      {/* The playground is only live when THIS agent is the one being served;
+          otherwise the tab is muted and unclickable (no link to navigate). */}
+      {playgroundLive ? (
+        <NavLink to="playground" className={cls}>
+          Playground
+        </NavLink>
+      ) : (
+        <span
+          className={cn(
+            tab,
+            "cursor-not-allowed border-transparent opacity-50",
+          )}
+          aria-disabled="true"
+          title="Run `hexgate serve` for this agent to test it in the playground"
+        >
+          Playground
+        </span>
+      )}
       <NavLink to="decisions" className={cls}>
         Decision log
       </NavLink>
