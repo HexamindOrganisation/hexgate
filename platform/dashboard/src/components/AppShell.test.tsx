@@ -114,6 +114,30 @@ describe("AppShell", () => {
     }
   });
 
+  it("expands an inline, lazily-loaded agent list from the Agents row", async () => {
+    stubFetch({
+      "/v1/users/me": USER,
+      "/v1/orgs": [ORG_A, ORG_B],
+      "/v1/orgs/org-a/projects": [PROJ_A1, PROJ_A2],
+      "/v1/orgs/org-b/projects": [],
+      [`/v1/projects/${PROJ_A1.id}/agents/manifest`]: [
+        { name: "alpha_bot" },
+        { name: "beta_bot" },
+      ],
+    });
+    renderWithProviders(<AppShell />);
+    const toggle = await screen.findByRole("button", {
+      name: /show agent list/i,
+    });
+    // Not fetched until opened.
+    expect(screen.queryByRole("link", { name: "alpha_bot" })).toBeNull();
+    await userEvent.click(toggle);
+    expect(
+      await screen.findByRole("link", { name: "alpha_bot" }),
+    ).toHaveAttribute("href", "/agents/alpha_bot");
+    expect(screen.getByRole("link", { name: "beta_bot" })).toBeInTheDocument();
+  });
+
   it("counts active bans on the Bans link for admins", async () => {
     vi.restoreAllMocks();
     stubFetch({
