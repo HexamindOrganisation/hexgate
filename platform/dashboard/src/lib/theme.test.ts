@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { applyTheme, isDark, useTheme } from "./theme";
+import { applyTheme, isDark, SCHEME_ACCENTS, SCHEMES, useTheme } from "./theme";
+import { FONT_SIZES } from "./utils";
 
 function stubPrefersDark(matches: boolean) {
   vi.stubGlobal(
@@ -59,5 +60,53 @@ describe("useTheme store", () => {
     // restore for other tests sharing the module-level store
     useTheme.getState().setMode("dark");
     useTheme.getState().setScheme("blue");
+  });
+});
+
+// index.css, read from disk: Vitest stubs CSS imports, `?raw` included. Node
+// modules load by name so the app tsconfig needn't pull in Node types; the
+// path hangs off this file so neither the cwd nor the separator matters.
+let css = "";
+beforeAll(async () => {
+  const [fsMod, pathMod] = ["node:fs", "node:path"];
+  const { readFileSync } = await import(/* @vite-ignore */ fsMod);
+  const { dirname, join } = await import(/* @vite-ignore */ pathMod);
+  const here = expect.getState().testPath;
+  if (!here) throw new Error("vitest did not report this test's path");
+  css = readFileSync(join(dirname(here), "..", "index.css"), "utf8");
+});
+
+describe("FONT_SIZES", () => {
+  it("names every --text-* size declared in index.css", () => {
+    const declared = [
+      ...css.matchAll(/^\s*--text-([a-z]+(?:-[a-z]+)*): /gm),
+    ].map((m) => m[1]);
+    expect([...FONT_SIZES].sort()).toEqual([...new Set(declared)].sort());
+  });
+});
+
+describe("SCHEME_ACCENTS", () => {
+  // The swatches read SCHEME_ACCENTS; the real token comes from index.css.
+  // They must agree or a dot shows a colour the app never paints.
+  const primaryIn = (selector: string): string | undefined => {
+    const start = css.indexOf(`\n${selector} {`);
+    if (start < 0) return undefined;
+    const block = css.slice(start, css.indexOf("}", start));
+    return /--primary: ([^;]+);/.exec(block)?.[1];
+  };
+
+  it.each(SCHEMES.filter((s) => s.id !== "blue").map((s) => s.id))(
+    "%s matches its index.css token block in both modes",
+    (id) => {
+      expect(primaryIn(`[data-scheme="${id}"]`)).toBe(SCHEME_ACCENTS[id].light);
+      expect(primaryIn(`.dark[data-scheme="${id}"]`)).toBe(
+        SCHEME_ACCENTS[id].dark,
+      );
+    },
+  );
+
+  it("blue matches the :root and .dark defaults", () => {
+    expect(primaryIn(":root")).toBe(SCHEME_ACCENTS.blue.light);
+    expect(primaryIn(".dark")).toBe(SCHEME_ACCENTS.blue.dark);
   });
 });
