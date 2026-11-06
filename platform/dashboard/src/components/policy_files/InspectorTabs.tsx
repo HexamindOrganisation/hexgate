@@ -8,11 +8,17 @@ import {
   Network,
 } from "lucide-react";
 
-import type { PolicyFileDraft, PolicyLint, ResolvedPolicy } from "@/lib/api";
+import type {
+  PolicyFileDraft,
+  PolicyLint,
+  PolicyMatrix,
+  ResolvedPolicy,
+} from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { PolicyGraphDialog } from "./PolicyGraphDialog";
 import { TestPanel } from "./TestPanel";
 import { cn } from "@/lib/utils";
+import { MATRIX_MODE_TONE } from "@/lib/policy_files";
 
 type Tab = "resolved" | "lints" | "test";
 
@@ -62,6 +68,18 @@ function classifyTool(key: string): {
   return { kind: "tool", label: key };
 }
 
+/** Classified rows, grouped plain tools, MCP, reach, then admission (the
+ * agent.* keys read last), each group by label. Classifies each key once. */
+function sortToolRows(names: string[]) {
+  return names
+    .map((name) => ({ name, ...classifyTool(name) }))
+    .sort(
+      (a, b) =>
+        _KIND_ORDER[a.kind] - _KIND_ORDER[b.kind] ||
+        a.label.localeCompare(b.label),
+    );
+}
+
 /**
  * Right pane: the composed policy (Resolved), analyzer lints (Lints), and the
  * decision tester (Test), plus a policy-graph launcher. Resolved + Lints
@@ -71,6 +89,7 @@ function classifyTool(key: string): {
 export function InspectorTabs({
   projectId,
   resolved,
+  matrix,
   lints,
   draft,
   resolves,
@@ -82,6 +101,8 @@ export function InspectorTabs({
 }: {
   projectId: string;
   resolved: ResolvedPolicy | undefined | null;
+  /** Engine-tabulated roles x tools for the same draft-or-saved policy. */
+  matrix: PolicyMatrix | undefined | null;
   lints: PolicyLint[];
   draft: PolicyFileDraft | null;
   resolves: boolean;
@@ -152,6 +173,7 @@ export function InspectorTabs({
         {tab === "resolved" && (
           <ResolvedTab
             resolved={resolved}
+            matrix={matrix}
             resolves={resolves}
             modular={modular}
             roleNames={roleNames}
@@ -217,6 +239,7 @@ function TabButton({
 
 function ResolvedTab({
   resolved,
+  matrix,
   resolves,
   modular,
   roleNames,
@@ -225,6 +248,7 @@ function ResolvedTab({
   onInspectAgentChange,
 }: {
   resolved: ResolvedPolicy | undefined | null;
+  matrix: PolicyMatrix | undefined | null;
   resolves: boolean;
   modular: boolean;
   roleNames: string[];
@@ -233,7 +257,7 @@ function ResolvedTab({
   onInspectAgentChange: (agent: string) => void;
 }) {
   const [role, setRole] = useState<string>("");
-  const [view, setView] = useState<"table" | "yaml">("table");
+  const [view, setView] = useState<ResolvedView>("grid");
   const active = roleNames.includes(role) ? role : (roleNames[0] ?? "");
 
   if (!modular || !resolves || !resolved || roleNames.length === 0) {
@@ -248,39 +272,46 @@ function ResolvedTab({
     );
   }
 
+  if (view === "grid") {
+    return (
+      <div className="h-full flex flex-col">
+        <AgentPicker
+          inspectAgent={inspectAgent}
+          agentNames={agentNames}
+          onChange={onInspectAgentChange}
+        />
+        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border">
+          <span className="text-[11px] text-muted-foreground">
+            Every role, side by side. Click a cell for its role's detail.
+          </span>
+          <ViewSwitch view={view} onChange={setView} />
+        </div>
+        <ResolvedGrid
+          matrix={matrix}
+          onPick={(r) => {
+            setRole(r);
+            setView("table");
+          }}
+        />
+      </div>
+    );
+  }
+
   const policy = resolved[active];
   const tools = policy?.tools ?? {};
-  // Classify each key once (not per comparison + again per render), then group
-  // plain tools, then MCP, reach, and admission — the agent.* keys read last.
-  const rows = Object.keys(tools)
-    .map((name) => ({ name, ...classifyTool(name), tp: tools[name] }))
-    .sort(
-      (a, b) =>
-        _KIND_ORDER[a.kind] - _KIND_ORDER[b.kind] ||
-        a.label.localeCompare(b.label),
-    );
+  const rows = sortToolRows(Object.keys(tools)).map((r) => ({
+    ...r,
+    tp: tools[r.name],
+  }));
   const defaultMode = policy?.default_policy?.mode;
 
   return (
     <div className="h-full flex flex-col">
-      {/* Which executing agent's column to inspect. "*" is the generic view; a
-          named agent shows its own composed policy (a sub-agent it may reach, a
-          capability it's denied). The options are every agent the entry declares,
-          plus the current value if it's since been removed. */}
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/60 text-[11px]">
-        <span className="text-muted-foreground">Agent</span>
-        <select
-          value={inspectAgent}
-          onChange={(e) => onInspectAgentChange(e.target.value)}
-          className="w-40 rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[11px]"
-        >
-          {Array.from(new Set(["*", ...agentNames, inspectAgent])).map((a) => (
-            <option key={a} value={a}>
-              {a === "*" ? "* (generic)" : a}
-            </option>
-          ))}
-        </select>
-      </div>
+      <AgentPicker
+        inspectAgent={inspectAgent}
+        agentNames={agentNames}
+        onChange={onInspectAgentChange}
+      />
       <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border">
         <div className="flex flex-wrap items-center gap-1 min-w-0">
           {roleNames.map((r) => (
@@ -298,22 +329,7 @@ function ResolvedTab({
             </button>
           ))}
         </div>
-        <div className="flex items-center rounded-md border border-border p-0.5 shrink-0">
-          {(["table", "yaml"] as const).map((v) => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              className={cn(
-                "rounded px-2 py-0.5 text-[11px] font-medium capitalize transition-colors",
-                view === v
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {v}
-            </button>
-          ))}
-        </div>
+        <ViewSwitch view={view} onChange={setView} />
       </div>
       {view === "yaml" ? (
         <div className="flex-1 overflow-auto scrollbar-thin p-3">
@@ -373,6 +389,169 @@ function ResolvedTab({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Which executing agent's column to inspect. "*" is the generic view; a
+ * named agent shows its own composed policy (a sub-agent it may reach, a
+ * capability it's denied). The options are every agent the entry declares,
+ * plus the current value if it's since been removed. */
+function AgentPicker({
+  inspectAgent,
+  agentNames,
+  onChange,
+}: {
+  inspectAgent: string;
+  agentNames: string[];
+  onChange: (agent: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/60 text-[11px]">
+      <span className="text-muted-foreground">Agent</span>
+      <select
+        value={inspectAgent}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-40 rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[11px]"
+      >
+        {Array.from(new Set(["*", ...agentNames, inspectAgent])).map((a) => (
+          <option key={a} value={a}>
+            {a === "*" ? "* (generic)" : a}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+type ResolvedView = "grid" | "table" | "yaml";
+
+function ViewSwitch({
+  view,
+  onChange,
+}: {
+  view: ResolvedView;
+  onChange: (v: ResolvedView) => void;
+}) {
+  return (
+    <div className="flex items-center rounded-md border border-border p-0.5 shrink-0">
+      {(["grid", "table", "yaml"] as const).map((v) => (
+        <button
+          key={v}
+          onClick={() => onChange(v)}
+          className={cn(
+            "rounded px-2 py-0.5 text-[11px] font-medium capitalize transition-colors",
+            view === v
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {v}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Tools x roles, as the engine tabulates them (server-side
+ * `hexgate.security.matrix`), so a cell never reads a grant the engine won't
+ * enforce: reserved keys deny when unlisted, role-wide constraints count. */
+function ResolvedGrid({
+  matrix,
+  onPick,
+}: {
+  matrix: PolicyMatrix | undefined | null;
+  onPick: (role: string) => void;
+}) {
+  if (matrix === null) {
+    return (
+      <p className="px-3 py-4 text-xs text-muted-foreground">
+        Couldn't load the grid. The table and YAML views still work.
+      </p>
+    );
+  }
+  if (!matrix) {
+    return (
+      <p className="px-3 py-4 text-xs text-muted-foreground">Loading grid…</p>
+    );
+  }
+  const rows = sortToolRows(matrix.tools);
+  return (
+    <div className="flex-1 overflow-auto scrollbar-thin">
+      <table className="w-full border-separate border-spacing-0 text-xs">
+        <thead>
+          <tr>
+            <th className="sticky left-0 top-0 z-10 border-b border-border bg-card px-3 py-2 text-left font-medium text-muted-foreground">
+              Tool
+            </th>
+            {matrix.roles.map((r) => (
+              <th
+                key={r}
+                className="sticky top-0 border-b border-border bg-card px-2 py-2 text-center font-mono font-medium"
+              >
+                {r}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ name, label, tag }) => (
+            <tr key={name}>
+              <th
+                scope="row"
+                className="sticky left-0 border-b border-border/50 bg-card px-3 py-1.5 text-left font-mono font-normal"
+              >
+                {label}
+                {tag && (
+                  <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[9px] uppercase tracking-wider text-muted-foreground">
+                    {tag}
+                  </span>
+                )}
+              </th>
+              {matrix.roles.map((r) => {
+                // Complete for every listed tool (server contract).
+                const cell = matrix.cells[name][r];
+                return (
+                  <td
+                    key={r}
+                    className="border-b border-border/50 px-1.5 py-1 text-center"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onPick(r)}
+                      title={cell.constraint ?? undefined}
+                      className={cn(
+                        "w-full rounded px-1.5 py-0.5 font-medium",
+                        MATRIX_MODE_TONE[cell.mode],
+                      )}
+                    >
+                      {cell.mode}
+                      {cell.constraint && (
+                        <>
+                          <span aria-hidden> *</span>
+                          <span className="sr-only">, constrained</span>
+                        </>
+                      )}
+                    </button>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="px-3 py-2 text-[11px] text-muted-foreground">
+        * constrained (hover for the condition). Tools not listed:{" "}
+        {matrix.roles
+          .map((r) => {
+            const d = matrix.defaults[r];
+            return `${r} ${d.mode}${d.constraint ? ` (if ${d.constraint})` : ""}`;
+          })
+          .join(" · ")}
+        .
+        {matrix.aliased_default &&
+          ` "default" mirrors ${matrix.aliased_default} (none declared).`}
+      </p>
     </div>
   );
 }

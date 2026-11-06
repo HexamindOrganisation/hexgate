@@ -9,6 +9,7 @@ import {
   useDebouncedValue,
   usePolicyCheck,
   usePolicyFiles,
+  usePolicyMatrix,
   usePolicyPreview,
   useRenameFile,
   useResolvedPolicy,
@@ -227,6 +228,14 @@ export function PoliciesPage() {
 
   const usePreviewData = draftActive && !!preview.data;
   const resolved = usePreviewData ? preview.data?.resolved : storedResolve.data;
+  // The grid's matrix follows the same draft-or-saved switch as `resolved`.
+  const storedMatrix = usePolicyMatrix(projectId, inspectAgent, modular);
+  // null = failed, so the grid says so instead of loading forever.
+  const matrix = usePreviewData
+    ? preview.data?.matrix
+    : storedMatrix.isError
+      ? null
+      : storedMatrix.data;
   const lints = useMemo(
     () =>
       usePreviewData ? (preview.data?.lints ?? []) : (check.data?.lints ?? []),
@@ -390,6 +399,7 @@ export function PoliciesPage() {
                 <InspectorTabs
                   projectId={projectId}
                   resolved={resolved}
+                  matrix={matrix}
                   lints={lints}
                   draft={draftActive ? draft : null}
                   resolves={resolves}
