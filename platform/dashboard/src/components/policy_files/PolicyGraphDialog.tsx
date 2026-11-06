@@ -20,6 +20,7 @@ import { AlertTriangle, Maximize2, Network, Play, X } from "lucide-react";
 
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { usePolicyGraph } from "@/lib/policy_files";
+import { agentSubgraph } from "@/lib/agent-graph";
 import type { PolicyGraph, PolicyGraphEdge } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { HEX_H, HEX_W, layeredLayout } from "@/lib/graph-layout";
@@ -907,14 +908,17 @@ const GRAPH_ACTION_BTN =
 
 /** The graph itself — a header (title, role filter, and an optional
  * `headerRight` action) over the ReactFlow canvas. Reused by the inline dialog
- * and the full-page `/graph` route. */
+ * and the full-page `/graph` route; `agent` narrows it to that agent's
+ * neighbourhood (the agent hub). */
 export function PolicyGraphView({
   projectId,
   roleNames = [],
   enabled = true,
   headerRight,
+  agent,
 }: {
   projectId: string;
+  agent?: string;
   /** Load-time fallback for the role filter; once the graph resolves, its own
    * `roles` (every role across all agents) take over. */
   roleNames?: string[];
@@ -923,7 +927,22 @@ export function PolicyGraphView({
 }) {
   const [role, setRole] = useState<string>("");
   const graph = usePolicyGraph(projectId, role || undefined, enabled);
-  const roleOptions = graph.data?.roles ?? roleNames;
+  // In agent mode the role filter only offers roles that touch this agent, read
+  // off the unfiltered graph (the role-filtered one would shrink the list).
+  const base = usePolicyGraph(projectId, undefined, enabled && !!agent);
+  const roleOptions = useMemo(() => {
+    if (!agent) return graph.data?.roles ?? roleNames;
+    if (!base.data) return roleNames;
+    return agentSubgraph(base.data, agent)
+      .nodes.filter((n) => n.kind === "role")
+      .map((n) => n.label);
+  }, [agent, base.data, graph.data, roleNames]);
+  // An agent with no edges is a lone node — nothing to draw.
+  const minNodes = agent ? 2 : 1;
+  const shown = useMemo(
+    () => (agent && graph.data ? agentSubgraph(graph.data, agent) : graph.data),
+    [agent, graph.data],
+  );
 
   return (
     <div
@@ -933,7 +952,13 @@ export function PolicyGraphView({
       <div className="flex flex-row items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div className="flex items-center gap-2 text-sm text-foreground">
           <Network size={16} className="text-primary" />
-          Policy graph
+          {agent ? (
+            <span>
+              <span className="font-mono">{agent}</span> · policy graph
+            </span>
+          ) : (
+            "Policy graph"
+          )}
         </div>
         <div className="flex items-center gap-3">
           <label className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
@@ -965,12 +990,14 @@ export function PolicyGraphView({
             the modules don't compose — fix the lints, then reopen the graph.
           </div>
         )}
-        {graph.data && graph.data.nodes.length > 0 && (
-          <PolicyFlow graph={graph.data} />
+        {shown && shown.nodes.length >= minNodes && (
+          <PolicyFlow graph={shown} />
         )}
-        {graph.data && graph.data.nodes.length === 0 && (
+        {shown && shown.nodes.length < minNodes && (
           <div className="grid h-full place-items-center font-mono text-xs text-muted-foreground">
-            no agents bound yet — add a role binding to see the graph.
+            {agent
+              ? `no roles, tools or reach for ${agent}${role ? ` as ${role}` : ""}.`
+              : "no agents bound yet — add a role binding to see the graph."}
           </div>
         )}
       </div>
@@ -983,11 +1010,14 @@ export function PolicyGraphDialog({
   onOpenChange,
   projectId,
   roleNames,
+  agent,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string;
   roleNames: string[];
+  /** Narrow the graph to this agent's neighbourhood. */
+  agent?: string;
 }) {
   const navigate = useNavigate();
   return (
@@ -996,11 +1026,14 @@ export function PolicyGraphDialog({
         className="flex h-[82vh] max-w-[min(96vw,1120px)] flex-col gap-0 overflow-hidden p-0"
         style={{ background: "hsl(var(--editor))" }}
       >
-        <DialogTitle className="sr-only">Policy graph</DialogTitle>
+        <DialogTitle className="sr-only">
+          {agent ? `${agent} policy graph` : "Policy graph"}
+        </DialogTitle>
         <PolicyGraphView
           projectId={projectId}
           roleNames={roleNames}
           enabled={open}
+          agent={agent}
           headerRight={
             <button
               type="button"
@@ -1008,11 +1041,15 @@ export function PolicyGraphDialog({
                 onOpenChange(false);
                 navigate("/graph");
               }}
-              title="Open the full graph view"
+              title={
+                agent
+                  ? "Open the whole project's graph"
+                  : "Open the full graph view"
+              }
               className={cn(GRAPH_ACTION_BTN, "mr-6")}
             >
               <Maximize2 size={12} />
-              Full view
+              {agent ? "Project graph" : "Full view"}
             </button>
           }
         />

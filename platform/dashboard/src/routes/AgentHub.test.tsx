@@ -21,7 +21,8 @@ import {
 import { renderWithProviders } from "@/test/render";
 
 // Stub the heavy graph (ReactFlow) — the hub only needs it to mount with the
-// agent's subgraph; PolicyFlow itself is tested in PolicyGraphDialog.test.
+// agent's subgraph; PolicyFlow and the dialog's agent narrowing are tested in
+// PolicyGraphDialog.test, so the dialog stub only records what it opens with.
 vi.mock(
   "@/components/policy_files/PolicyGraphDialog",
   async (importActual) => ({
@@ -31,6 +32,8 @@ vi.mock(
     PolicyFlow: ({ graph }: { graph: { nodes: unknown[] } }) => (
       <div data-testid="agent-graph">{graph.nodes.length} nodes</div>
     ),
+    PolicyGraphDialog: ({ open, agent }: { open: boolean; agent?: string }) =>
+      open ? <div role="dialog" aria-label={`${agent} policy graph`} /> : null,
   }),
 );
 
@@ -357,6 +360,15 @@ describe("AgentHub", () => {
     expect(await screen.findByText("refund")).toBeInTheDocument();
   });
 
+  it("expands the Overview graph into a dialog scoped to the agent", async () => {
+    renderHub("support_bot");
+    expect(await screen.findByTestId("agent-graph")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Expand/ }));
+    expect(
+      await screen.findByRole("dialog", { name: "support_bot policy graph" }),
+    ).toBeInTheDocument();
+  });
+
   it("shows em-dashes, not fake zeros, when 24h activity fails to load", async () => {
     renderHub("support_bot", { summaryError: true });
     expect(
@@ -396,6 +408,16 @@ describe("AgentHub", () => {
     expect(screen.getByRole("link", { name: /Resources/ })).toHaveTextContent(
       "Resources2",
     );
+  });
+
+  it("opens the agent's graph dialog from Reaches", async () => {
+    renderHub("support_bot", { tab: "/resources", graph: "subAgent" });
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Open graph →" }),
+    );
+    expect(
+      await screen.findByRole("dialog", { name: "support_bot policy graph" }),
+    ).toBeInTheDocument();
   });
 
   it("lists sub-agents without verdicts on a project with no graph", async () => {
