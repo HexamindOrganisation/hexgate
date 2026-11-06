@@ -29,12 +29,9 @@ import {
   type AuditSummary,
   type TokenListItem,
 } from "@/lib/api";
-import {
-  type AuditFilters,
-  EMPTY_AUDIT_FILTERS,
-  useAuditFilters,
-} from "@/lib/audit-filters";
-import { fmtTokens } from "@/lib/format";
+import { type AuditFilters, useAuditFilters } from "@/lib/audit-filters";
+import { useAuditSummary24h } from "@/lib/audit-summary";
+import { fmtTokens, pluralise } from "@/lib/format";
 import { isStaleKey, STALE_KEY_DAYS } from "@/lib/keys";
 import { cn } from "@/lib/utils";
 
@@ -163,7 +160,7 @@ function deriveAttention({
       key: "approvals",
       icon: <Hourglass />,
       tone: "bg-approval/15 text-approval",
-      title: `${n} ${n === 1 ? "call" : "calls"} sent for approval in the last 24 hours`,
+      title: `${pluralise(n, "call")} sent for approval in the last 24 hours`,
       sub: "Gated by policy rather than allowed or denied outright",
       cta: "Review",
       to: "/audit",
@@ -201,18 +198,9 @@ export function HomePage() {
   const scope = useProjectScoped();
   const pid = scope.projectId;
   const on = !!pid;
-  const setAuditFilters = useAuditFilters((s) => s.setFilters);
-  // Links into Audit start from a clean slate, so a filter left over from
-  // an earlier visit can't hide what the link points at.
-  const openAudit = (filters: Partial<AuditFilters> = {}) =>
-    setAuditFilters(() => ({ ...EMPTY_AUDIT_FILTERS, ...filters }));
+  const openAudit = useAuditFilters((s) => s.openAudit);
 
-  const summaryQ = useQuery({
-    queryKey: ["audit", "summary", pid, { window: "24h" }],
-    enabled: on,
-    queryFn: () => api.getAuditSummary({ window: "24h" }, pid!),
-    refetchInterval: 30_000,
-  });
+  const summaryQ = useAuditSummary24h(pid, { poll: true });
   const weekQ = useQuery({
     queryKey: ["audit", "ts", pid, { window: "7d" }],
     enabled: on,
@@ -332,10 +320,7 @@ export function HomePage() {
           scope.projectName && (
             <>
               {agentsQ.isSuccess && (
-                <>
-                  {agents.length} {agents.length === 1 ? "agent" : "agents"}{" "}
-                  in{" "}
-                </>
+                <>{pluralise(agents.length, "agent")} in </>
               )}
               <span className="font-mono text-foreground">
                 {scope.projectName}
@@ -542,7 +527,7 @@ export function HomePage() {
               return (
                 <Link
                   key={a.name}
-                  to="/agents"
+                  to={`/agents?agent=${encodeURIComponent(a.name)}`}
                   className="grid grid-cols-[minmax(0,1fr)_170px] items-center gap-3 border-t border-border/60 px-5 py-3 first:border-t-0 hover:bg-accent/50"
                 >
                   <span className="min-w-0">
@@ -551,7 +536,7 @@ export function HomePage() {
                     </span>
                     <span className="block text-meta text-muted-foreground">
                       {a.manifest
-                        ? `${a.manifest.tools?.length ?? 0} tools`
+                        ? pluralise(a.manifest.tools?.length ?? 0, "tool")
                         : "not registered"}
                     </span>
                   </span>

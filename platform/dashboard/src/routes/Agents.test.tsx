@@ -5,9 +5,11 @@
  */
 
 import { act, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useActive } from "@/lib/active";
+import { EMPTY_AUDIT_FILTERS, useAuditFilters } from "@/lib/audit-filters";
 import type { GuardDefinition, SkillDefinition } from "@/lib/api";
 import { AgentsPage } from "@/routes/Agents";
 import { renderWithProviders } from "@/test/render";
@@ -95,7 +97,25 @@ function stubFetch(role: string, manifest: unknown = MANIFEST) {
             },
           ]);
         case `/v1/projects/${PROJECT}/agents/manifest`:
-          return json([manifest]);
+          return manifest === "error"
+            ? new Response("boom", { status: 500 })
+            : json([manifest]);
+        case `/v1/projects/${PROJECT}/audit/summary`:
+          return json({
+            totals: { all: 15, allow: 10, deny: 4, needs_approval: 1 },
+            by_agent: [
+              {
+                key: "support_bot",
+                all: 15,
+                allow: 10,
+                deny: 4,
+                needs_approval: 1,
+              },
+            ],
+            by_role: [],
+            by_tool: [],
+            by_user: [],
+          });
         default:
           return new Response("not found", { status: 404 });
       }
@@ -112,6 +132,7 @@ describe("AgentsPage — ban tie-in", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    useAuditFilters.setState({ filters: EMPTY_AUDIT_FILTERS });
   });
 
   it("shows an admin a ban-agent link pointing at the prefilled /bans route", async () => {
@@ -120,6 +141,49 @@ describe("AgentsPage — ban tie-in", () => {
 
     const link = await screen.findByRole("link", { name: /ban agent/i });
     expect(link).toHaveAttribute("href", "/bans?ban_agent=support_bot");
+  });
+
+  it("opens Audit filtered to the agent from View decisions", async () => {
+    useAuditFilters.setState((st) => ({
+      filters: { ...st.filters, tool: "leftover" },
+    }));
+    stubFetch("admin");
+    const user = userEvent.setup();
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+
+    await user.click(
+      await screen.findByRole("link", { name: /view decisions/i }),
+    );
+    const f = useAuditFilters.getState().filters;
+    expect(f.agent).toBe("support_bot");
+    expect(f.tool).toBe("");
+    // Matches the 24h stats it sits under.
+    expect(f.range).toBe("24h");
+  });
+
+  it("shows the agent's last 24 hours", async () => {
+    stubFetch("admin");
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    expect(await screen.findByText("Calls · 24h")).toBeInTheDocument();
+    expect(screen.getByText(/15 calls in 24h/)).toBeInTheDocument();
+    expect(screen.getByText("4")).toBeInTheDocument();
+  });
+
+  it("does not claim there are no agents while the project resolves", async () => {
+    vi.spyOn(window, "fetch").mockImplementation(() => new Promise(() => {}));
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    expect(await screen.findByText("Loading agents…")).toBeInTheDocument();
+    expect(screen.queryByText("No agents yet.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No agents to inspect.")).not.toBeInTheDocument();
+  });
+
+  it("says when agents couldn't load instead of claiming there are none", async () => {
+    stubFetch("admin", "error");
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    expect(
+      await screen.findByText("Couldn't load agents."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No agents yet.")).not.toBeInTheDocument();
   });
 
   it("hides the ban-agent link from a plain member", async () => {
