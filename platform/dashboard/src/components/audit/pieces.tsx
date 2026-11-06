@@ -32,7 +32,8 @@ import { Sparkline } from "@/components/ui/charts";
 import { cn } from "@/lib/utils";
 import { BreakdownCardShell } from "@/components/ui/breakdown-card";
 import { BreakdownBar, type BreakdownDatum } from "./charts";
-import { fmtClock } from "./fmt";
+import { rankAnomalies } from "./anomalies";
+import { argsPreview, fmtClock } from "./fmt";
 import { OUT_LABEL, OUT_SWATCH, OUTCOME_SERIES } from "./chart-tokens";
 
 // Map a server breakdown row ({key, all, ...}) to the chart datum ({total, ...}).
@@ -318,7 +319,7 @@ const OUTCOME_TEXT: Record<AuditOutcome, string> = {
 };
 
 /** Swatch + label; the log's quiet alternative to the pill badge. */
-function OutcomeLabel({ d }: { d: AuditOutcome }) {
+export function OutcomeLabel({ d }: { d: AuditOutcome }) {
   return (
     <span
       className={cn("flex items-center gap-1.5 font-semibold", OUTCOME_TEXT[d])}
@@ -327,18 +328,6 @@ function OutcomeLabel({ d }: { d: AuditOutcome }) {
       {OUT_LABEL[d]}
     </span>
   );
-}
-
-/** `(k=v, …)` for the log row, capped so a huge argument can't flood the
- * DOM; the drawer shows the full arguments. */
-function argsPreview(args: unknown): string {
-  if (args == null || typeof args !== "object") return "";
-  const clip = (t: string, n: number) =>
-    t.length > n ? t.slice(0, n - 1) + "…" : t;
-  const parts = Object.entries(args as Record<string, unknown>)
-    .slice(0, 6)
-    .map(([k, v]) => `${k}=${clip(JSON.stringify(v) ?? "", 40)}`);
-  return parts.length ? clip(`(${parts.join(", ")})`, 160) : "";
 }
 
 function dayLabel(d: Date): string {
@@ -543,17 +532,7 @@ export function AnomaliesCard({
   onBanUser?: (userId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  // The API orders by user; rank by severity, then deny rate, so the
-  // folded tail never hides a worse burst.
-  const ranked = useMemo(
-    () =>
-      [...rows].sort(
-        (a, b) =>
-          Number(b.severity === "high") - Number(a.severity === "high") ||
-          b.deny_rate - a.deny_rate,
-      ),
-    [rows],
-  );
+  const ranked = useMemo(() => rankAnomalies(rows), [rows]);
   const shown = expanded ? ranked : ranked.slice(0, ANOMALIES_SHOWN);
   return (
     <section aria-label="Anomalies" className="space-y-2">
