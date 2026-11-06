@@ -6,6 +6,7 @@ import {
   useNavigate,
   useOutletContext,
   useParams,
+  useSearchParams,
 } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import {
@@ -38,6 +39,7 @@ import { useCanManageBans } from "@/lib/bans";
 import { useAuditSummary24h } from "@/lib/audit-summary";
 import { auditUrl } from "@/lib/audit-filters";
 import { agentReachEdges, agentSubgraph } from "@/lib/agent-graph";
+import { rangeSearch } from "@/lib/range-params";
 import { formatDate, pluralise } from "@/lib/format";
 import {
   PolicyFlow,
@@ -571,6 +573,8 @@ function HubTabs({
   resources: number;
   playgroundLive: boolean;
 }) {
+  const [params] = useSearchParams();
+  const range = rangeSearch(params);
   const tab =
     "border-b-2 px-3 py-2 text-sm transition-colors -mb-px flex items-center gap-1.5";
   const cls = ({ isActive }: { isActive: boolean }) =>
@@ -588,8 +592,12 @@ function HubTabs({
       <NavLink to="." end className={cls}>
         Overview
       </NavLink>
-      <NavLink to="stats" className={cls}>
+      {/* Stats and Usage share the URL range, so switching keeps it. */}
+      <NavLink to={`stats${range}`} className={cls}>
         Stats
+      </NavLink>
+      <NavLink to={`usage${range}`} className={cls}>
+        Usage
       </NavLink>
       <NavLink to="resources" className={cls}>
         Resources
