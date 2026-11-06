@@ -2,10 +2,13 @@
 environment only (prefix ``HEXGATE_MCP_``, except the issuer, which shares the
 API's ``HEXGATE_PUBLIC_URL``). The API's ``.env`` is never read here."""
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
 
 # The only HEXGATE_PUBLIC_URL hosts under which policy_write_local may run.
 LOCAL_HOSTS = {"localhost", "127.0.0.1"}
@@ -62,37 +65,51 @@ class Settings:
 
 
 def read_local_policy_dir(issuer: str) -> Path | None:
-    """HEXGATE_MCP_LOCAL_POLICY_DIR, once it is a policies folder on a local
-    server: never a repo root, a system directory, or the home directory or
-    one of its ancestors, where the tool's name rules alone would be all that
-    kept a model from the rest."""
+    """HEXGATE_MCP_LOCAL_POLICY_DIR, once it passes check_local_policy_dir on a
+    local server, created with its parents if missing."""
     raw_dir = os.environ.get("HEXGATE_MCP_LOCAL_POLICY_DIR")
     if not raw_dir:
         return None
-    # First, so a stray variable in a deploy env, where the path usually does
-    # not exist, is told why rather than to create it.
+    # First, so a stray variable in a deploy env is told why it is refused,
+    # and nothing is created there.
     if urlparse(issuer).hostname not in LOCAL_HOSTS:
         raise ValueError(
             "HEXGATE_MCP_LOCAL_POLICY_DIR is for local development only — "
             f"unset it, or point HEXGATE_PUBLIC_URL (now {issuer!r}) at localhost."
         )
-    path = Path(raw_dir)
+    # A .env or compose file passes "~" through unexpanded: without this the
+    # server would create a folder literally named "~".
+    path = Path(raw_dir).expanduser()
+    check_local_policy_dir(path)
     if not path.is_dir():
+        # The umask sets the mode, as it does for what policy_write_local
+        # makes below it.
+        path.mkdir(parents=True)
+        # Resolved, so a typo shows where it landed.
+        logger.info("created the local policy directory %s", path.resolve())
+    return path
+
+
+def check_local_policy_dir(path: Path) -> None:
+    """Refuse `path` as the policy root, whether it exists yet or not: never a
+    file, a repo root, a system directory, or the home directory or one of its
+    ancestors, where the tool's name rules alone would be all that kept a model
+    from the rest. Run at start-up and before every write."""
+    if path.exists() and not path.is_dir():
         raise ValueError(
-            f"local_policy_dir={raw_dir!r} is not a directory — "
-            "create it, or unset HEXGATE_MCP_LOCAL_POLICY_DIR."
+            f"local_policy_dir={str(path)!r} is not a directory — "
+            "point HEXGATE_MCP_LOCAL_POLICY_DIR at a folder, or unset it."
         )
     real = path.resolve()
     system = {Path(d).resolve() for d in SYSTEM_DIRS}
     if real in system or Path.home().resolve().is_relative_to(real):
         raise ValueError(
-            f"local_policy_dir={raw_dir!r} is a system directory, or the home "
+            f"local_policy_dir={str(path)!r} is a system directory, or the home "
             "directory or above it — point HEXGATE_MCP_LOCAL_POLICY_DIR at a "
             "policies folder."
         )
     if (path / ".git").exists():
         raise ValueError(
-            f"local_policy_dir={raw_dir!r} is a repo root — point "
+            f"local_policy_dir={str(path)!r} is a repo root — point "
             "HEXGATE_MCP_LOCAL_POLICY_DIR at a policies folder."
         )
-    return path
