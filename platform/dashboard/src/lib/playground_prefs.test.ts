@@ -18,8 +18,8 @@ describe("playground prefs migration", () => {
     expect(
       migrate({ accent: SCHEME_ACCENTS.violet.light, names: {} }, 1),
     ).toMatchObject({ accent: "violet" });
-    expect(migrate({ accent: "340 75% 55%", names: {} }, 1)).toMatchObject({
-      accent: "rose",
+    expect(migrate({ accent: "blue", names: {} }, 2)).toMatchObject({
+      accent: "blue",
     });
   });
 
@@ -28,8 +28,20 @@ describe("playground prefs migration", () => {
       accent: "#ff0000",
     });
     expect(migrate({ accent: "", names: {} }, 1)).toMatchObject({ accent: "" });
-    const current = { accent: "rose", names: {} };
-    expect(migrate(current, 2)).toEqual(current);
+    const current = { accent: "teal", names: {} };
+    expect(migrate(current, 3)).toEqual(current);
+  });
+
+  it("drops a saved red, amber or green accent back to the app's", () => {
+    for (const [accent, version] of [
+      ["340 75% 55%", 0],
+      ["38 92% 50%", 1],
+      ["emerald", 2],
+    ] as const) {
+      expect(migrate({ accent, names: {} }, version)).toMatchObject({
+        accent: "",
+      });
+    }
   });
 });
 

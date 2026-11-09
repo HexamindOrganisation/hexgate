@@ -5,7 +5,15 @@
  * policy, and agent fetch are all mocked so we exercise the view in isolation.
  */
 
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -22,8 +30,9 @@ const reset = vi.fn();
 const respondToApproval = vi.fn();
 let mockState: PlaygroundState;
 
+const scope = vi.hoisted(() => ({ projectId: "p1" }));
 vi.mock("@/lib/active", () => ({
-  useProjectScoped: () => ({ status: "ready", projectId: "p1" }),
+  useProjectScoped: () => ({ status: "ready", projectId: scope.projectId }),
 }));
 vi.mock("@/lib/playground", async (importActual) => ({
   // The real buildChatFrame drives the settings' context preview.
@@ -35,17 +44,17 @@ vi.mock("@/lib/playground", async (importActual) => ({
     respondToApproval,
   }),
 }));
-vi.mock("@/lib/policy_files", () => {
-  // A stable reference — a fresh object each call would re-derive roleOptions
-  // every render and spin the role-sync effect into an infinite loop.
-  const resolved = { data: { support: {}, billing: {} } };
-  return { useResolvedPolicy: () => resolved };
-});
-vi.mock("@/lib/api", () => ({
-  api: {
-    getAgent: vi.fn().mockResolvedValue({ name: "bot", policy_yaml: "" }),
-  },
+// A stable reference — a fresh object each call would re-derive roleOptions
+// every render and spin the role-sync effect into an infinite loop. Swap it
+// (then rerender) to have the agent's roles come or go.
+const ROLES = { data: { support: {}, billing: {} } };
+const NO_ROLES = { data: {} };
+const policy = vi.hoisted(() => ({ resolved: { data: {} } as object }));
+vi.mock("@/lib/policy_files", () => ({
+  useResolvedPolicy: () => policy.resolved,
 }));
+const getAgent = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/api", () => ({ api: { getAgent } }));
 
 // Imported after the mocks so the module picks them up.
 import { PlaygroundPage } from "./Playground";
@@ -95,6 +104,12 @@ function approval(
 // calls it on every message change.
 beforeAll(() => {
   Element.prototype.scrollTo = vi.fn();
+});
+
+beforeEach(() => {
+  getAgent.mockResolvedValue({ name: "bot", policy_yaml: "" });
+  policy.resolved = ROLES;
+  scope.projectId = "p1";
 });
 
 afterEach(() => {
@@ -224,6 +239,167 @@ describe("PlaygroundPage", () => {
     });
   });
 
+  it("doesn't count an Apply with nothing to pick as choosing no role", async () => {
+    // Apply before `hexgate serve` is up: no roles to choose from yet.
+    policy.resolved = NO_ROLES;
+    mockState = baseState({ agentOnline: false });
+    const { rerender } = renderWithProviders(<PlaygroundPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    policy.resolved = ROLES;
+    mockState = baseState();
+    rerender(<PlaygroundPage />);
+    await userEvent.type(
+      screen.getByLabelText("Message the agent"),
+      "hi{Enter}",
+    );
+    expect(sendChat).toHaveBeenCalledWith("hi", {
+      roles: ["billing"],
+      name: "",
+    });
+  });
+
+  it("keeps the role choice while serve restarts", async () => {
+    mockState = baseState();
+    const { rerender } = renderWithProviders(<PlaygroundPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "support" }));
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    // The agent drops off (no roles), then comes back.
+    policy.resolved = NO_ROLES;
+    mockState = baseState({ agentOnline: false });
+    rerender(<PlaygroundPage />);
+    policy.resolved = ROLES;
+    mockState = baseState();
+    rerender(<PlaygroundPage />);
+    await userEvent.type(
+      screen.getByLabelText("Message the agent"),
+      "hi{Enter}",
+    );
+    expect(sendChat).toHaveBeenCalledWith("hi", {
+      roles: ["billing", "support"],
+      name: "",
+    });
+  });
+
+  it("keeps a no-role choice through an Apply while serve restarts", async () => {
+    mockState = baseState();
+    const { rerender } = renderWithProviders(<PlaygroundPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "billing" }));
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    policy.resolved = NO_ROLES;
+    mockState = baseState({ agentOnline: false });
+    rerender(<PlaygroundPage />);
+    // Only the name changes; the roles list is empty because serve is down.
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    policy.resolved = ROLES;
+    mockState = baseState();
+    rerender(<PlaygroundPage />);
+    await userEvent.type(
+      screen.getByLabelText("Message the agent"),
+      "hi{Enter}",
+    );
+    expect(sendChat).toHaveBeenCalledWith("hi", { roles: [], name: "" });
+  });
+
+  it("drops the roles when the serving agent defines none", async () => {
+    mockState = baseState();
+    const { rerender } = renderWithProviders(<PlaygroundPage />);
+    expect(screen.getByTitle(/acting as/i)).toHaveTextContent("billing");
+    policy.resolved = NO_ROLES;
+    mockState = baseState({ agentName: "plain-bot" });
+    rerender(<PlaygroundPage />);
+    await userEvent.type(
+      screen.getByLabelText("Message the agent"),
+      "hi{Enter}",
+    );
+    expect(sendChat).toHaveBeenCalledWith("hi", { roles: [], name: "" });
+  });
+
+  it("keeps a no-role choice per project", async () => {
+    mockState = baseState();
+    const { rerender } = renderWithProviders(<PlaygroundPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "billing" }));
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    // Project B starts on its first role; back on A, "no role" still holds.
+    scope.projectId = "p2";
+    rerender(<PlaygroundPage />);
+    expect(screen.getByTitle(/acting as/i)).toHaveTextContent("billing");
+    scope.projectId = "p1";
+    rerender(<PlaygroundPage />);
+    await userEvent.type(
+      screen.getByLabelText("Message the agent"),
+      "hi{Enter}",
+    );
+    expect(sendChat).toHaveBeenCalledWith("hi", { roles: [], name: "" });
+  });
+
+  it("uses the compose roles even when the agent lookup fails", async () => {
+    getAgent.mockRejectedValue(new Error("not registered"));
+    mockState = baseState();
+    renderWithProviders(<PlaygroundPage />);
+    await userEvent.type(
+      screen.getByLabelText("Message the agent"),
+      "hi{Enter}",
+    );
+    expect(sendChat).toHaveBeenCalledWith("hi", {
+      roles: ["billing"],
+      name: "",
+    });
+  });
+
+  it("keeps the chosen roles on a turn sent while serve is down", async () => {
+    mockState = baseState();
+    const { rerender } = renderWithProviders(<PlaygroundPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "support" }));
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    policy.resolved = NO_ROLES;
+    mockState = baseState({ agentOnline: false });
+    rerender(<PlaygroundPage />);
+    await userEvent.type(
+      screen.getByLabelText("Message the agent"),
+      "hi{Enter}",
+    );
+    expect(sendChat).toHaveBeenCalledWith("hi", {
+      roles: ["billing", "support"],
+      name: "",
+    });
+  });
+
+  it("keeps the roles on a name-only Apply from a dialog opened offline", async () => {
+    policy.resolved = NO_ROLES;
+    mockState = baseState({ agentOnline: false });
+    const { rerender } = renderWithProviders(<PlaygroundPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    // Serve comes back while the dialog is open.
+    policy.resolved = ROLES;
+    mockState = baseState();
+    rerender(<PlaygroundPage />);
+    await userEvent.type(screen.getByPlaceholderText("playground"), "maya");
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await userEvent.type(
+      screen.getByLabelText("Message the agent"),
+      "hi{Enter}",
+    );
+    expect(sendChat).toHaveBeenCalledWith("hi", {
+      roles: ["billing"],
+      name: "maya",
+    });
+  });
+
+  it("caps a large argument in the call header", () => {
+    mockState = baseState({
+      messages: turnWith([tool({ args: { body: "x".repeat(500) } })]),
+    });
+    renderWithProviders(<PlaygroundPage />);
+    const header = screen.getByText(/^\(body=/);
+    expect(header.textContent!.length).toBeLessThan(60);
+  });
+
   it("doesn't send on the Enter that confirms an IME candidate", () => {
     mockState = baseState();
     renderWithProviders(<PlaygroundPage />);
@@ -268,11 +444,11 @@ describe("PlaygroundPage", () => {
   });
 
   it("paints the accent on the Playground only, not the page", () => {
-    usePlaygroundPrefs.setState({ accent: "rose" });
+    usePlaygroundPrefs.setState({ accent: "#ff0000" });
     mockState = baseState();
     const { container } = renderWithProviders(<PlaygroundPage />);
     const root = container.querySelector<HTMLElement>("[style*='--primary']");
-    expect(root?.style.getPropertyValue("--action")).toMatch(/^340 /);
+    expect(root?.style.getPropertyValue("--action")).toBe("0 100% 50%");
     expect(document.documentElement.style.getPropertyValue("--primary")).toBe(
       "",
     );

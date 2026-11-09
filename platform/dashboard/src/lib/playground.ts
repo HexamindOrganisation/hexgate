@@ -145,6 +145,15 @@ interface Options {
   projectId: string;
 }
 
+/** The caller a turn runs as, or null when it carries no identity at all
+ * (no name and no role). */
+export function callerName(
+  name: string | undefined,
+  roles: string[],
+): string | null {
+  return name?.trim() || (roles.some(Boolean) ? "playground" : null);
+}
+
 /**
  * Build the `chat` frame for a turn, attaching a `user_attenuation` block only
  * when the caller narrows to one or more roles OR acts under a name.
@@ -164,10 +173,10 @@ export function buildChatFrame(
 ): Record<string, unknown> {
   const frame: Record<string, unknown> = { type: "chat", message };
   const roles = (opts?.roles ?? []).filter(Boolean);
-  const name = opts?.name?.trim();
-  if (roles.length || name) {
+  const user = callerName(opts?.name, roles);
+  if (user) {
     const attenuation: Record<string, unknown> = {
-      user: name || "playground",
+      user,
       ttl_seconds: 300,
     };
     if (roles.length) {

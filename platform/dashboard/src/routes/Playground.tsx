@@ -18,14 +18,15 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  callerName,
   usePlayground,
   type ApprovalRequestEvent,
   type ChatMessage,
   type ToolCall,
 } from "@/lib/playground";
+import { BAR_BTN } from "@/components/playground/bar-btn";
 import {
   AccentPicker,
-  BAR_BTN,
   FullScreenToggle,
   ThemeToggle,
 } from "@/components/playground/PresentationControls";
@@ -43,6 +44,7 @@ import {
   usePlaygroundPrefs,
 } from "@/lib/playground_prefs";
 import { auditUrl } from "@/lib/audit-filters";
+import { argsPreview } from "@/components/audit/fmt";
 import { pluralise } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -68,12 +70,19 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   const { state, sendChat, reset, respondToApproval } = usePlayground({
     projectId,
   });
-  const [composer, setComposer] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [agent, setAgent] = useState<AgentRead | null>(null);
-  // A set, not a scalar: the enforcer evaluates every role the caller carries,
-  // so the playground has to be able to reproduce a multi-role caller.
-  const [activeRoles, setActiveRoles] = useState<string[]>([]);
+  // Tagged with the project and name it was fetched for, so a switch never
+  // reads the previous agent's roles while the new one loads.
+  const [fetched, setFetched] = useState<{
+    key: string;
+    agent: AgentRead | null;
+  } | null>(null);
+  const agentKey = `${projectId}\u0000${state.agentName ?? ""}`;
+  const agent = fetched?.key === agentKey ? fetched.agent : null;
+  // The roles the user applied, per project: unset until they choose (the
+  // agent's first role then), [] for "no role". A set, not a scalar: the
+  // enforcer evaluates every role the caller carries.
+  const [roleChoice, setRoleChoice] = useState<Record<string, string[]>>({});
   // Full-screen presentation mode (own tab, no app sidebar — see AppShell). The
   // playground drops its breakout margins and swaps "open in tab" for a close.
   // The acting name is subscribed inside the chip and the settings form rather
@@ -84,18 +93,16 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   // Fetch the serving agent so we know which roles are available. Roles are a
   // per-agent concept today (M1); a later global role registry moves this hook.
   useEffect(() => {
-    if (!state.agentName) {
-      setAgent(null);
-      return;
-    }
+    if (!state.agentName) return;
+    const key = `${projectId}\u0000${state.agentName}`;
     let cancelled = false;
     api
       .getAgent(state.agentName, projectId)
       .then((a) => {
-        if (!cancelled) setAgent(a);
+        if (!cancelled) setFetched({ key, agent: a });
       })
       .catch(() => {
-        if (!cancelled) setAgent(null);
+        if (!cancelled) setFetched({ key, agent: null });
       });
     return () => {
       cancelled = true;
@@ -118,26 +125,22 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
     return agent ? parseRolesFromPolicy(agent.policy_yaml) : [];
   }, [resolved.data, agent]);
 
-  // On an agent switch, keep whichever roles the new one still defines, else
-  // fall back to its first role, unless the user chose "no role". Keyed on
-  // the names, so a refetch with the same roles changes nothing.
-  const choseNoRole = useRef(false);
-  const roleKey = roleOptions.join("\u0000");
-  useEffect(() => {
-    const options = roleKey ? roleKey.split("\u0000") : [];
-    if (options.length === 0) {
-      setActiveRoles([]);
-      return;
-    }
-    setActiveRoles((prev) => {
-      const kept = prev.filter((r) => options.includes(r));
-      if (kept.length) return kept;
-      return choseNoRole.current && prev.length === 0 ? [] : [options[0]];
-    });
-  }, [roleKey]);
-  const applyRoles = (roles: string[]) => {
-    choseNoRole.current = roles.length === 0;
-    setActiveRoles(roles);
+  // The roles this turn carries, derived (not synced) so a choice outlives an
+  // agent that briefly has no roles: the chosen roles the agent still
+  // defines, else its first role, unless "no role". While serve is down a
+  // queued turn keeps the choice; an online agent with no roles gets none.
+  const choice = roleChoice[projectId];
+  const agentOnline = state.agentOnline;
+  const activeRoles = useMemo(() => {
+    if (roleOptions.length === 0) return agentOnline ? [] : (choice ?? []);
+    if (choice?.length === 0) return [];
+    const kept = (choice ?? []).filter((r) => roleOptions.includes(r));
+    return kept.length ? kept : [roleOptions[0]];
+  }, [choice, roleOptions, agentOnline]);
+  // null: the roles weren't touched in the dialog, so the choice stands.
+  const applyRoles = (roles: string[] | null) => {
+    if (roles === null) return;
+    setRoleChoice((prev) => ({ ...prev, [projectId]: roles }));
   };
 
   // Whether the user was pinned to the bottom BEFORE the latest update — read
@@ -164,9 +167,7 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
     }
   }, [present, state.connected, reset]);
 
-  function submit() {
-    const text = composer.trim();
-    if (!text) return;
+  function submit(text: string) {
     // Re-pin to the bottom so the sent turn and its streamed reply are visible
     // even if the user had scrolled up to re-read an earlier turn.
     atBottomRef.current = true;
@@ -174,7 +175,6 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
     // re-renders the transcript; sendChat trims it and omits an empty identity.
     const name = usePlaygroundPrefs.getState().names[projectId] ?? "";
     sendChat(text, { roles: activeRoles, name });
-    setComposer("");
   }
 
   const empty = state.messages.length === 0;
@@ -278,8 +278,6 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
             />
           )}
           <Composer
-            value={composer}
-            onChange={setComposer}
             onSubmit={submit}
             agentName={state.agentName}
             identity={
@@ -410,8 +408,7 @@ function IdentityChip({
   onClick: () => void;
 }) {
   const name = usePlaygroundPrefs((s) => s.names[projectId] ?? "").trim();
-  // Mirrors buildChatFrame: no name and no role sends no identity at all.
-  const caller = name || (activeRoles.length ? "playground" : "default caller");
+  const caller = callerName(name, activeRoles) ?? "default caller";
   return (
     <button
       type="button"
@@ -479,24 +476,28 @@ function EmptyState({ online }: { online: boolean }) {
 
 // ── Composer ────────────────────────────────────────────────────────────────
 
+/** Holds its own text, so a keystroke re-renders the box, not the transcript. */
 function Composer({
-  value,
-  onChange,
   onSubmit,
   agentName,
   identity,
 }: {
-  value: string;
-  onChange: (v: string) => void;
-  onSubmit: () => void;
+  onSubmit: (text: string) => void;
   agentName: string | null;
   identity: React.ReactNode;
 }) {
+  const [value, setValue] = useState("");
+  const send = () => {
+    const text = value.trim();
+    if (!text) return;
+    onSubmit(text);
+    setValue("");
+  };
   return (
     <div className="rounded-2xl border border-border bg-card p-3 shadow-sm transition-colors focus-within:border-primary/60">
       <textarea
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
           // Enter confirming an IME candidate isn't a send (Safari reports
           // it as keyCode 229 rather than isComposing).
@@ -504,7 +505,7 @@ function Composer({
             e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229;
           if (e.key === "Enter" && !e.shiftKey && !composing) {
             e.preventDefault();
-            onSubmit();
+            send();
           }
         }}
         rows={1}
@@ -516,7 +517,7 @@ function Composer({
         {identity}
         <button
           type="button"
-          onClick={onSubmit}
+          onClick={send}
           disabled={!value.trim()}
           aria-label="Send"
           className="grid size-9 place-items-center rounded-full bg-action text-action-foreground transition-all hover:bg-action/85 disabled:scale-90 disabled:bg-muted disabled:text-muted-foreground"
@@ -661,14 +662,6 @@ const DECISION: Record<
   },
 };
 
-/** `name(k=v, …)`: the call as the agent made it. */
-function callSignature(call: ToolCall): string {
-  const args = Object.entries(call.args)
-    .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
-    .join(", ");
-  return `(${args})`;
-}
-
 /** One tool call inline in the turn, collapsible; a failed call opens by
  * default so the reason is in view. */
 function DecisionCard({
@@ -695,7 +688,9 @@ function DecisionCard({
         <span className={cn("text-xs font-medium", d.text)}>{d.label}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-xs">
           {call.name}
-          <span className="text-muted-foreground">{callSignature(call)}</span>
+          <span className="text-muted-foreground">
+            {argsPreview(call.args) || "()"}
+          </span>
         </span>
         {shown ? (
           <ChevronUp className="size-3.5 shrink-0 text-muted-foreground" />
@@ -872,7 +867,7 @@ function ApprovalPromptCard({
         <Button
           size="sm"
           // A decision colour, never the Playground accent.
-          className="h-7 gap-1.5 bg-success text-xs text-white hover:bg-success/90"
+          className="h-7 gap-1.5 bg-success text-xs text-white hover:bg-success/90 dark:text-background"
           onClick={() => onDecide(request.decision_id, true)}
         >
           <Check className="size-3" />

@@ -16,23 +16,25 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { accentForeground, hexToHslChannels, hslChannelsToHex } from "./color";
 import { SCHEMES, SCHEME_ACCENTS, useIsDark } from "./theme";
 
-/** Accent presets: the app's schemes plus demo extras, per palette. */
-export const PLAYGROUND_ACCENTS: {
+/** Accent presets: the app's schemes, per palette. No red, amber or green:
+ * those mean deny, approval and connected. */
+export const PLAYGROUND_ACCENTS: readonly {
   id: string;
   label: string;
   light: string;
   dark: string;
-}[] = [
-  ...SCHEMES,
-  { id: "rose", label: "Rose", light: "340 75% 55%", dark: "340 80% 68%" },
-  { id: "amber", label: "Amber", light: "38 92% 50%", dark: "38 92% 58%" },
-  {
-    id: "emerald",
-    label: "Emerald",
-    light: "152 60% 40%",
-    dark: "152 55% 55%",
-  },
-];
+}[] = SCHEMES;
+
+/** Rose, amber and emerald, as stored before they were dropped (raw HSL, or
+ * an id): a saved one goes back to the app's accent. */
+const DROPPED_ACCENTS = new Set([
+  "340 75% 55%",
+  "38 92% 50%",
+  "152 60% 40%",
+  "rose",
+  "amber",
+  "emerald",
+]);
 
 interface PlaygroundPrefs {
   /** "" = same as the app, a preset id, or a custom "#rrggbb". */
@@ -80,10 +82,16 @@ const V0_ACCENTS: Record<string, string> = {
   "262 70% 58%": SCHEME_ACCENTS.violet.dark,
 };
 
-/** A stored HSL value (v0/v1) → a preset id when it matches one in either
- * palette, else the same colour as a custom hex. */
+/** A stored accent → today's form: "" for none or a dropped preset, kept if
+ * already an id or a hex, else (raw HSL) a preset id when it matches one in
+ * either palette, else the same colour as a custom hex. */
 function accentToId(channels: string): string {
-  if (!channels) return "";
+  if (!channels || DROPPED_ACCENTS.has(channels)) return "";
+  if (
+    channels.startsWith("#") ||
+    PLAYGROUND_ACCENTS.some((p) => p.id === channels)
+  )
+    return channels;
   const v = V0_ACCENTS[channels] ?? channels;
   const preset = PLAYGROUND_ACCENTS.find((p) => p.light === v || p.dark === v);
   return preset ? preset.id : hslChannelsToHex(v);
@@ -101,12 +109,12 @@ export const usePlaygroundPrefs = create<PlaygroundPrefs>()(
     {
       name: "hexgate-playground",
       storage: createJSONStorage(() => localStorage),
-      version: 2,
+      version: 3,
       migrate: (persisted, version) => {
         const s = persisted as PlaygroundPrefs;
-        // v0/v1 stored raw HSL, which pinned one palette's value; v2 stores
-        // the preset id so it follows light/dark.
-        if (version < 2) return { ...s, accent: accentToId(s.accent ?? "") };
+        // Earlier versions stored raw HSL (pinning one palette's value) or
+        // presets since dropped; v3 stores a live preset id, a hex or "".
+        if (version < 3) return { ...s, accent: accentToId(s.accent ?? "") };
         return s;
       },
     },

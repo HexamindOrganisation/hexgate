@@ -35,7 +35,8 @@ export function SessionSettings({
   projectId: string;
   roleOptions: string[];
   activeRoles: string[];
-  onApply: (roles: string[]) => void;
+  /** null when the roles weren't touched, so the applied choice stands. */
+  onApply: (roles: string[] | null) => void;
   onReset: () => void;
   canReset: boolean;
 }) {
@@ -58,9 +59,9 @@ export function SessionSettings({
           activeRoles={activeRoles}
           onApply={(roles) => {
             // The agent may have changed while the dialog was open: keep the
-            // roles it still has, else its current roles, never a silent [].
-            const kept = roles.filter((r) => roleOptions.includes(r));
-            onApply(kept.length || !roles.length ? kept : activeRoles);
+            // roles it still has, else leave the choice alone, never a silent [].
+            const kept = roles?.filter((r) => roleOptions.includes(r)) ?? [];
+            onApply(roles && (kept.length || !roles.length) ? kept : null);
             onOpenChange(false);
           }}
           onCancel={() => onOpenChange(false)}
@@ -88,7 +89,8 @@ function SettingsForm({
   projectId: string;
   roleOptions: string[];
   activeRoles: string[];
-  onApply: (roles: string[]) => void;
+  /** null when the roles weren't touched, so the applied choice stands. */
+  onApply: (roles: string[] | null) => void;
   onCancel: () => void;
   onReset: () => void;
   canReset: boolean;
@@ -97,13 +99,18 @@ function SettingsForm({
   const setName = usePlaygroundPrefs((s) => s.setName);
   const [name, setDraftName] = useState(savedName);
   const [roles, setRoles] = useState(activeRoles);
-  const toggle = (role: string) =>
+  // A name-only Apply must not turn the roles shown at opening (maybe none,
+  // while serve was down) into a choice.
+  const [rolesTouched, setRolesTouched] = useState(false);
+  const toggle = (role: string) => {
+    setRolesTouched(true);
     // Keep the policy's order, not the click order.
     setRoles((prev) =>
       prev.includes(role)
         ? prev.filter((r) => r !== role)
         : roleOptions.filter((r) => r === role || prev.includes(r)),
     );
+  };
   const context = buildChatFrame("", { roles, name }).user_attenuation;
 
   return (
@@ -111,7 +118,7 @@ function SettingsForm({
       onSubmit={(e) => {
         e.preventDefault();
         setName(projectId, name);
-        onApply(roles);
+        onApply(rolesTouched ? roles : null);
       }}
       className="space-y-5"
     >

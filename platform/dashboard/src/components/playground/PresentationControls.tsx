@@ -16,11 +16,9 @@ import {
   usePlaygroundPrefs,
 } from "@/lib/playground_prefs";
 import { PRESENT_URL, usePresentMode } from "@/lib/present";
+import { AccentSwatch } from "@/components/ui/accent-swatch";
+import { BAR_BTN } from "@/components/playground/bar-btn";
 import { cn } from "@/lib/utils";
-
-/** The Playground's top-bar text button. */
-export const BAR_BTN =
-  "inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
 
 /** Pick the Playground-only accent: same as the app, a preset, or custom. */
 export function AccentPicker() {
@@ -83,18 +81,12 @@ export function AccentPicker() {
             Same as app
           </button>
           {PLAYGROUND_ACCENTS.map((p) => (
-            <button
+            <AccentSwatch
               key={p.id}
-              type="button"
-              title={p.label}
-              aria-label={p.label}
-              aria-pressed={selected === p.id}
-              onClick={() => setAccent(p.id)}
-              className={cn(
-                "size-6 rounded-full ring-offset-2 ring-offset-popover transition",
-                selected === p.id && "ring-2 ring-foreground",
-              )}
-              style={{ backgroundColor: `hsl(${dark ? p.dark : p.light})` }}
+              label={p.label}
+              color={dark ? p.dark : p.light}
+              selected={selected === p.id}
+              onSelect={() => setAccent(p.id)}
             />
           ))}
         </div>
