@@ -29,6 +29,35 @@ function modeBadge(mode: string | undefined) {
   return "default" as const;
 }
 
+/** A tool's name and kind tag, the same in the grid and the table. */
+function ToolLabel({
+  label,
+  tag,
+  kind,
+}: {
+  label: string;
+  tag?: string | null;
+  kind: string;
+}) {
+  return (
+    <>
+      <span className="font-mono">{label}</span>
+      {tag && (
+        <span
+          className={cn(
+            "ml-1.5 rounded px-1 py-0.5 text-[9px] uppercase tracking-wider",
+            kind === "admission"
+              ? "bg-primary/15 text-primary"
+              : "bg-muted text-muted-foreground",
+          )}
+        >
+          {tag}
+        </span>
+      )}
+    </>
+  );
+}
+
 type ToolKind = "tool" | "mcp" | "reach" | "admission";
 const _KIND_ORDER: Record<ToolKind, number> = {
   tool: 0,
@@ -272,31 +301,6 @@ function ResolvedTab({
     );
   }
 
-  if (view === "grid") {
-    return (
-      <div className="h-full flex flex-col">
-        <AgentPicker
-          inspectAgent={inspectAgent}
-          agentNames={agentNames}
-          onChange={onInspectAgentChange}
-        />
-        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border">
-          <span className="text-[11px] text-muted-foreground">
-            Every role, side by side. Click a cell for its role's detail.
-          </span>
-          <ViewSwitch view={view} onChange={setView} />
-        </div>
-        <ResolvedGrid
-          matrix={matrix}
-          onPick={(r) => {
-            setRole(r);
-            setView("table");
-          }}
-        />
-      </div>
-    );
-  }
-
   const policy = resolved[active];
   const tools = policy?.tools ?? {};
   const rows = sortToolRows(Object.keys(tools)).map((r) => ({
@@ -313,25 +317,39 @@ function ResolvedTab({
         onChange={onInspectAgentChange}
       />
       <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border">
-        <div className="flex flex-wrap items-center gap-1 min-w-0">
-          {roleNames.map((r) => (
-            <button
-              key={r}
-              onClick={() => setRole(r)}
-              className={cn(
-                "rounded px-2 py-0.5 text-xs font-mono",
-                r === active
-                  ? "bg-primary/15 text-primary font-medium"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {r}
-            </button>
-          ))}
-        </div>
+        {view === "grid" ? (
+          <span className="text-[11px] text-muted-foreground">
+            Every role, side by side. Click a cell for its role's detail.
+          </span>
+        ) : (
+          <div className="flex flex-wrap items-center gap-1 min-w-0">
+            {roleNames.map((r) => (
+              <button
+                key={r}
+                onClick={() => setRole(r)}
+                className={cn(
+                  "rounded px-2 py-0.5 text-xs font-mono",
+                  r === active
+                    ? "bg-primary/15 text-primary font-medium"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+        )}
         <ViewSwitch view={view} onChange={setView} />
       </div>
-      {view === "yaml" ? (
+      {view === "grid" ? (
+        <ResolvedGrid
+          matrix={matrix}
+          onPick={(r) => {
+            setRole(r);
+            setView("table");
+          }}
+        />
+      ) : view === "yaml" ? (
         <div className="flex-1 overflow-auto scrollbar-thin p-3">
           {/* The composed policy for this role as one document — boundaries +
               the role's capabilities merged. Read-only; edits happen in the
@@ -342,6 +360,12 @@ function ResolvedTab({
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-1">
+          {/* The files' view; the grid is the engine's (role-wide
+              constraints, file_scope), so say where they differ. */}
+          <p className="pb-1 text-[11px] text-muted-foreground">
+            Each tool's own entry. Role-wide constraints and file_scope apply on
+            top; the grid shows what the engine enforces.
+          </p>
           {defaultMode && (
             <div className="flex items-center justify-between gap-2 py-1 text-xs border-b border-border/50">
               <span className="text-muted-foreground italic">default</span>
@@ -361,19 +385,7 @@ function ResolvedTab({
                   className="flex items-start justify-between gap-2 py-1 text-xs border-b border-border/50"
                 >
                   <div className="min-w-0">
-                    <span className="font-mono">{label}</span>
-                    {tag && (
-                      <span
-                        className={cn(
-                          "ml-1.5 rounded px-1 py-0.5 text-[9px] uppercase tracking-wider",
-                          kind === "admission"
-                            ? "bg-primary/15 text-primary"
-                            : "bg-muted text-muted-foreground",
-                        )}
-                      >
-                        {tag}
-                      </span>
-                    )}
+                    <ToolLabel label={label} tag={tag} kind={kind} />
                     {constraints.length > 0 && (
                       <ul className="mt-0.5 text-[11px] text-muted-foreground font-mono space-y-0.5">
                         {constraints.map((c, i) => (
@@ -495,18 +507,13 @@ function ResolvedGrid({
           </tr>
         </thead>
         <tbody>
-          {rows.map(({ name, label, tag }) => (
+          {rows.map(({ name, label, tag, kind }) => (
             <tr key={name}>
               <th
                 scope="row"
-                className="sticky left-0 border-b border-border/50 bg-card px-3 py-1.5 text-left font-mono font-normal"
+                className="sticky left-0 border-b border-border/50 bg-card px-3 py-1.5 text-left font-normal"
               >
-                {label}
-                {tag && (
-                  <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[9px] uppercase tracking-wider text-muted-foreground">
-                    {tag}
-                  </span>
-                )}
+                <ToolLabel label={label} tag={tag} kind={kind} />
               </th>
               {matrix.roles.map((r) => {
                 // Complete for every listed tool (server contract).

@@ -879,12 +879,15 @@ function encodePath(path: string): string {
   return path.split("/").map(encodeURIComponent).join("/");
 }
 
-function qs(params: Record<string, string | number | undefined>): string {
+function qs(
+  params: Record<string, string | number | string[] | undefined>,
+): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     // undefined = omit. '' is kept: `role=` (empty value) is meaningful —
-    // it selects the no-role bucket server-side.
-    if (value !== undefined) search.set(key, String(value));
+    // it selects the no-role bucket server-side. A list repeats the key.
+    if (Array.isArray(value)) for (const v of value) search.append(key, v);
+    else if (value !== undefined) search.set(key, String(value));
   }
   const str = search.toString();
   return str ? `?${str}` : "";
@@ -1046,18 +1049,10 @@ export const api = {
 
   /** `tools` the policy doesn't list come back in `cells` with the engine's
    * fallback (reserved keys deny), but not in `tools`. */
-  getPolicyMatrix: (
-    projectId: string,
-    agent?: string,
-    tools: string[] = [],
-  ) => {
-    const search = new URLSearchParams(agent ? { agent } : {});
-    for (const t of tools) search.append("tool", t);
-    const str = search.toString();
-    return request<PolicyMatrix>(
-      `/v1/projects/${projectId}/policy/matrix${str ? `?${str}` : ""}`,
-    );
-  },
+  getPolicyMatrix: (projectId: string, agent?: string, tools: string[] = []) =>
+    request<PolicyMatrix>(
+      `/v1/projects/${projectId}/policy/matrix${qs({ agent: agent || undefined, tool: tools })}`,
+    ),
 
   checkPolicy: (projectId: string) =>
     request<{ ok: boolean; lints: PolicyLint[] }>(

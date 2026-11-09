@@ -107,6 +107,15 @@ describe("InspectorTabs", () => {
     expect(screen.getByText("args.amount <= 100")).toBeInTheDocument();
   });
 
+  it("says the table is each tool's own entry, the grid the engine's", async () => {
+    renderInspector();
+    await userEvent.click(screen.getByRole("button", { name: "table" }));
+    expect(
+      screen.getByText(/the grid shows what the engine enforces/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("args.amount <= 100")).toBeInTheDocument();
+  });
+
   it("shows the compose-doesn't-resolve empty state", () => {
     renderInspector({ resolves: false, resolved: null });
     expect(screen.getByText(/doesn't compose/i)).toBeInTheDocument();

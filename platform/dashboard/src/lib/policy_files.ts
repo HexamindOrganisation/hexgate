@@ -34,6 +34,8 @@ import { useOrgs } from "./orgs";
 export type { PolicyFileRead, PolicyLint, ResolvedPolicy } from "./api";
 
 const filesKey = (pid: string) => ["policy-files", pid] as const;
+const matrixKey = (pid: string, agent: string, tools: string[]) =>
+  ["policy-resolve", pid, "matrix", agent, tools] as const;
 const resolveKey = (pid: string, role: string | null, agent: string | null) =>
   ["policy-resolve", pid, role, agent] as const;
 const checkKey = (pid: string) => ["policy-check", pid] as const;
@@ -74,12 +76,15 @@ export function usePolicyMatrix(
   tools: string[] = [],
 ) {
   return useQuery({
-    queryKey: ["policy-resolve", projectId, "matrix", agent, tools] as const,
+    queryKey: matrixKey(projectId as string, agent, tools),
     queryFn: () => api.getPolicyMatrix(projectId as string, agent, tools),
     // Classic (non-compose) projects have no matrix; don't fire the 422.
     enabled: !!projectId && enabled,
     // A policy that doesn't compose stays a 422; retry only transient errors.
     retry: (n, err) => !(err instanceof ApiError && err.status < 500) && n < 2,
+    // No placeholder: another agent's verdicts must never stand in for this
+    // one's. Cached, so switching back to an agent shows its grid at once.
+    staleTime: 15_000,
   });
 }
 

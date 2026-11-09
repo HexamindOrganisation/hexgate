@@ -16,7 +16,7 @@ import {
 } from "@/lib/policy_files";
 import { useEmptyFolders } from "@/lib/empty_folders";
 import { composeAgentNames, referencesImport } from "@/lib/imports";
-import { baseName, ENTRY_FILE } from "@/lib/file_tree";
+import { baseName, ENTRY_FILE, isModular } from "@/lib/file_tree";
 import { cn } from "@/lib/utils";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { DocsLink } from "@/components/DocsLink";
@@ -48,7 +48,7 @@ export function PoliciesPage() {
 
   const filesQuery = usePolicyFiles(projectId);
   const files = useMemo(() => filesQuery.data ?? [], [filesQuery.data]);
-  const modular = files.some((f) => f.name === ENTRY_FILE);
+  const modular = isModular(files);
 
   // The open file (its name), the open tabs, and the per-file unsaved buffers.
   // A tab may name a not-yet-saved file (an "untitled" buffer) — it lives only
@@ -59,11 +59,7 @@ export function PoliciesPage() {
   const dirtyKeys = useMemo(() => new Set(Object.keys(drafts)), [drafts]);
 
   // Default the open file once files load: the entry file, else the first one.
-  const active =
-    selection ??
-    (files.some((f) => f.name === ENTRY_FILE)
-      ? ENTRY_FILE
-      : (files[0]?.name ?? null));
+  const active = selection ?? (modular ? ENTRY_FILE : (files[0]?.name ?? null));
   const activeTabs =
     openTabs.length || active === null ? openTabs : [active as string];
 
@@ -230,7 +226,8 @@ export function PoliciesPage() {
   const resolved = usePreviewData ? preview.data?.resolved : storedResolve.data;
   // The grid's matrix follows the same draft-or-saved switch as `resolved`.
   const storedMatrix = usePolicyMatrix(projectId, inspectAgent, modular);
-  // null = failed, so the grid says so instead of loading forever.
+  // null = failed, so the grid says so instead of loading forever. A failed
+  // refresh counts too: the last grid may predate a save.
   const matrix = usePreviewData
     ? preview.data?.matrix
     : storedMatrix.isError

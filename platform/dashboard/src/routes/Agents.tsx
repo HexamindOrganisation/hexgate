@@ -5,7 +5,7 @@ import {
   usePolicyFiles,
   usePolicyMatrix,
 } from "@/lib/policy_files";
-import { ENTRY_FILE } from "@/lib/file_tree";
+import { isModular } from "@/lib/file_tree";
 import { useAgentSelection } from "@/lib/agent_param";
 import {
   Ban,
@@ -75,7 +75,7 @@ export function AgentsPage() {
   // Roles x tools for the selected agent, as the engine tabulates them.
   // Only projects with a policy.yaml compose; others have no matrix.
   const policyFiles = usePolicyFiles(scope.projectId);
-  const modular = !!policyFiles.data?.some((f) => f.name === ENTRY_FILE);
+  const modular = isModular(policyFiles.data);
   // Manifest tools the policy doesn't list get the engine's fallback too.
   const toolNames = useMemo(
     () => active?.manifest?.tools?.map((t) => t.name) ?? [],
@@ -89,16 +89,19 @@ export function AgentsPage() {
   ).data;
   const roleModes = useMemo(() => {
     if (!matrix) return undefined;
-    return (tool: string): RoleMode[] =>
-      matrix.roles.map((role) => {
+    const listed = new Set(matrix.tools);
+    return (tool: string): RoleMode[] => {
+      const defaulted = !listed.has(tool);
+      return matrix.roles.map((role) => {
         const cell = matrix.cells[tool]?.[role];
         return {
           role,
           mode: cell?.mode,
           constraint: cell?.constraint ?? null,
-          defaulted: !matrix.tools.includes(tool),
+          defaulted,
         };
       });
+    };
   }, [matrix]);
   const activeActivity = active ? activityOf(active.name) : null;
   const canManageBans = useCanManageBans();
