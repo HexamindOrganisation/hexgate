@@ -20,15 +20,7 @@ import {
 import { TopUsersCard } from "@/components/usage/top-users";
 import { useUsageFilters } from "@/lib/usage-filters";
 import { PageHeader } from "@/components/ui/page-header";
-
-// Compact token counts (1.2M / 84.6K) — KpiCard values elsewhere use
-// toLocaleString() directly, but raw token counts run into the millions
-// and read poorly uncompacted at this tile size.
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return n.toLocaleString();
-}
+import { fmtTokens } from "@/lib/format";
 
 export function UsagePage() {
   const projectScope = useProjectScoped();
