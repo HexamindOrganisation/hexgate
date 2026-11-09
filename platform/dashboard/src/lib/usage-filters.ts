@@ -4,7 +4,8 @@
  * Zustand so the dialled-in slice survives navigating away and back within
  * the session — deliberately NOT ``persist``-ed: a stale filter from last
  * week silently narrowing today's usage view would read as missing data.
- * (Audit keeps its filters in the URL instead; see audit-filters.) No ``tableLimit``/``loadMore`` here — Usage has no events table.
+ * (Audit keeps its filters in the URL instead; see audit-filters.) No
+ * ``tableLimit``/``loadMore`` here — Usage has no events table.
  */
 
 import { create } from "zustand";

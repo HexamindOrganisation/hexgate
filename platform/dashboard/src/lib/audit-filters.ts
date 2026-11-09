@@ -50,9 +50,11 @@ interface AuditFilterState {
   /** Query string of the last Audit view per project; a bare /audit
    * reopens the active project's. */
   lastSearch: Record<string, string>;
-  /** Record the current view; a different view also restarts paging. */
+  /** Record the current view; a different view also restarts paging, so
+   * coming back to a paged view starts at one page again. */
   remember: (projectId: string, search: string) => void;
-  /** Rows loaded for the view `pageKey` — any other view starts at one page. */
+  /** Rows loaded for the view `pageKey` (a project and its query string);
+   * any other view, in this project or another, starts at one page. */
   pageKey: string;
   pageLimit: number;
   loadMore: (key: string) => void;

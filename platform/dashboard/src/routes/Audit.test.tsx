@@ -33,11 +33,14 @@ import {
 import { AuditPage } from "@/routes/Audit";
 import { renderWithProviders } from "@/test/render";
 
-/** The filters Audit last showed (its URL, mirrored in the store). */
-const currentFilters = (): AuditFilters =>
+/** The filters Audit last showed in `project` (its URL, mirrored in the
+ * store). */
+const currentFiltersOf = (project: string): AuditFilters =>
   fromAuditSearch(
-    new URLSearchParams(useAuditFilters.getState().lastSearch[PROJECT] ?? ""),
+    new URLSearchParams(useAuditFilters.getState().lastSearch[project] ?? ""),
   ) ?? EMPTY_AUDIT_FILTERS;
+
+const currentFilters = () => currentFiltersOf(PROJECT);
 
 /** Make `patch` the remembered view, which a bare /audit reopens. */
 const seedFilters = (patch: Partial<AuditFilters>) =>
@@ -296,6 +299,12 @@ function stubFetch(
               name: "demo-project",
               created_at: "2026-01-01T00:00:00Z",
             },
+            {
+              id: "p2",
+              org_id: "org-1",
+              name: "other-project",
+              created_at: "2026-01-01T00:00:00Z",
+            },
           ]);
         case `/v1/projects/${PROJECT}/audit/summary`:
           return json(summary);
@@ -449,6 +458,67 @@ describe("AuditPage", () => {
         ),
       ).toBe(true),
     );
+  });
+
+  it("opens the new project's last view on a project switch", async () => {
+    const calls = stubFetch();
+    useAuditFilters.setState({
+      lastSearch: {
+        p2: toAuditSearch({
+          ...EMPTY_AUDIT_FILTERS,
+          tool: "tool-b",
+        }).toString(),
+      },
+    });
+    renderWithProviders(<AuditPage />, {
+      initialRoute: "/audit?range=24h&agent=agent-a",
+    });
+    await waitFor(() => expect(currentFilters().agent).toBe("agent-a"));
+    act(() => useActive.setState({ activeProjectId: "p2" }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (u) =>
+            u.startsWith("/v1/projects/p2/audit/decisions") &&
+            u.includes("tool=tool-b"),
+        ),
+      ).toBe(true),
+    );
+    // Not even one request runs B with A's filters, and B's view stands.
+    expect(
+      calls.some(
+        (u) => u.startsWith("/v1/projects/p2") && u.includes("agent-a"),
+      ),
+    ).toBe(false);
+    expect(currentFiltersOf("p2").tool).toBe("tool-b");
+    expect(useAuditFilters.getState().lastSearch.p2).not.toContain("agent-a");
+  });
+
+  it("keeps a link's filters over the project's last view", async () => {
+    stubFetch();
+    useAuditFilters.setState({
+      lastSearch: {
+        p1: toAuditSearch({ ...EMPTY_AUDIT_FILTERS, tool: "saved" }).toString(),
+      },
+    });
+    renderWithProviders(<AuditPage />, {
+      initialRoute: "/audit?range=24h&agent=linked",
+    });
+    await waitFor(() => expect(currentFilters().agent).toBe("linked"));
+    expect(currentFilters().tool).toBe("");
+  });
+
+  it("closes the previous project's event on a project switch", async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(<AuditPage />, { initialRoute: "/audit?range=30d" });
+    await openDrawer(user);
+    act(() => useActive.setState({ activeProjectId: "p2" }));
+    await waitFor(() => expect(screen.queryByText("evt-1")).toBeNull());
+    // Coming back doesn't reopen it.
+    act(() => useActive.setState({ activeProjectId: PROJECT }));
+    await screen.findByText("blocked by policy");
+    expect(screen.queryByText("evt-1")).toBeNull();
   });
 
   it("a bare /audit reopens the last view", async () => {
@@ -1087,6 +1157,30 @@ describe("AuditPage", () => {
       expect(
         screen.queryByRole("button", { name: /→/ }),
       ).not.toBeInTheDocument();
+    });
+
+    it("dates picked on the page reach the URL and the queries", async () => {
+      const calls = stubFetch();
+      const user = userEvent.setup();
+      renderWithProviders(<AuditPage />, {
+        initialRoute: "/audit?range=30d&custom=1",
+      });
+      await user.click(await screen.findByRole("button", { name: / → / }));
+      await user.click(within(await screen.findByRole("grid")).getByText("10"));
+      // The calendar re-renders on each pick: find it again.
+      await user.click(within(await screen.findByRole("grid")).getByText("12"));
+      await waitFor(() => {
+        const f = currentFilters();
+        expect(f.start_date?.getDate()).toBe(10);
+        expect(f.end_date?.getDate()).toBe(12);
+      });
+      await waitFor(() =>
+        expect(
+          calls.some(
+            (u) => u.includes("/audit/decisions") && u.includes("start_date="),
+          ),
+        ).toBe(true),
+      );
     });
 
     it("dates in the URL render as the formatted range in the picker button", async () => {
