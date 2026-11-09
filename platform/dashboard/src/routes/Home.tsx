@@ -28,7 +28,7 @@ import {
   type AuditSummary,
   type TokenListItem,
 } from "@/lib/api";
-import { type AuditFilters, useAuditFilters } from "@/lib/audit-filters";
+import { auditUrl } from "@/lib/audit-filters";
 import { useAgentActivity24h } from "@/lib/audit-summary";
 import { fmtTokens, formatRelative, pluralise } from "@/lib/format";
 import { isStaleKey, STALE_KEY_DAYS } from "@/lib/keys";
@@ -65,19 +65,10 @@ function Panel({
   );
 }
 
-function PanelLink({
-  to,
-  onClick,
-  children,
-}: {
-  to: string;
-  onClick?: () => void;
-  children: ReactNode;
-}) {
+function PanelLink({ to, children }: { to: string; children: ReactNode }) {
   return (
     <Link
       to={to}
-      onClick={onClick}
       className="text-meta font-medium text-primary hover:underline"
     >
       {children}
@@ -101,8 +92,6 @@ interface Attention {
   sub: ReactNode;
   cta: string;
   to: string;
-  /** Audit filters to open with; replaces whatever was dialled in before. */
-  filters?: Partial<AuditFilters>;
 }
 
 function deriveAttention({
@@ -135,11 +124,8 @@ function deriveAttention({
       ),
       sub: `${a.deny} of ${a.all} calls denied · ${formatRelative(a.last_seen, now)}`,
       cta: "Inspect",
-      to: "/audit",
-      filters: burstFilters(
-        a.user_id,
-        new Date(a.first_seen),
-        new Date(a.last_seen),
+      to: auditUrl(
+        burstFilters(a.user_id, new Date(a.first_seen), new Date(a.last_seen)),
       ),
     });
   }
@@ -152,8 +138,7 @@ function deriveAttention({
       title: `${pluralise(more, "more denial burst")} this week`,
       sub: "Ranked by severity and deny rate on Audit",
       cta: "Open audit",
-      to: "/audit",
-      filters: { range: "7d" },
+      to: auditUrl({ range: "7d" }),
     });
   }
   if (totals?.needs_approval) {
@@ -165,8 +150,7 @@ function deriveAttention({
       title: `${pluralise(n, "call")} sent for approval in the last 24 hours`,
       sub: "Gated by policy rather than allowed or denied outright",
       cta: "Review",
-      to: "/audit",
-      filters: { range: "24h", outcome: "needs_approval" },
+      to: auditUrl({ range: "24h", outcome: "needs_approval" }),
     });
   }
   const unregistered = agents.filter((a) => !a.manifest);
@@ -202,7 +186,6 @@ export function HomePage() {
   const scope = useProjectScoped();
   const pid = scope.projectId;
   const on = !!pid;
-  const openAudit = useAuditFilters((s) => s.openAudit);
 
   const { summary: summaryQ, activityOf } = useAgentActivity24h(pid);
   const weekQ = useQuery({
@@ -372,7 +355,6 @@ export function HomePage() {
             <Link
               key={t.key}
               to={t.to}
-              onClick={t.filters ? () => openAudit(t.filters) : undefined}
               className="grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3.5 border-t border-border/60 px-5 py-3.5 first:border-t-0 hover:bg-accent/50"
             >
               <span
@@ -480,9 +462,7 @@ export function HomePage() {
             </span>
           }
           aside={
-            <PanelLink to="/audit" onClick={() => openAudit({ range: "24h" })}>
-              View all
-            </PanelLink>
+            <PanelLink to={auditUrl({ range: "24h" })}>View all</PanelLink>
           }
         >
           {feedQ.isPending ? (
@@ -493,16 +473,13 @@ export function HomePage() {
             feedQ.data.rows.map((r) => (
               <Link
                 key={r.event_id}
-                to="/audit"
                 // Audit can't select one event from a link yet; narrow it to
                 // this call's agent and tool so the row is near the top.
-                onClick={() =>
-                  openAudit({
-                    range: "24h",
-                    agent: r.agent_name,
-                    tool: r.tool_name,
-                  })
-                }
+                to={auditUrl({
+                  range: "24h",
+                  agent: r.agent_name,
+                  tool: r.tool_name,
+                })}
                 className="grid grid-cols-[64px_84px_minmax(0,1fr)_110px] items-center gap-3 border-t border-border/60 px-5 py-2.5 text-meta first:border-t-0 hover:bg-accent/50"
               >
                 <span className="font-mono text-xs text-muted-foreground">
@@ -523,12 +500,8 @@ export function HomePage() {
           ) : (
             <PanelNote>
               No decisions in the last 24 hours.{" "}
-              <Link
-                to="/audit"
-                // A deep link into an empty project: start from a clean slate.
-                onClick={() => openAudit()}
-                className="text-primary hover:underline"
-              >
+              {/* A deep link into an empty project: a clean slate. */}
+              <Link to={auditUrl()} className="text-primary hover:underline">
                 Getting started
               </Link>
             </PanelNote>

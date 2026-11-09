@@ -23,9 +23,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuditAnomaly, AuditDecisionRow, LlmMessageRow } from "@/lib/api";
 import { useActive } from "@/lib/active";
-import { EMPTY_AUDIT_FILTERS, useAuditFilters } from "@/lib/audit-filters";
+import {
+  type AuditFilters,
+  EMPTY_AUDIT_FILTERS,
+  fromAuditSearch,
+  toAuditSearch,
+  useAuditFilters,
+} from "@/lib/audit-filters";
 import { AuditPage } from "@/routes/Audit";
 import { renderWithProviders } from "@/test/render";
+
+/** The filters Audit last showed in `project` (its URL, mirrored in the
+ * store). */
+const currentFiltersOf = (project: string): AuditFilters =>
+  fromAuditSearch(
+    new URLSearchParams(useAuditFilters.getState().lastSearch[project] ?? ""),
+  ) ?? EMPTY_AUDIT_FILTERS;
+
+const currentFilters = () => currentFiltersOf(PROJECT);
+
+/** Make `patch` the remembered view, which a bare /audit reopens. */
+const seedFilters = (patch: Partial<AuditFilters>) =>
+  useAuditFilters.setState({
+    lastSearch: {
+      [PROJECT]: toAuditSearch({ ...EMPTY_AUDIT_FILTERS, ...patch }).toString(),
+    },
+  });
 
 const PROJECT = "p1";
 
@@ -276,6 +299,12 @@ function stubFetch(
               name: "demo-project",
               created_at: "2026-01-01T00:00:00Z",
             },
+            {
+              id: "p2",
+              org_id: "org-1",
+              name: "other-project",
+              created_at: "2026-01-01T00:00:00Z",
+            },
           ]);
         case `/v1/projects/${PROJECT}/audit/summary`:
           return json(summary);
@@ -336,10 +365,7 @@ describe("AuditPage", () => {
       useActive.setState({ activeOrgId: "org-1", activeProjectId: PROJECT });
       // The filter store is module-global — reset so a filter dialled in
       // by test A doesn't narrow test B's queries.
-      useAuditFilters.setState({
-        filters: EMPTY_AUDIT_FILTERS,
-        tableLimit: 40,
-      });
+      useAuditFilters.setState({ lastSearch: {}, pageKey: "", pageLimit: 40 });
     });
     messageRows = () => MESSAGES;
   });
@@ -413,6 +439,101 @@ describe("AuditPage", () => {
     ).toBe(false);
   });
 
+  it("applies filters carried by the URL, replacing the session's", async () => {
+    seedFilters({ tool: "leftover" });
+    const calls = stubFetch();
+    renderWithProviders(<AuditPage />, {
+      initialRoute: "/audit?range=24h&agent=agent-x",
+    });
+    await waitFor(() => {
+      const f = currentFilters();
+      expect(f.agent).toBe("agent-x");
+      expect(f.range).toBe("24h");
+      expect(f.tool).toBe("");
+    });
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (u) => u.includes("/audit/decisions") && u.includes("agent=agent-x"),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("opens the new project's last view on a project switch", async () => {
+    const calls = stubFetch();
+    useAuditFilters.setState({
+      lastSearch: {
+        p2: toAuditSearch({
+          ...EMPTY_AUDIT_FILTERS,
+          tool: "tool-b",
+        }).toString(),
+      },
+    });
+    renderWithProviders(<AuditPage />, {
+      initialRoute: "/audit?range=24h&agent=agent-a",
+    });
+    await waitFor(() => expect(currentFilters().agent).toBe("agent-a"));
+    act(() => useActive.setState({ activeProjectId: "p2" }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (u) =>
+            u.startsWith("/v1/projects/p2/audit/decisions") &&
+            u.includes("tool=tool-b"),
+        ),
+      ).toBe(true),
+    );
+    // Not even one request runs B with A's filters, and B's view stands.
+    expect(
+      calls.some(
+        (u) => u.startsWith("/v1/projects/p2") && u.includes("agent-a"),
+      ),
+    ).toBe(false);
+    expect(currentFiltersOf("p2").tool).toBe("tool-b");
+    expect(useAuditFilters.getState().lastSearch.p2).not.toContain("agent-a");
+  });
+
+  it("keeps a link's filters over the project's last view", async () => {
+    stubFetch();
+    useAuditFilters.setState({
+      lastSearch: {
+        p1: toAuditSearch({ ...EMPTY_AUDIT_FILTERS, tool: "saved" }).toString(),
+      },
+    });
+    renderWithProviders(<AuditPage />, {
+      initialRoute: "/audit?range=24h&agent=linked",
+    });
+    await waitFor(() => expect(currentFilters().agent).toBe("linked"));
+    expect(currentFilters().tool).toBe("");
+  });
+
+  it("closes the previous project's event on a project switch", async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(<AuditPage />, { initialRoute: "/audit?range=30d" });
+    await openDrawer(user);
+    act(() => useActive.setState({ activeProjectId: "p2" }));
+    await waitFor(() => expect(screen.queryByText("evt-1")).toBeNull());
+    // Coming back doesn't reopen it.
+    act(() => useActive.setState({ activeProjectId: PROJECT }));
+    await screen.findByText("blocked by policy");
+    expect(screen.queryByText("evt-1")).toBeNull();
+  });
+
+  it("a bare /audit reopens the last view", async () => {
+    seedFilters({ agent: "agent-y" });
+    const calls = stubFetch();
+    renderWithProviders(<AuditPage />, { initialRoute: "/audit" });
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (u) => u.includes("/audit/decisions") && u.includes("agent=agent-y"),
+        ),
+      ).toBe(true),
+    );
+  });
+
   it("reads the range in one sentence: total and deny rate", async () => {
     stubFetch();
     renderWithProviders(<AuditPage />);
@@ -427,9 +548,7 @@ describe("AuditPage", () => {
   });
 
   it("does not call a filtered count the project total", async () => {
-    useAuditFilters.setState((st) => ({
-      filters: { ...st.filters, tool: "read_file" },
-    }));
+    seedFilters({ tool: "read_file" });
     stubFetch();
     renderWithProviders(<AuditPage />);
     const header = (await screen.findByRole("heading", { name: "Audit" }))
@@ -482,9 +601,7 @@ describe("AuditPage", () => {
   });
 
   it("keeps the log, not next steps, when a filter empties the range", async () => {
-    useAuditFilters.setState((st) => ({
-      filters: { ...st.filters, tool: "read_file" },
-    }));
+    seedFilters({ tool: "read_file" });
     stubFetch([], "owner", EMPTY_SUMMARY);
     renderWithProviders(<AuditPage />);
     expect(await screen.findByText("Decision log")).toBeInTheDocument();
@@ -537,12 +654,12 @@ describe("AuditPage", () => {
 
     await user.click(bar);
     await waitFor(() => {
-      expect(useAuditFilters.getState().filters.tool).toBe("read_file");
+      expect(currentFilters().tool).toBe("read_file");
     });
 
     await user.click(bar);
     await waitFor(() => {
-      expect(useAuditFilters.getState().filters.tool).toBe("");
+      expect(currentFilters().tool).toBe("");
     });
   });
 
@@ -1015,14 +1132,10 @@ describe("AuditPage", () => {
       const user = userEvent.setup();
 
       act(() => {
-        useAuditFilters.setState({
-          filters: {
-            ...EMPTY_AUDIT_FILTERS,
-            customMode: true,
-            start_date: new Date(2026, 5, 1),
-            end_date: new Date(2026, 5, 15),
-          },
-          tableLimit: 40,
+        seedFilters({
+          customMode: true,
+          start_date: new Date(2026, 5, 1),
+          end_date: new Date(2026, 5, 15),
         });
       });
 
@@ -1038,33 +1151,43 @@ describe("AuditPage", () => {
       await user.click(screen.getByText("7d"));
 
       await waitFor(() => {
-        expect(useAuditFilters.getState().filters.start_date).toBeNull();
-        expect(useAuditFilters.getState().filters.end_date).toBeNull();
+        expect(currentFilters().start_date).toBeNull();
+        expect(currentFilters().end_date).toBeNull();
       });
       expect(
         screen.queryByRole("button", { name: /→/ }),
       ).not.toBeInTheDocument();
     });
 
-    it("dates set in the store render as the formatted range in the picker button", async () => {
-      stubFetch();
+    it("dates picked on the page reach the URL and the queries", async () => {
+      const calls = stubFetch();
       const user = userEvent.setup();
-      renderWithProviders(<AuditPage />);
-
-      await screen.findByText("blocked by policy");
-      await user.click(screen.getByText("Custom"));
-
-      act(() => {
-        useAuditFilters.setState((s) => ({
-          ...s,
-          filters: {
-            ...s.filters,
-            start_date: new Date(2026, 5, 1),
-            end_date: new Date(2026, 5, 15),
-          },
-        }));
+      renderWithProviders(<AuditPage />, {
+        initialRoute: "/audit?range=30d&custom=1",
       });
+      await user.click(await screen.findByRole("button", { name: / → / }));
+      await user.click(within(await screen.findByRole("grid")).getByText("10"));
+      // The calendar re-renders on each pick: find it again.
+      await user.click(within(await screen.findByRole("grid")).getByText("12"));
+      await waitFor(() => {
+        const f = currentFilters();
+        expect(f.start_date?.getDate()).toBe(10);
+        expect(f.end_date?.getDate()).toBe(12);
+      });
+      await waitFor(() =>
+        expect(
+          calls.some(
+            (u) => u.includes("/audit/decisions") && u.includes("start_date="),
+          ),
+        ).toBe(true),
+      );
+    });
 
+    it("dates in the URL render as the formatted range in the picker button", async () => {
+      stubFetch();
+      renderWithProviders(<AuditPage />, {
+        initialRoute: "/audit?range=30d&custom=1&from=2026-06-01&to=2026-06-15",
+      });
       await screen.findByRole("button", { name: /Jun 1, 2026 → Jun 15, 2026/ });
     });
 
@@ -1074,15 +1197,11 @@ describe("AuditPage", () => {
 
       // Seed: custom range + an agent filter so ActiveChips renders
       act(() => {
-        useAuditFilters.setState({
-          filters: {
-            ...EMPTY_AUDIT_FILTERS,
-            customMode: true,
-            agent: "example_agent",
-            start_date: new Date(2026, 5, 1),
-            end_date: new Date(2026, 5, 15),
-          },
-          tableLimit: 40,
+        seedFilters({
+          customMode: true,
+          agent: "example_agent",
+          start_date: new Date(2026, 5, 1),
+          end_date: new Date(2026, 5, 15),
         });
       });
 
@@ -1106,9 +1225,9 @@ describe("AuditPage", () => {
           screen.queryByRole("button", { name: /→/ }),
         ).not.toBeInTheDocument();
       });
-      expect(useAuditFilters.getState().filters.customMode).toBe(false);
-      expect(useAuditFilters.getState().filters.start_date).toBeNull();
-      expect(useAuditFilters.getState().filters.end_date).toBeNull();
+      expect(currentFilters().customMode).toBe(false);
+      expect(currentFilters().start_date).toBeNull();
+      expect(currentFilters().end_date).toBeNull();
     });
 
     it("selecting a preset dismisses the date picker and clears the dates", async () => {
@@ -1128,8 +1247,8 @@ describe("AuditPage", () => {
           screen.queryByRole("button", { name: /→/ }),
         ).not.toBeInTheDocument();
       });
-      expect(useAuditFilters.getState().filters.start_date).toBeNull();
-      expect(useAuditFilters.getState().filters.end_date).toBeNull();
+      expect(currentFilters().start_date).toBeNull();
+      expect(currentFilters().end_date).toBeNull();
     });
   });
 
@@ -1152,9 +1271,9 @@ describe("AuditPage", () => {
       await user.click(await screen.findByText("bob"));
 
       await waitFor(() => {
-        expect(useAuditFilters.getState().filters.user).toBe("bob");
-        expect(useAuditFilters.getState().filters.customMode).toBe(true);
-        expect(useAuditFilters.getState().filters.start_date).not.toBeNull();
+        expect(currentFilters().user).toBe("bob");
+        expect(currentFilters().customMode).toBe(true);
+        expect(currentFilters().start_date).not.toBeNull();
       });
       await waitFor(() => {
         expect(
