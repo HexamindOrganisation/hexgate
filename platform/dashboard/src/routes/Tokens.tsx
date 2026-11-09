@@ -290,6 +290,7 @@ export function TokensPage() {
   return (
     <div className="max-w-[1400px] mx-auto">
       <PageHeader
+        align="start"
         title="API keys"
         description="Long-lived API keys for backend services. Never commit to source control."
         actions={

@@ -107,8 +107,10 @@ export function BansPage() {
 
   return (
     <div className="mx-auto max-w-[1400px] space-y-5">
-      {/* Region A — header */}
+      {/* Region A — header; mb-5 keeps the page's space-y-5 rhythm. */}
       <PageHeader
+        className="mb-5"
+        align="start"
         title="Bans"
         description={
           <>
