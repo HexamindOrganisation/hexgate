@@ -314,10 +314,10 @@ function AgentStatus({
         {online ? (
           <>
             <span className="relative inline-flex size-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-allow opacity-60" />
-              <span className="relative inline-flex size-2 rounded-full bg-allow" />
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-60" />
+              <span className="relative inline-flex size-2 rounded-full bg-success" />
             </span>
-            <span className="text-allow">connected</span>
+            <span className="text-success">connected</span>
           </>
         ) : (
           <>
@@ -630,9 +630,9 @@ function stateIcon(state: ToolCall["state"], className: string) {
 }
 
 function ToolStep({ call }: { call: ToolCall }) {
-  const variant: "allow" | "deny" | "approval" =
+  const variant: "success" | "deny" | "approval" =
     call.state === "completed"
-      ? "allow"
+      ? "success"
       : call.state === "failed"
         ? "deny"
         : "approval";
@@ -755,7 +755,7 @@ function DecisionDeck({
 
 function verdictColor(state: ToolCall["state"]) {
   return state === "completed"
-    ? "text-allow"
+    ? "text-success"
     : state === "failed"
       ? "text-deny"
       : "text-approval";
@@ -932,7 +932,7 @@ function ApprovalPromptCard({
         </Button>
         <Button
           size="sm"
-          className="h-7 gap-1.5 bg-allow text-xs text-white hover:bg-allow/90"
+          className="h-7 gap-1.5 text-xs"
           onClick={() => onDecide(request.decision_id, true)}
         >
           <Check className="size-3" />
