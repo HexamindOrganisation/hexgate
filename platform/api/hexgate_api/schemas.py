@@ -668,12 +668,12 @@ class PolicyChangeOut(BaseModel):
     constraints_removed: list[str] = Field(default_factory=list)
 
 
-class PolicyRoleChangeOut(BaseModel):
-    """An agent-wide field (``guards`` or ``usage``) the drafts change for a role,
-    as its composed JSON value on each side."""
+class PolicyAgentChangeOut(BaseModel):
+    """An agent-level field (``guards`` or ``usage``) the drafts change, as its
+    composed JSON value on each side. One per agent: it is the same on every
+    role."""
 
     agent: str
-    role: str
     key: str  # "guards" | "usage"
     before: dict | None
     after: dict | None
@@ -700,7 +700,7 @@ class PolicyDiffResponse(BaseModel):
     side does not compose, so there was nothing to compare."""
 
     changes: list[PolicyChangeOut] = Field(default_factory=list)
-    role_changes: list[PolicyRoleChangeOut] = Field(default_factory=list)
+    agent_changes: list[PolicyAgentChangeOut] = Field(default_factory=list)
     gate_changes: list[PolicyGateChangeOut] = Field(default_factory=list)
     agents_affected: list[str] = Field(default_factory=list)
     composes: PolicyComposesOut

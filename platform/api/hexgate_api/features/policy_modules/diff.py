@@ -1,4 +1,5 @@
-"""What a set of draft files changes, per (agent, role, tool), before saving.
+"""What a set of draft files would change compared with the saved policy files:
+per (agent, role, tool) grant, per agent for guards, usage and the opt-in gates.
 
 Both sides are the same compose resolution the editor and the compile path use;
 this module only compares them. Only :func:`diff_project` reads the store.
@@ -22,8 +23,8 @@ from hexgate_api.features.policy_modules.service import (
 )
 from hexgate_api.schemas import PolicyFileDraft
 
-# The agent-wide fields compose injects onto every role besides its tools.
-ROLE_KEYS = ("guards", "usage")
+# The agent-level fields compose puts, identically, on every role of an agent.
+AGENT_FIELDS = ("guards", "usage")
 # An agent gate no role declares is off: the runtime lets every caller through.
 OPEN = {"mode": "allow", "constraints": []}
 # The opt-in gates, each on only while some role lists a key of its kind, and the
@@ -167,13 +168,43 @@ def _tool_changes(agent: str, role: str, side_a, side_b, shown) -> list[dict]:
     ]
 
 
-def _field_changes(agent: str, role: str, was: dict, now: dict) -> list[dict]:
-    """The agent-wide fields that differ between two serialized roles."""
+def _field_changes(agent: str, a, b) -> list[dict]:
+    """The agent-level fields that differ between two resolutions. Compose puts
+    the same value on every role, so the ``default`` role speaks for the agent;
+    it is read through the serializer /policy/resolve uses, so a value reads the
+    same there."""
+    from hexgate.security import DEFAULT_ROLE_NAME
+
+    was = roles_json(a, role=DEFAULT_ROLE_NAME)[DEFAULT_ROLE_NAME]
+    now = roles_json(b, role=DEFAULT_ROLE_NAME)[DEFAULT_ROLE_NAME]
     return [
-        {"agent": agent, "role": role, "key": key}
-        | {"before": was.get(key), "after": now.get(key)}
-        for key in ROLE_KEYS
+        {"agent": agent, "key": key, "before": was.get(key), "after": now.get(key)}
+        for key in AGENT_FIELDS
         if was.get(key) != now.get(key)
+    ]
+
+
+def _gate_changes(agent: str, gates: tuple[dict, dict]) -> list[dict]:
+    """The opt-in gates one agent's drafts switch on or off."""
+    gates_a, gates_b = gates
+    return [
+        {"agent": agent, "gate": g, "before": gates_a[g], "after": gates_b[g]}
+        for g in GATES
+        if gates_a[g] != gates_b[g]
+    ]
+
+
+def _diff_agent_tools(agent: str, a, b, gates: tuple[dict, dict]) -> list[dict]:
+    """One agent's tool changes, every role on either side."""
+    gates_a, gates_b = gates
+    agent_keys = _agent_keys(a, b)
+    side_a = (a, _open_keys(gates_a, agent_keys))
+    side_b = (b, _open_keys(gates_b, agent_keys))
+    shown = _shown(gates_a, gates_b)
+    return [
+        change
+        for role in sorted(set(a.by_role) | set(b.by_role))
+        for change in _tool_changes(agent, role, side_a, side_b, shown)
     ]
 
 
@@ -186,49 +217,22 @@ def diff_files(saved: Mapping[str, str], drafted: Mapping[str, str]) -> dict:
     composes = {"before": old is not None, "after": new is not None}
     if old is None or new is None or new is old:
         return _response([], [], [], composes)
-    changes, role_changes, gate_changes = [], [], []
+    changes, agent_changes, gate_changes = [], [], []
     for agent in sorted(set(old) | set(new)):
-        tools, roles, gates = _diff_agent(
-            agent, _resolution_for(old, agent), _resolution_for(new, agent)
-        )
-        changes += tools
-        role_changes += roles
-        gate_changes += gates
-    return _response(changes, role_changes, gate_changes, composes)
+        a, b = _resolution_for(old, agent), _resolution_for(new, agent)
+        gates = _gates(a), _gates(b)
+        changes += _diff_agent_tools(agent, a, b, gates)
+        agent_changes += _field_changes(agent, a, b)
+        gate_changes += _gate_changes(agent, gates)
+    return _response(changes, agent_changes, gate_changes, composes)
 
 
-def _diff_agent(agent: str, a, b) -> tuple[list, list, list]:
-    """One agent's tool, role-field and gate changes between two resolutions."""
-    from hexgate.security import DEFAULT_ROLE_NAME
-
-    gates_a, gates_b = _gates(a), _gates(b)
-    gate_changes = [
-        {"agent": agent, "gate": g, "before": gates_a[g], "after": gates_b[g]}
-        for g in GATES
-        if gates_a[g] != gates_b[g]
-    ]
-    agent_keys = _agent_keys(a, b)
-    side_a = (a, _open_keys(gates_a, agent_keys))
-    side_b = (b, _open_keys(gates_b, agent_keys))
-    shown = _shown(gates_a, gates_b)
-    # The serializer /policy/resolve uses, so a value reads the same there.
-    json_a, json_b = roles_json(a), roles_json(b)
-    changes, role_changes = [], []
-    for role in sorted(set(a.by_role) | set(b.by_role)):
-        changes += _tool_changes(agent, role, side_a, side_b, shown)
-        # A role one side lacks falls back to its `default`, as at runtime.
-        was = json_a.get(role) or json_a[DEFAULT_ROLE_NAME]
-        now = json_b.get(role) or json_b[DEFAULT_ROLE_NAME]
-        role_changes += _field_changes(agent, role, was, now)
-    return changes, role_changes, gate_changes
-
-
-def _response(changes, role_changes, gate_changes, composes) -> dict:
+def _response(changes, agent_changes, gate_changes, composes) -> dict:
     """The wire dict; ``agents_affected`` is every agent the three lists name."""
-    touched = {c["agent"] for c in changes + role_changes + gate_changes}
+    touched = {c["agent"] for c in changes + agent_changes + gate_changes}
     return {
         "changes": changes,
-        "role_changes": role_changes,
+        "agent_changes": agent_changes,
         "gate_changes": gate_changes,
         "agents_affected": sorted(touched),
         "composes": composes,

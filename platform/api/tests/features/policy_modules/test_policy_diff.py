@@ -45,7 +45,7 @@ def test_diff_files_happy_path() -> None:
     assert by_tool["c"]["constraints_added"] == ["(args.n <= 5)"]  # SDK-normalized
     assert out["agents_affected"] == ["bot"]
     assert out["composes"] == {"before": True, "after": True}
-    assert out["role_changes"] == []
+    assert out["agent_changes"] == []
 
 
 def test_when_files_unchanged_then_diff_is_empty() -> None:
@@ -140,7 +140,7 @@ def test_when_admission_is_first_declared_then_other_roles_lose_entry() -> None:
     assert rows == [("default", {"mode": "allow", "constraints": []}, None)]
 
 
-def test_when_only_usage_flips_then_role_change_not_tool_change() -> None:
+def test_when_only_usage_flips_then_one_agent_change_per_agent() -> None:
     body = "        tools: { a: { mode: allow } }\n"
     saved = _entry(body)
     drafted = {
@@ -148,14 +148,17 @@ def test_when_only_usage_flips_then_role_change_not_tool_change() -> None:
     }
     out = diff_files(saved, drafted)
     assert out["changes"] == []
-    # Top-level usage reaches "*" (every undeclared agent) as well as bot.
-    assert [(c["agent"], c["role"], c["key"]) for c in out["role_changes"]] == [
-        ("*", "default", "usage"),
-        ("bot", "default", "usage"),
-        ("bot", "support", "usage"),
+    # Top-level usage reaches "*" (every undeclared agent) and bot, once each,
+    # though bot has two roles: the value is agent-level.
+    assert out["agent_changes"] == [
+        {
+            "agent": agent,
+            "key": "usage",
+            "before": None,
+            "after": {"on_unavailable": "deny"},
+        }
+        for agent in ("*", "bot")
     ]
-    assert out["role_changes"][0]["before"] is None
-    assert out["role_changes"][0]["after"] == {"on_unavailable": "deny"}
     assert out["agents_affected"] == ["*", "bot"]
 
 
@@ -163,6 +166,31 @@ def test_when_draft_does_not_compose_then_composes_after_is_false() -> None:
     out = diff_files(_SHARED, {**_SHARED, "policy.yaml": "import: [ nope.yaml ]\n"})
     assert out["composes"] == {"before": True, "after": False}
     assert out["changes"] == []
+
+
+def test_when_agent_guards_change_then_one_agent_change() -> None:
+    body = "        tools: { a: { mode: allow } }\n"
+    saved = _entry(body)
+    drafted = {
+        "policy.yaml": saved["policy.yaml"].replace(
+            "  bot:\n", "  bot:\n    guards: { secret_guard: { enabled: false } }\n"
+        )
+    }
+    out = diff_files(saved, drafted)
+    assert [(c["agent"], c["key"]) for c in out["agent_changes"]] == [("bot", "guards")]
+    assert out["agent_changes"][0]["after"] == {"secret_guard": {"enabled": False}}
+
+
+def test_every_role_carries_its_agents_guards_and_usage() -> None:
+    # agent_changes reads guards and usage from the default role only, which is
+    # complete because compose puts the agent's one value on every role.
+    entry = _SHARED["policy.yaml"].replace(
+        "  bot:\n", "  bot:\n    guards: { secret_guard: { enabled: false } }\n"
+    )
+    files = {**_SHARED, "policy.yaml": "usage: { on_unavailable: deny }\n" + entry}
+    for result in _resolve(files).values():
+        policies = [result.policy_set.policy_for(r) for r in result.policy_set.roles]
+        assert len({(p.usage, str(p.guards)) for p in policies}) == 1
 
 
 def test_resolved_default_policy_is_always_deny() -> None:

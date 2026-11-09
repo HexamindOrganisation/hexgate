@@ -243,20 +243,22 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
 
     @mcp.tool(annotations=READ_ONLY, structured_output=False)
     async def policy_diff(project_id: str, drafts: list[PolicyDraft]) -> str:
-        """What saving `drafts` (each a whole file by `name`) would change, before
-        saving. `changes` lists only the (agent, role, tool) whose grant differs,
-        with `before`/`after` {mode, constraints}, null when the role cannot
-        reach the tool; a reach is tool "agent:<name>" (or "agent.tool:<name>" /
-        "agent.handoff:<name>" when the two modes change differently), admission
-        is "agent.run", and agent "*" is the view every undeclared agent gets.
-        `role_changes` lists guards and usage changes. `gate_changes` lists the
-        admission, reach, tool_reach and skills checks the drafts switch on or off:
-        each is on only while some role lists a key of its kind (a grant, or a
-        boundary entry), so the first one closes that kind for every other role (as-tool and skill rows appear only
-        while their check is on on both sides). `composes` false on a side
-        means nothing could be compared: run policy_check for why. Refused for a
-        project with no saved `policy.yaml`, including a draft of the first one:
-        there is no saved policy file to compare against."""
+        """What `drafts` (each a whole file by `name`) would change compared with
+        the saved policy files; nothing is saved. `changes` lists only the
+        (agent, role, tool) whose grant differs, with `before`/`after`
+        {mode, constraints}, null when the role cannot reach the tool; a reach is
+        tool "agent:<name>" (or "agent.tool:<name>" / "agent.handoff:<name>" when
+        the two modes change differently), admission is "agent.run", and agent
+        "*" is the view every undeclared agent gets. `agent_changes` lists guards
+        and usage changes, once per agent. `gate_changes` lists the admission,
+        reach, tool_reach and skills checks the drafts switch on or off: each is
+        on only while some role lists a key of its kind (a grant, or a boundary
+        entry), so the first one closes that kind for every other role (as-tool
+        and skill rows appear only while their check is on on both sides).
+        `composes` false on a side means nothing could be compared: run
+        policy_check for why. Refused for a project with no saved `policy.yaml`,
+        including a draft of the first one: there is no saved policy file to
+        compare against."""
         # The API refuses an empty list and a project with no saved policy.yaml
         # (422), and its detail reaches the model as the tool error.
         body = {"drafts": _dump(drafts)}
