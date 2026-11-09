@@ -11,6 +11,11 @@ import type { PolicyFileRead, PolicyLint } from "./api";
 /** The compose entry file — the one the resolver starts from. */
 export const ENTRY_FILE = "policy.yaml";
 
+/** Whether a project composes (has a policy.yaml), so it has a resolved
+ * policy and a matrix to show. */
+export const isModular = (files: { name: string }[] | undefined) =>
+  !!files?.some((f) => f.name === ENTRY_FILE);
+
 /** A file's stable identity is just its full name — keys the per-file draft
  * map, the open-tab list, and the dirty set. */
 export const fileKey = (name: string): string => name;
