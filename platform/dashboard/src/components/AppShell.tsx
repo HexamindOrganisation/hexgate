@@ -45,10 +45,17 @@ import { useLogout, useUser } from "@/lib/auth";
 import { useOrgs } from "@/lib/orgs";
 import { useProjects } from "@/lib/projects";
 import { useUi } from "@/lib/ui";
-import { SCHEMES, schemeAccent, useIsDark, useTheme } from "@/lib/theme";
+import {
+  type Mode,
+  SCHEMES,
+  schemeAccent,
+  useIsDark,
+  useTheme,
+} from "@/lib/theme";
 import { usePresentMode } from "@/lib/present";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 /**
  * Bootstrap effect — runs on every AppShell mount.
@@ -543,7 +550,8 @@ const MODES = [
 ] as const;
 
 /** Appearance picker inside the account menu: mode (light/dark/system) + accent
- * scheme. Plain buttons so a pick doesn't close the menu. */
+ * scheme. A toggle group and plain buttons, not menu items, so a pick doesn't
+ * close the menu. */
 function AppearanceControl() {
   const mode = useTheme((s) => s.mode);
   const scheme = useTheme((s) => s.scheme);
@@ -557,23 +565,21 @@ function AppearanceControl() {
       <div className="text-caption font-semibold uppercase tracking-wider text-muted-foreground">
         Appearance
       </div>
-      <div className="grid grid-cols-3 gap-0.5 rounded-lg bg-muted p-0.5">
+      <ToggleGroup
+        type="single"
+        value={mode}
+        // Radix sends "" when the selected item is clicked again: keep it.
+        onValueChange={(v) => v && setMode(v as Mode)}
+        aria-label="Theme"
+        className="grid w-full grid-cols-3"
+      >
         {MODES.map(([m, Icon, label]) => (
-          <button
-            key={m}
-            type="button"
-            aria-pressed={mode === m}
-            onClick={() => setMode(m)}
-            className={cn(
-              "flex h-7 items-center justify-center gap-1.5 rounded-md text-xs font-medium text-muted-foreground transition-colors hover:text-foreground",
-              mode === m && "bg-card text-foreground shadow-xs",
-            )}
-          >
+          <ToggleGroupItem key={m} value={m} className="px-1">
             <Icon className="size-3.5" />
             {label}
-          </button>
+          </ToggleGroupItem>
         ))}
-      </div>
+      </ToggleGroup>
       <div>
         <div className="mb-1.5 text-xs font-medium text-muted-foreground">
           Accent
