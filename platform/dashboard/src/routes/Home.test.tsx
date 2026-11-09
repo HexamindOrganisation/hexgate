@@ -97,6 +97,16 @@ function stub(overrides: Record<string, unknown> = {}) {
   });
 }
 
+/** Leave `path`'s request hanging; everything else answers as `stub` set. */
+function stall(path: string) {
+  const answer = vi.mocked(window.fetch).getMockImplementation()!;
+  vi.mocked(window.fetch).mockImplementation((input, init) =>
+    new URL(String(input), "http://x").pathname === path
+      ? new Promise(() => {})
+      : answer(input, init),
+  );
+}
+
 describe("HomePage", () => {
   beforeEach(() => {
     act(() => useActive.setState({ activeOrgId: "o1", activeProjectId: "p1" }));
@@ -185,26 +195,34 @@ describe("HomePage", () => {
   });
 
   it("does not call it all clear while signals are still loading", async () => {
+    // Every other signal lands; only the bursts are still on their way.
     stub();
-    vi.mocked(window.fetch).mockImplementation(async (input) => {
-      const path = new URL(String(input), "http://x").pathname;
-      if (path.endsWith("/audit/anomalies")) return new Promise(() => {});
-      const body =
-        path === "/v1/orgs"
-          ? [ORG]
-          : path === "/v1/orgs/o1/projects"
-            ? [PROJECT]
-            : null;
-      return new Response(JSON.stringify(body), {
-        status: body ? 200 : 404,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
+    stall("/v1/projects/p1/audit/anomalies");
     renderWithProviders(<HomePage />);
     expect(await screen.findByText("Checking…")).toBeInTheDocument();
+    await screen.findByText(/last decision/);
+    expect(screen.getByText("Checking…")).toBeInTheDocument();
     expect(
       screen.queryByText("Nothing needs a look right now."),
     ).not.toBeInTheDocument();
+  });
+
+  it("waits for the API keys before calling it all clear", async () => {
+    stub();
+    stall("/v1/projects/p1/tokens");
+    renderWithProviders(<HomePage />);
+    // Summary, bursts and agents have all landed: only the keys are left.
+    await screen.findByText(/sent for approval/);
+    await screen.findByText(/last decision/);
+    expect(screen.getByText("Checking…")).toBeInTheDocument();
+  });
+
+  it("says the list may be incomplete when the keys fail to load", async () => {
+    stub({ "/v1/projects/p1/tokens": undefined });
+    renderWithProviders(<HomePage />);
+    expect(
+      await screen.findByText(/may be incomplete/, {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
   });
 
   it("says so when nothing needs a look", async () => {

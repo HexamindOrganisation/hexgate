@@ -16,7 +16,6 @@ import { burstFilters, rankAnomalies } from "@/components/audit/anomalies";
 import { OUTCOME_SERIES } from "@/components/audit/chart-tokens";
 import { argsPreview } from "@/components/audit/fmt";
 import { OutcomeLabel } from "@/components/audit/pieces";
-import { formatRelative } from "@/components/bans/format";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { type ChartBucket, StackedBars } from "@/components/ui/charts";
@@ -34,10 +33,12 @@ import {
   EMPTY_AUDIT_FILTERS,
   useAuditFilters,
 } from "@/lib/audit-filters";
-import { fmtTokens } from "@/lib/format";
+import { fmtTokens, formatRelative } from "@/lib/format";
+import { useNow } from "@/lib/use-now";
 import { cn } from "@/lib/utils";
 
 const LIVE_MS = 15_000;
+const SUMMARY_MS = 30_000;
 const SLOW_MS = 60_000;
 const STALE_KEY_DAYS = 30;
 const ATTENTION_BURSTS = 2;
@@ -114,13 +115,15 @@ function deriveAttention({
   agents,
   tokens,
   keysFetchedAt,
+  now,
 }: {
   anomalies: AuditAnomaly[];
   totals: AuditSummary["totals"] | undefined;
   agents: AgentManifestView[];
   tokens: TokenListItem[];
   keysFetchedAt: number;
-}): Attention[] {
+  now: number;
+}): { rows: Attention[]; count: number } {
   const out: Attention[] = [];
   const ranked = rankAnomalies(anomalies);
   for (const a of ranked.slice(0, ATTENTION_BURSTS)) {
@@ -134,7 +137,7 @@ function deriveAttention({
           <span className="font-mono">{a.user_id || "(no user id)"}</span>
         </>
       ),
-      sub: `${a.deny} of ${a.all} calls denied · ${formatRelative(a.last_seen)}`,
+      sub: `${a.deny} of ${a.all} calls denied · ${formatRelative(a.last_seen, now)}`,
       cta: "Inspect",
       to: "/audit",
       filters: burstFilters(
@@ -199,7 +202,9 @@ function deriveAttention({
       to: "/tokens",
     });
   }
-  return out;
+  // Each burst counts once; the "N more" row stands for N of them.
+  const more = Math.max(ranked.length - ATTENTION_BURSTS, 0);
+  return { rows: out, count: out.length - (more ? 1 : 0) + more };
 }
 
 export function HomePage() {
@@ -216,7 +221,7 @@ export function HomePage() {
     queryKey: ["audit", "summary", pid, { window: "24h" }],
     enabled: on,
     queryFn: () => api.getAuditSummary({ window: "24h" }, pid!),
-    refetchInterval: 30_000,
+    refetchInterval: SUMMARY_MS,
   });
   const weekQ = useQuery({
     queryKey: ["audit", "ts", pid, { window: "7d" }],
@@ -240,15 +245,18 @@ export function HomePage() {
     queryKey: ["agent-manifests", pid],
     enabled: on,
     queryFn: () => api.listAgentManifests(pid!),
+    refetchInterval: SLOW_MS,
   });
-  // Keys and usage are best-effort: a member without access just doesn't
-  // get those rows.
+  // Any member can read keys, so a failure is a real one: retried once (not
+  // three times, so the panel says so quickly), and polled.
   const tokensQ = useQuery({
     queryKey: ["tokens", pid],
     enabled: on,
     queryFn: () => api.listTokens(pid!),
-    retry: false,
+    retry: 1,
+    refetchInterval: SLOW_MS,
   });
+  // Usage is best-effort: a member without access just doesn't get it.
   const usageQ = useQuery({
     queryKey: ["usage", "summary", pid, { window: "24h" }],
     enabled: on,
@@ -262,7 +270,10 @@ export function HomePage() {
     totals && totals.all ? ((totals.deny / totals.all) * 100).toFixed(1) : null;
   const agents = useMemo(() => agentsQ.data ?? [], [agentsQ.data]);
 
-  const attention = useMemo(
+  // Relative times keep counting while the data stays the same; ticks with
+  // the live feed, and never behind the data just fetched.
+  const now = Math.max(useNow(LIVE_MS), feedQ.dataUpdatedAt);
+  const { rows: attention, count: attentionCount } = useMemo(
     () =>
       deriveAttention({
         anomalies: anomaliesQ.data ?? [],
@@ -270,20 +281,22 @@ export function HomePage() {
         agents,
         tokens: tokensQ.data ?? [],
         keysFetchedAt: tokensQ.dataUpdatedAt,
+        now,
       }),
-    [anomaliesQ.data, totals, agents, tokensQ.data, tokensQ.dataUpdatedAt],
+    [anomaliesQ.data, totals, agents, tokensQ.data, tokensQ.dataUpdatedAt, now],
   );
-  // Each burst counts once; the "N more" row stands for N of them.
-  const attentionCount =
-    attention.length -
-    (attention.some((t) => t.key === "anomaly-more") ? 1 : 0) +
-    Math.max((anomaliesQ.data?.length ?? 0) - ATTENTION_BURSTS, 0);
   // Attention needs the signals that can raise an alarm; until they land
   // (or if they fail) it must not claim the coast is clear.
   const attentionPending =
-    anomaliesQ.isPending || summaryQ.isPending || agentsQ.isPending;
+    anomaliesQ.isPending ||
+    summaryQ.isPending ||
+    agentsQ.isPending ||
+    tokensQ.isPending;
   const attentionFailed =
-    anomaliesQ.isError || summaryQ.isError || agentsQ.isError;
+    anomaliesQ.isError ||
+    summaryQ.isError ||
+    agentsQ.isError ||
+    tokensQ.isError;
 
   // 7d comes back in 6-hour buckets; roll them up to UTC days (the window
   // touches 8 of them, the first and last partly).
@@ -346,7 +359,7 @@ export function HomePage() {
                 {scope.projectName}
               </span>
               {lastDecision && (
-                <> · last decision {formatRelative(lastDecision)}</>
+                <> · last decision {formatRelative(lastDecision, now)}</>
               )}
             </>
           )
@@ -357,7 +370,8 @@ export function HomePage() {
               <Link to="/policies">Edit policies</Link>
             </Button>
             <Button asChild className="gap-1.5">
-              <Link to="/audit" onClick={() => openAudit()}>
+              {/* Reopens Audit as the user left it; only deep links reset. */}
+              <Link to="/audit">
                 <ScrollText className="size-4" />
                 Open audit
               </Link>
@@ -501,11 +515,19 @@ export function HomePage() {
               <Link
                 key={r.event_id}
                 to="/audit"
-                onClick={() => openAudit({ range: "24h" })}
+                // Audit can't select one event from a link yet; narrow it to
+                // this call's agent and tool so the row is near the top.
+                onClick={() =>
+                  openAudit({
+                    range: "24h",
+                    agent: r.agent_name,
+                    tool: r.tool_name,
+                  })
+                }
                 className="grid grid-cols-[64px_84px_minmax(0,1fr)_110px] items-center gap-3 border-t border-border/60 px-5 py-2.5 text-meta first:border-t-0 hover:bg-accent/50"
               >
                 <span className="font-mono text-xs text-muted-foreground">
-                  {formatRelative(r.occurred_at)}
+                  {formatRelative(r.occurred_at, now)}
                 </span>
                 <OutcomeLabel d={r.outcome} />
                 <span className="truncate font-mono">
@@ -524,6 +546,7 @@ export function HomePage() {
               No decisions in the last 24 hours.{" "}
               <Link
                 to="/audit"
+                // A deep link into an empty project: start from a clean slate.
                 onClick={() => openAudit()}
                 className="text-primary hover:underline"
               >
