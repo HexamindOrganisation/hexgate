@@ -53,8 +53,9 @@ export interface AgentSelection {
    *  first-agent fallback. Callers can surface an "agent not found in
    *  this project" banner instead of silently misrouting the user. */
   fromUrl: boolean;
-  /** Called by the picker's onChange — updates ?agent= via ``replace``
-   *  so picker clicks don't pollute the back-button trail. */
+  /** Updates ?agent= via ``replace`` so a pick doesn't pollute the
+   *  back-button trail (a picker built from links passes ``replace``
+   *  itself). */
   set: (name: string) => void;
   /** The raw ``?agent=`` URL value, unchanged. ``null`` when the URL
    *  has no such param. Useful for "you asked for X but we're showing

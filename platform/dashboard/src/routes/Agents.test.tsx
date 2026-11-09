@@ -12,7 +12,7 @@ import { useActive } from "@/lib/active";
 import { EMPTY_AUDIT_FILTERS, useAuditFilters } from "@/lib/audit-filters";
 import type { GuardDefinition, SkillDefinition } from "@/lib/api";
 import { AgentsPage } from "@/routes/Agents";
-import { renderWithProviders } from "@/test/render";
+import { makeQueryClient, renderWithProviders } from "@/test/render";
 
 const PROJECT = "p1";
 
@@ -66,7 +66,11 @@ function withGuards(guards: GuardDefinition[] | null) {
   return { ...MANIFEST, manifest: { ...MANIFEST.manifest, guards } };
 }
 
-function stubFetch(role: string, manifest: unknown = MANIFEST) {
+function stubFetch(
+  role: string,
+  manifest: unknown = MANIFEST,
+  summary: "ok" | "error" = "ok",
+) {
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), {
       status: 200,
@@ -101,6 +105,7 @@ function stubFetch(role: string, manifest: unknown = MANIFEST) {
             ? new Response("boom", { status: 500 })
             : json([manifest]);
         case `/v1/projects/${PROJECT}/audit/summary`:
+          if (summary === "error") return new Response("boom", { status: 500 });
           return json({
             totals: { all: 15, allow: 10, deny: 4, needs_approval: 1 },
             by_agent: [
@@ -169,12 +174,38 @@ describe("AgentsPage — ban tie-in", () => {
     expect(screen.getByText("4")).toBeInTheDocument();
   });
 
+  it("lists each agent as a link to its own view", async () => {
+    stubFetch("admin");
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    const nav = await screen.findByRole("navigation", { name: "Agents" });
+    expect(
+      await within(nav).findByRole("link", { name: /support_bot/ }),
+    ).toHaveAttribute("href", "/agents?agent=support_bot");
+  });
+
+  it("marks the counts as old when a refresh fails", async () => {
+    stubFetch("admin", MANIFEST, "error");
+    const client = makeQueryClient();
+    // A summary that loaded earlier; the next poll fails.
+    client.setQueryData(["audit", "summary", PROJECT, { window: "24h" }], {
+      totals: { all: 15, allow: 10, deny: 4, needs_approval: 1 },
+      by_agent: [
+        { key: "support_bot", all: 15, allow: 10, deny: 4, needs_approval: 1 },
+      ],
+      by_role: [],
+      by_tool: [],
+      by_user: [],
+    });
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents", client });
+    expect(await screen.findByText(/Couldn't refresh/)).toBeInTheDocument();
+    expect(screen.getByText(/15 calls in 24h/)).toBeInTheDocument();
+  });
+
   it("does not claim there are no agents while the project resolves", async () => {
     vi.spyOn(window, "fetch").mockImplementation(() => new Promise(() => {}));
     renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
     expect(await screen.findByText("Loading agents…")).toBeInTheDocument();
-    expect(screen.queryByText("No agents yet.")).not.toBeInTheDocument();
-    expect(screen.queryByText("No agents to inspect.")).not.toBeInTheDocument();
+    expect(screen.queryByText(/No agents yet/)).not.toBeInTheDocument();
   });
 
   it("says when agents couldn't load instead of claiming there are none", async () => {

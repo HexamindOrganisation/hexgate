@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAgentSelection } from "@/lib/agent_param";
 import {
@@ -29,7 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { useAuditFilters } from "@/lib/audit-filters";
-import { useAuditSummary24h } from "@/lib/audit-summary";
+import { useAgentActivity24h } from "@/lib/audit-summary";
 import { pluralise } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -58,23 +57,13 @@ export function AgentsPage() {
   // resetOn=projectId means the URL clears on a real project change,
   // but NOT on the initial mount — so /agents?agent=beta from an
   // incoming link isn't stomped before the user sees it.
-  const { selected: selectedName, set: setSelected } = useAgentSelection(
-    manifests.data,
-    { resetOn: scope.projectId },
-  );
+  const { selected: selectedName } = useAgentSelection(manifests.data, {
+    resetOn: scope.projectId,
+  });
 
   const active = manifests.data?.find((m) => m.name === selectedName);
   // 24h activity per agent; shares Home's cache entry.
-  const summary = useAuditSummary24h(scope.projectId, { poll: true });
-  const byAgent = useMemo(
-    () => new Map(summary.data?.by_agent.map((r) => [r.key, r])),
-    [summary.data],
-  );
-  // null until the summary lands; an agent absent from it had no calls.
-  const activityOf = (name: string) =>
-    summary.data
-      ? (byAgent.get(name) ?? { all: 0, deny: 0, needs_approval: 0 })
-      : null;
+  const { summary, activityOf } = useAgentActivity24h(scope.projectId);
   const activeActivity = active ? activityOf(active.name) : null;
   const openAudit = useAuditFilters((st) => st.openAudit);
   const canManageBans = useCanManageBans();
@@ -110,16 +99,19 @@ export function AgentsPage() {
               <div className="px-4 py-5 text-meta text-muted-foreground">
                 Couldn't load agents.
               </div>
-            ) : (manifests.data ?? []).length ? (
-              (manifests.data ?? []).map((a) => {
+            ) : manifests.data?.length ? (
+              manifests.data.map((a) => {
                 const calls = activityOf(a.name)?.all;
                 const on = a.name === selectedName;
+                // A link, so an agent opens in a new tab or is shared.
                 return (
-                  <button
+                  <Link
                     key={a.name}
-                    type="button"
+                    to={`/agents?agent=${encodeURIComponent(a.name)}`}
+                    // Picking an agent replaces the entry, so Back leaves
+                    // the page rather than stepping through each pick.
+                    replace
                     aria-current={on || undefined}
-                    onClick={() => setSelected(a.name)}
                     className={cn(
                       "flex flex-col gap-1 border-t border-border/60 px-4 py-3 text-left transition-colors first:border-t-0 hover:bg-accent/50",
                       on && "bg-primary/10 hover:bg-primary/10",
@@ -141,7 +133,7 @@ export function AgentsPage() {
                       {calls !== undefined &&
                         ` · ${pluralise(calls, "call")} in 24h`}
                     </span>
-                  </button>
+                  </Link>
                 );
               })
             ) : (
@@ -156,7 +148,7 @@ export function AgentsPage() {
           </nav>
         </Card>
 
-        {active ? (
+        {active && (
           <div className="space-y-4">
             <Card className="p-5">
               <div className="flex flex-wrap items-start gap-4">
@@ -249,31 +241,27 @@ export function AgentsPage() {
                   Couldn't load the last 24 hours of activity.
                 </p>
               ) : (
-                activeActivity && (
+                <>
+                  {/* Always laid out (dashes while loading), so the card
+                      doesn't grow when the numbers land. */}
                   <div className="mt-4 grid grid-cols-3 border-t border-border/60 pt-4 text-meta">
-                    {(
-                      [
-                        {
-                          label: "Calls · 24h",
-                          value: activeActivity.all,
-                          className: "",
-                        },
-                        {
-                          label: "Denied",
-                          value: activeActivity.deny,
-                          className: "text-deny",
-                        },
-                        {
-                          label: "Sent for approval",
-                          value: activeActivity.needs_approval,
-                          className: "text-approval",
-                        },
-                      ] satisfies {
-                        label: string;
-                        value: number;
-                        className: string;
-                      }[]
-                    ).map((stat) => (
+                    {[
+                      {
+                        label: "Calls · 24h",
+                        value: activeActivity?.all,
+                        className: "",
+                      },
+                      {
+                        label: "Denied",
+                        value: activeActivity?.deny,
+                        className: "text-deny",
+                      },
+                      {
+                        label: "Sent for approval",
+                        value: activeActivity?.needs_approval,
+                        className: "text-approval",
+                      },
+                    ].map((stat) => (
                       <div key={stat.label}>
                         <div className="text-muted-foreground">
                           {stat.label}
@@ -284,23 +272,22 @@ export function AgentsPage() {
                             stat.className,
                           )}
                         >
-                          {stat.value.toLocaleString()}
+                          {stat.value?.toLocaleString() ?? "—"}
                         </div>
                       </div>
                     ))}
                   </div>
-                )
+                  {summary.isError && (
+                    // A later poll failed: say the numbers may be old.
+                    <p className="mt-2 text-meta text-muted-foreground">
+                      Couldn't refresh; these are the last counts loaded.
+                    </p>
+                  )}
+                </>
               )}
             </Card>
             <ManifestView agent={active} />
           </div>
-        ) : (
-          manifests.isSuccess &&
-          manifests.data.length > 0 && (
-            <Card className="grid place-items-center p-12 text-sm text-muted-foreground">
-              No agents to inspect.
-            </Card>
-          )
         )}
       </div>
     </div>
