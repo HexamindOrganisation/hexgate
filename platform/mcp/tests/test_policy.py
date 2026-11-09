@@ -57,7 +57,7 @@ ANSWERS = {
     },
     ("POST", "/policy/diff"): {
         "changes": [],
-        "role_changes": [],
+        "agent_changes": [],
         "gate_changes": [],
         "agents_affected": [],
         "composes": {"before": True, "after": True},
