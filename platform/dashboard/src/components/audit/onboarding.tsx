@@ -24,53 +24,41 @@ export function AuditOnboarding({ onWiden }: { onWiden?: () => void }) {
           </p>
         </div>
         <ol className="flex flex-col gap-4">
-          <li className="flex gap-3">
-            <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border text-xs font-semibold">
-              1
-            </span>
-            <div className="flex-1">
-              <div className="text-sm font-semibold">Create an API key</div>
-              <p className="mt-0.5 text-meta text-muted-foreground">
-                It scopes the SDK to this project.
-              </p>
-              <Button asChild size="sm" className="mt-2.5 gap-1.5">
-                <Link to="/tokens">
-                  <KeyRound className="size-3.5" />
-                  API keys
+          <Step
+            n={1}
+            title="Create an API key"
+            desc="It scopes the SDK to this project."
+          >
+            <Button asChild size="sm" className="mt-2.5 gap-1.5">
+              <Link to="/tokens">
+                <KeyRound className="size-3.5" />
+                API keys
+              </Link>
+            </Button>
+          </Step>
+          <Step
+            n={2}
+            title="Run one gated tool call"
+            desc="From your agent with the key set, or from the Playground."
+          >
+            <div className="mt-2.5 flex flex-wrap gap-2">
+              <Button asChild size="sm" variant="outline" className="gap-1.5">
+                <Link to="/playground">
+                  <MessageSquareCode className="size-3.5" />
+                  Open Playground
                 </Link>
               </Button>
+              <Button asChild size="sm" variant="ghost">
+                <a
+                  href={docsUrl(DOC_PATHS.tokens)}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Read the docs
+                </a>
+              </Button>
             </div>
-          </li>
-          <li className="flex gap-3">
-            <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border text-xs font-semibold">
-              2
-            </span>
-            <div className="flex-1">
-              <div className="text-sm font-semibold">
-                Run one gated tool call
-              </div>
-              <p className="mt-0.5 text-meta text-muted-foreground">
-                From your agent with the key set, or from the Playground.
-              </p>
-              <div className="mt-2.5 flex flex-wrap gap-2">
-                <Button asChild size="sm" variant="outline" className="gap-1.5">
-                  <Link to="/playground">
-                    <MessageSquareCode className="size-3.5" />
-                    Open Playground
-                  </Link>
-                </Button>
-                <Button asChild size="sm" variant="ghost">
-                  <a
-                    href={docsUrl(DOC_PATHS.tokens)}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Read the docs
-                  </a>
-                </Button>
-              </div>
-            </div>
-          </li>
+          </Step>
         </ol>
         {onWiden && (
           <button
@@ -95,5 +83,31 @@ export function AuditOnboarding({ onWiden }: { onWiden?: () => void }) {
         </pre>
       </div>
     </Card>
+  );
+}
+
+/** One numbered next step: its title, a line on why, and its actions. */
+function Step({
+  n,
+  title,
+  desc,
+  children,
+}: {
+  n: number;
+  title: string;
+  desc: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <li className="flex gap-3">
+      <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border text-xs font-semibold">
+        {n}
+      </span>
+      <div className="flex-1">
+        <div className="text-sm font-semibold">{title}</div>
+        <p className="mt-0.5 text-meta text-muted-foreground">{desc}</p>
+        {children}
+      </div>
+    </li>
   );
 }

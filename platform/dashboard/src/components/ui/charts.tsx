@@ -8,12 +8,12 @@
 
 import { useState } from "react";
 
-/** One stacked series: colours for SVG strokes/fills plus the Tailwind
- * class used for legend swatches. */
+/** One stacked series: its CSS colour plus the Tailwind class used for
+ * legend swatches. */
 export interface ChartSeries {
   key: string;
   label: string;
-  /** CSS colour for SVG stroke/fill attributes. */
+  /** CSS colour, painted as the segment's background. */
   color: string;
   /** Tailwind background class for legend dots (static — the scanner
    * can't see interpolated class names). */
@@ -77,10 +77,13 @@ export function StackedBars({
   buckets,
   series,
   height = 200,
+  bucketMinutes,
 }: {
   buckets: ChartBucket[];
   series: ChartSeries[];
   height?: number;
+  /** Width of each bucket; read from the labels when not given. */
+  bucketMinutes?: number;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const max = Math.max(...buckets.map((b) => b.total), 1);
@@ -93,22 +96,33 @@ export function StackedBars({
       ...new Set(Array.from({ length: want }, (_, i) => Math.round(i * step))),
     ];
   })();
-  // Sub-day buckets over several days tick by date; the tooltip always
-  // carries the full time.
+  // Sub-day ticks say as much as it takes to tell them apart: minutes
+  // when buckets are shorter than an hour, the date too when the chart
+  // covers more than a day. The tooltip always carries the full time.
   const spansDays =
     buckets.length > 1 &&
     +buckets.at(-1)!.label - +buckets[0].label > 30 * 36e5;
+  const width =
+    bucketMinutes ??
+    (buckets.length > 1 ? (+buckets[1].label - +buckets[0].label) / 6e4 : 60);
+  const clock = (d: Date) =>
+    d
+      .toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: width < 60 ? "2-digit" : undefined,
+        hour12: true,
+      })
+      .replace(" ", "")
+      .toLowerCase();
+  // Day buckets start at UTC midnight, so they're dated in UTC.
+  const date = (d: Date, timeZone?: string) =>
+    d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone });
   const tick = (b: ChartBucket) =>
-    b.mode === "hour" && !spansDays
-      ? b.label
-          .toLocaleTimeString("en-US", { hour: "numeric", hour12: true })
-          .replace(" ", "")
-          .toLowerCase()
-      : b.label.toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-          timeZone: b.mode === "day" ? "UTC" : undefined,
-        });
+    b.mode === "day"
+      ? date(b.label, "UTC")
+      : spansDays
+        ? `${date(b.label)}, ${clock(b.label)}`
+        : clock(b.label);
   const full = (b: ChartBucket) =>
     b.mode === "hour"
       ? b.label.toLocaleString("en-US", {

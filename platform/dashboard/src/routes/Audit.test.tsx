@@ -36,6 +36,15 @@ const counts = (all: number, allow: number, deny: number, appr = 0) => ({
   needs_approval: appr,
 });
 
+/** A range with nothing recorded. */
+const EMPTY_SUMMARY = {
+  totals: counts(0, 0, 0),
+  by_agent: [],
+  by_role: [],
+  by_tool: [],
+  by_user: [],
+};
+
 const SUMMARY = {
   totals: counts(10, 6, 4),
   by_agent: [
@@ -431,14 +440,36 @@ describe("AuditPage", () => {
     expect(header).not.toHaveTextContent("for demo-project");
   });
 
-  it("shows next steps instead of zeros when the range holds nothing", async () => {
-    stubFetch([], "owner", {
-      totals: counts(0, 0, 0),
-      by_agent: [],
-      by_role: [],
-      by_tool: [],
-      by_user: [],
+  it("titles the chart with the server's bucket width", async () => {
+    stubFetch();
+    // The first point is off the grid: a guess from the first gap would be
+    // wrong; the width the server sends is not.
+    const answer = vi.mocked(window.fetch).getMockImplementation()!;
+    vi.mocked(window.fetch).mockImplementation(async (input, init) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path !== `/v1/projects/${PROJECT}/audit/timeseries`)
+        return answer(input, init);
+      const point = (bucket: string) => ({
+        bucket,
+        bucket_minutes: 1440,
+        allow: 1,
+        deny: 0,
+        needs_approval: 0,
+      });
+      return new Response(
+        JSON.stringify([
+          point("2026-10-01T07:13:00Z"),
+          point("2026-10-02T00:00:00Z"),
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
     });
+    renderWithProviders(<AuditPage />);
+    expect(await screen.findByText(/Decisions per day/)).toBeInTheDocument();
+  });
+
+  it("shows next steps instead of zeros when the range holds nothing", async () => {
+    stubFetch([], "owner", EMPTY_SUMMARY);
     renderWithProviders(<AuditPage />);
     expect(
       await screen.findByText("No decisions in this range"),
@@ -454,13 +485,7 @@ describe("AuditPage", () => {
     useAuditFilters.setState((st) => ({
       filters: { ...st.filters, tool: "read_file" },
     }));
-    stubFetch([], "owner", {
-      totals: counts(0, 0, 0),
-      by_agent: [],
-      by_role: [],
-      by_tool: [],
-      by_user: [],
-    });
+    stubFetch([], "owner", EMPTY_SUMMARY);
     renderWithProviders(<AuditPage />);
     expect(await screen.findByText("Decision log")).toBeInTheDocument();
     expect(

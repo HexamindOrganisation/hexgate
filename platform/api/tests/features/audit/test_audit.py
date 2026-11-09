@@ -869,6 +869,7 @@ def test_timeseries_fills_empty_buckets_across_the_window() -> None:
     assert by_t[datetime(2026, 10, 2, 12, tzinfo=timezone.utc)]["allow"] == 5
     assert by_t[datetime(2026, 10, 1, 12, tzinfo=timezone.utc)] == {
         "bucket": datetime(2026, 10, 1, 12, tzinfo=timezone.utc),
+        "bucket_minutes": 360,
         "allow": 0,
         "deny": 0,
         "needs_approval": 0,
@@ -897,6 +898,23 @@ def test_timeseries_stamps_naive_driver_datetimes_as_utc() -> None:
     assert all(p["bucket"].tzinfo is not None for p in pts)
     steps = {(b["bucket"] - a["bucket"]).total_seconds() for a, b in zip(pts, pts[1:])}
     assert steps == {6 * 3600}
+
+
+def test_timeseries_points_carry_the_bucket_width() -> None:
+    # Even a point off the grid says how wide the series' buckets are.
+    client = _timeseries_client()
+    start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    client.query.return_value.result_rows = [
+        (datetime(2026, 10, 1, 7, 13), "deny", 1),
+    ]
+    pts = audit.timeseries(
+        client,
+        project_id="p1",
+        since_hours=24,
+        start_date=start,
+        end_date=start + timedelta(days=30),
+    )
+    assert {p["bucket_minutes"] for p in pts} == {1440}
 
 
 def test_timeseries_does_not_fill_buckets_that_have_not_started() -> None:

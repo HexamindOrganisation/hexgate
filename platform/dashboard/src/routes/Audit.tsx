@@ -516,11 +516,11 @@ export function AuditPage() {
       }
     : ZERO_COUNTS;
 
-  // The server returns every bucket in the window (empty ones as zeros), so
-  // the width is the gap between any two neighbours.
-  // null with fewer than two buckets: too few to tell the width.
+  // The server says how wide its buckets are (an older one doesn't: then
+  // the gap between neighbours); null when there's nothing to tell by.
   const bucketMinutes = useMemo(() => {
     const d = tsQ.data;
+    if (d?.[0]?.bucket_minutes) return d[0].bucket_minutes;
     if (!d || d.length < 2) return null;
     return Math.round((+new Date(d[1].bucket) - +new Date(d[0].bucket)) / 6e4);
   }, [tsQ.data]);
@@ -569,14 +569,7 @@ export function AuditPage() {
   const rangeTotal = options?.totals.all ?? 0;
   // Filters that narrow the summary (outcome only narrows the log).
   const scopeFiltered = !!(f.agent || f.role || f.tool || f.user);
-  const hasFilters = !!(
-    f.agent ||
-    f.role ||
-    f.tool ||
-    f.user ||
-    f.outcome ||
-    f.start_date
-  );
+  const hasFilters = scopeFiltered || !!(f.outcome || f.start_date);
   // Nothing recorded in the range and nothing filtered out: show next steps
   // instead of a wall of zeros.
   const showOnboarding = optionsQ.isSuccess && rangeTotal === 0 && !hasFilters;
@@ -732,19 +725,13 @@ export function AuditPage() {
                   active: f.outcome === "allow",
                 },
               ]}
-              split={[
-                { key: "deny", value: counts.deny, className: OUT_SWATCH.deny },
-                {
-                  key: "needs_approval",
-                  value: counts.needs_approval,
-                  className: OUT_SWATCH.needs_approval,
-                },
-                {
-                  key: "allow",
-                  value: counts.allow,
-                  className: OUT_SWATCH.allow,
-                },
-              ]}
+              split={(["deny", "needs_approval", "allow"] as const).map(
+                (key) => ({
+                  key,
+                  value: counts[key],
+                  className: OUT_SWATCH[key],
+                }),
+              )}
             />
 
             {!!anomaliesQ.data?.length && (
@@ -795,7 +782,11 @@ export function AuditPage() {
                   </div>
                 </div>
                 {days.some((d) => d.total > 0) ? (
-                  <StackedBars buckets={days} series={OUTCOME_SERIES} />
+                  <StackedBars
+                    buckets={days}
+                    series={OUTCOME_SERIES}
+                    bucketMinutes={bucketMinutes ?? undefined}
+                  />
                 ) : (
                   <div className="flex h-52 items-center justify-center text-meta text-muted-foreground">
                     No decisions in this range.

@@ -429,6 +429,8 @@ export interface AuditSummary {
 /** One time bucket; `bucket` is an ISO string. */
 export interface AuditTimeseriesPoint {
   bucket: string;
+  /** Width of every bucket in the series, in minutes. */
+  bucket_minutes: number;
   allow: number;
   deny: number;
   needs_approval: number;

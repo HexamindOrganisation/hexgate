@@ -575,8 +575,9 @@ def timeseries(
 ) -> list[dict]:
     """Per-bucket outcome counts, ordered by bucket, one point for every
     bucket in the window (empty ones as zeros), so a quiet stretch reads as a
-    gap and the client never has to re-derive the bucketing. Returns
-    ``[{bucket, allow, deny, needs_approval}]``."""
+    gap. Each point carries the bucket width, so the client never has to
+    re-derive the bucketing. Returns
+    ``[{bucket, bucket_minutes, allow, deny, needs_approval}]``."""
     where, params = _scope(
         project_id,
         since_hours,
@@ -605,8 +606,7 @@ def timeseries(
         # The driver returns DateTime64(3, 'UTC') as a NAIVE datetime holding
         # UTC; stamp it, or timestamp() reads it in the host's local zone and
         # the JSON carries no offset.
-        if t.tzinfo is None:
-            t = t.replace(tzinfo=timezone.utc)
+        t = _as_utc(t)
         point = points.setdefault(int(t.timestamp()), {"bucket": t, **_zero_outcomes()})
         if outcome in point:
             point[outcome] = int(n)
@@ -625,9 +625,7 @@ def _fill_buckets(
     the query found nothing. Stops at now: a bucket that hasn't started is not
     a quiet one. Points outside the grid are kept, never dropped."""
     step = bucket_minutes * 60
-    start, end = (
-        d if d.tzinfo else d.replace(tzinfo=timezone.utc) for d in (start, end)
-    )
+    start, end = _as_utc(start), _as_utc(end)
     t = int(start.timestamp()) // step * step
     last = int(min(end, datetime.now(timezone.utc)).timestamp())
     while t <= last:
@@ -636,7 +634,12 @@ def _fill_buckets(
             {"bucket": datetime.fromtimestamp(t, timezone.utc), **_zero_outcomes()},
         )
         t += step
-    return [points[k] for k in sorted(points)]
+    return [{**points[k], "bucket_minutes": bucket_minutes} for k in sorted(points)]
+
+
+def _as_utc(d: datetime) -> datetime:
+    """``d``, read as UTC when it carries no zone."""
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
 
 
 # run_id rides along so the detail drawer can scope the transcript read for

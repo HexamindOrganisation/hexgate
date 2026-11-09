@@ -988,6 +988,8 @@ class AuditTimeseriesPoint(BaseModel):
     """One time bucket of the outcome-over-time chart."""
 
     bucket: datetime
+    # Width of every bucket in the series, so the client never guesses it.
+    bucket_minutes: int
     allow: int = 0
     deny: int = 0
     needs_approval: int = 0
