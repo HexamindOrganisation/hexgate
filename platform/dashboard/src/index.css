@@ -209,7 +209,7 @@
 /* ── Accent scheme ─────────────────────────────────────────────────────────
    The scheme axis only swaps the accent (--primary/--ring); the mode axis
    above owns every neutral and decision colour. Applied via `data-scheme` on
-   <html>; blue is the :root/.dark default. Keep in sync with SCHEME_ACCENTS
+   <html>; blue is the :root/.dark default. Keep in sync with SCHEMES
    in lib/theme.ts. No red, amber or green: those mean deny, approval and
    connected, and no grey: allow is grey. */
 [data-scheme="violet"] {
