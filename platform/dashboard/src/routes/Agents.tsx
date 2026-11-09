@@ -3,7 +3,7 @@ import { useAgentSelection } from "@/lib/agent_param";
 import {
   Ban,
   BookOpen,
-  Bot,
+  ScrollText,
   FileText,
   ShieldCheck,
   Wrench,
@@ -24,6 +24,13 @@ import { Badge } from "@/components/ui/badge";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { DocsLink } from "@/components/DocsLink";
 import { DOC_PATHS } from "@/lib/docs";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
+import { useAuditFilters } from "@/lib/audit-filters";
+import { useAgentActivity24h } from "@/lib/audit-summary";
+import { pluralise } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 /**
  * /agents — read-only manifest view.
@@ -50,12 +57,15 @@ export function AgentsPage() {
   // resetOn=projectId means the URL clears on a real project change,
   // but NOT on the initial mount — so /agents?agent=beta from an
   // incoming link isn't stomped before the user sees it.
-  const { selected: selectedName, set: setSelected } = useAgentSelection(
-    manifests.data,
-    { resetOn: scope.projectId },
-  );
+  const { selected: selectedName } = useAgentSelection(manifests.data, {
+    resetOn: scope.projectId,
+  });
 
   const active = manifests.data?.find((m) => m.name === selectedName);
+  // 24h activity per agent; shares Home's cache entry.
+  const { summary, activityOf } = useAgentActivity24h(scope.projectId);
+  const activeActivity = active ? activityOf(active.name) : null;
+  const openAudit = useAuditFilters((st) => st.openAudit);
   const canManageBans = useCanManageBans();
 
   if (scope.status === "no-project") {
@@ -63,50 +73,220 @@ export function AgentsPage() {
   }
 
   return (
-    <div className="-mx-8 -my-6 h-[calc(100vh-56px)] flex flex-col overflow-hidden">
-      <header className="flex items-center gap-3 px-6 py-3 border-b border-border bg-card">
-        <Bot className="size-4 text-muted-foreground" />
-        <span className="text-sm font-medium">Agents</span>
-        <AgentPicker
-          agents={manifests.data ?? []}
-          value={selectedName}
-          onChange={setSelected}
-          loading={manifests.isLoading}
-        />
-        <div className="flex-1" />
-        <DocsLink
-          path={DOC_PATHS.registerAgent}
-          label="register an agent →"
-          compact
-        />
-        {active && (
-          <div className="flex items-center gap-4">
-            <Link
-              to={`/policies?agent=${encodeURIComponent(active.name)}`}
-              className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1.5"
-            >
-              <ShieldCheck className="size-3" />
-              edit policy →
-            </Link>
-            {canManageBans && (
-              <Link
-                to={`/bans?ban_agent=${encodeURIComponent(active.name)}`}
-                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-destructive"
-              >
-                <Ban className="size-3" />
-                ban agent →
-              </Link>
-            )}
-          </div>
-        )}
-      </header>
+    <div className="mx-auto max-w-[1240px]">
+      <PageHeader
+        title="Agents"
+        description={
+          <>
+            Manifests registered from the SDK with{" "}
+            <span className="font-mono text-foreground">hexgate register</span>.
+            Read-only here; policy lives in Policies.
+          </>
+        }
+        actions={
+          <DocsLink path={DOC_PATHS.registerAgent} label="Register an agent" />
+        }
+      />
 
-      <div className="flex-1 overflow-y-auto px-8 py-6 scrollbar-thin">
-        {active ? (
-          <ManifestView agent={active} />
-        ) : (
-          <div className="h-full grid place-items-center text-sm text-muted-foreground">
-            {manifests.isLoading ? "Loading agents…" : "No agents to inspect."}
+      <div className="grid items-start gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+        <Card className="overflow-hidden p-0">
+          <nav aria-label="Agents" className="flex flex-col">
+            {manifests.isPending ? (
+              <div className="px-4 py-5 text-meta text-muted-foreground">
+                Loading agents…
+              </div>
+            ) : manifests.isError && !manifests.data ? (
+              <div className="px-4 py-5 text-meta text-muted-foreground">
+                Couldn't load agents.
+              </div>
+            ) : manifests.data?.length ? (
+              manifests.data.map((a) => {
+                const calls = activityOf(a.name)?.all;
+                const on = a.name === selectedName;
+                // A link, so an agent opens in a new tab or is shared.
+                return (
+                  <Link
+                    key={a.name}
+                    to={`/agents?agent=${encodeURIComponent(a.name)}`}
+                    // Picking an agent replaces the entry, so Back leaves
+                    // the page rather than stepping through each pick.
+                    replace
+                    aria-current={on || undefined}
+                    className={cn(
+                      "flex flex-col gap-1 border-t border-border/60 px-4 py-3 text-left transition-colors first:border-t-0 hover:bg-accent/50",
+                      on && "bg-primary/10 hover:bg-primary/10",
+                    )}
+                  >
+                    <span className="flex min-w-0 items-center gap-2 font-mono text-[13px] font-medium">
+                      <span
+                        className={cn(
+                          "size-1.5 shrink-0 rounded-full",
+                          a.manifest ? "bg-success" : "bg-muted-foreground/40",
+                        )}
+                      />
+                      <span className="truncate">{a.name}</span>
+                    </span>
+                    <span className="pl-3.5 text-meta text-muted-foreground">
+                      {a.manifest
+                        ? pluralise(a.manifest.tools?.length ?? 0, "tool")
+                        : "not registered"}
+                      {calls !== undefined &&
+                        ` · ${pluralise(calls, "call")} in 24h`}
+                    </span>
+                  </Link>
+                );
+              })
+            ) : (
+              <div className="px-4 py-5 text-meta text-muted-foreground">
+                No agents yet. Register one with{" "}
+                <span className="font-mono text-foreground">
+                  hexgate register
+                </span>
+                .
+              </div>
+            )}
+          </nav>
+        </Card>
+
+        {active && (
+          <div className="space-y-4">
+            <Card className="p-5">
+              <div className="flex flex-wrap items-start gap-4">
+                <div className="min-w-0 flex-1 basis-[320px]">
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <h2 className="font-mono text-title-sm font-semibold">
+                      {active.name}
+                    </h2>
+                    <Badge variant="outline" className="font-mono text-[11px]">
+                      {active.version !== null
+                        ? `v${active.version}`
+                        : "not registered"}
+                    </Badge>
+                  </div>
+                  {active.manifest?.description?.trim() && (
+                    <p className="mt-1.5 max-w-[640px] text-sm text-muted-foreground">
+                      {active.manifest.description.trim()}
+                    </p>
+                  )}
+                  <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-meta text-muted-foreground">
+                    <div>
+                      <dt className="inline">Model </dt>
+                      <dd className="inline font-mono text-foreground">
+                        {active.manifest?.model?.trim() || "—"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="inline">Framework </dt>
+                      <dd className="inline font-mono text-foreground">
+                        {active.manifest?.framework?.trim() || "—"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="inline">Updated </dt>
+                      <dd className="inline text-foreground">
+                        {formatDate(active.updated_at)}
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    asChild
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                  >
+                    <Link
+                      to={`/policies?agent=${encodeURIComponent(active.name)}`}
+                    >
+                      <ShieldCheck className="size-3.5" />
+                      Edit policy
+                    </Link>
+                  </Button>
+                  <Button
+                    asChild
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                  >
+                    <Link
+                      to="/audit"
+                      onClick={() =>
+                        openAudit({ agent: active.name, range: "24h" })
+                      }
+                    >
+                      <ScrollText className="size-3.5" />
+                      View decisions
+                    </Link>
+                  </Button>
+                  {canManageBans && (
+                    <Button
+                      asChild
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <Link
+                        to={`/bans?ban_agent=${encodeURIComponent(active.name)}`}
+                      >
+                        <Ban className="size-3.5" />
+                        Ban agent
+                      </Link>
+                    </Button>
+                  )}
+                </div>
+              </div>
+              {summary.isError && !summary.data ? (
+                <p className="mt-4 border-t border-border/60 pt-4 text-meta text-muted-foreground">
+                  Couldn't load the last 24 hours of activity.
+                </p>
+              ) : (
+                <>
+                  {/* Always laid out (dashes while loading), so the card
+                      doesn't grow when the numbers land. */}
+                  <div className="mt-4 grid grid-cols-3 border-t border-border/60 pt-4 text-meta">
+                    {[
+                      {
+                        label: "Calls · 24h",
+                        value: activeActivity?.all,
+                        className: "",
+                      },
+                      {
+                        label: "Denied",
+                        value: activeActivity?.deny,
+                        className: "text-deny",
+                      },
+                      {
+                        label: "Sent for approval",
+                        value: activeActivity?.needs_approval,
+                        className: "text-approval",
+                      },
+                    ].map((stat) => (
+                      <div key={stat.label}>
+                        <div className="text-muted-foreground">
+                          {stat.label}
+                        </div>
+                        <div
+                          className={cn(
+                            "mt-1 text-[20px] font-semibold tabular-nums",
+                            stat.className,
+                          )}
+                        >
+                          {stat.value?.toLocaleString() ?? "—"}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {summary.isError && (
+                    // A later poll failed: say the numbers may be old.
+                    <p className="mt-2 text-meta text-muted-foreground">
+                      Couldn't refresh; these are the last counts loaded.
+                    </p>
+                  )}
+                </>
+              )}
+            </Card>
+            <ManifestView agent={active} />
           </div>
         )}
       </div>
@@ -114,38 +294,9 @@ export function AgentsPage() {
   );
 }
 
-function AgentPicker({
-  agents,
-  value,
-  onChange,
-  loading,
-}: {
-  agents: { name: string }[];
-  value: string | null;
-  onChange: (name: string) => void;
-  loading: boolean;
-}) {
-  if (loading)
-    return <span className="text-xs text-muted-foreground">loading…</span>;
-  return (
-    <select
-      value={value ?? ""}
-      onChange={(e) => onChange(e.target.value)}
-      className="h-8 rounded-md border border-border bg-background px-3 text-sm font-mono focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-    >
-      {agents.map((a) => (
-        <option key={a.name} value={a.name}>
-          {a.name}
-        </option>
-      ))}
-    </select>
-  );
-}
-
 function ManifestView({ agent }: { agent: AgentManifestView }) {
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <ManifestSummary agent={agent} />
+    <div className="space-y-4">
       <ToolsSection
         tools={agent.manifest?.tools ?? []}
         unregistered={agent.manifest === null}
@@ -166,43 +317,6 @@ function ManifestView({ agent }: { agent: AgentManifestView }) {
   );
 }
 
-function ManifestSummary({ agent }: { agent: AgentManifestView }) {
-  const versionLabel =
-    agent.version !== null ? `v${agent.version}` : "not registered";
-  return (
-    <section className="rounded-lg border border-border bg-card">
-      <div className="px-5 py-4 border-b border-border flex items-center gap-2">
-        <Bot className="size-4 text-primary" />
-        <span className="text-sm font-medium">Manifest</span>
-        <Badge variant="outline" className="ml-1 font-mono text-[11px]">
-          {versionLabel}
-        </Badge>
-      </div>
-      <dl className="divide-y divide-border text-sm">
-        <ManifestRow label="Name" value={agent.name} mono />
-        <ManifestRow
-          label="Model"
-          value={agent.manifest?.model?.trim() || "—"}
-          mono
-        />
-        <ManifestRow
-          label="Description"
-          value={agent.manifest?.description?.trim() || "—"}
-        />
-        <ManifestRow
-          label="Framework"
-          value={agent.manifest?.framework?.trim() || "—"}
-          mono
-        />
-        <ManifestRow
-          label="Last updated"
-          value={formatDate(agent.updated_at)}
-        />
-      </dl>
-    </section>
-  );
-}
-
 function ToolsSection({
   tools,
   unregistered,
@@ -211,7 +325,7 @@ function ToolsSection({
   unregistered: boolean;
 }) {
   return (
-    <section className="rounded-lg border border-border bg-card">
+    <section className="rounded-xl border border-border bg-card">
       <div className="px-5 py-4 border-b border-border flex items-center gap-2">
         <Wrench className="size-4 text-muted-foreground" />
         <span className="text-sm font-medium">Tools</span>
@@ -244,7 +358,7 @@ function GuardsSection({
   unregistered: boolean;
 }) {
   return (
-    <section className="rounded-lg border border-border bg-card">
+    <section className="rounded-xl border border-border bg-card">
       <div className="px-5 py-4 border-b border-border flex items-center gap-2">
         <ShieldCheck className="size-4 text-muted-foreground" />
         <span className="text-sm font-medium">Guards</span>
@@ -311,7 +425,7 @@ function SkillsSection({
   unregistered: boolean;
 }) {
   return (
-    <section className="rounded-lg border border-border bg-card">
+    <section className="rounded-xl border border-border bg-card">
       <div className="px-5 py-4 border-b border-border flex items-center gap-2">
         <BookOpen className="size-4 text-muted-foreground" />
         <span className="text-sm font-medium">Skills</span>
@@ -363,7 +477,7 @@ function SystemPromptSection({
   unregistered: boolean;
 }) {
   return (
-    <section className="rounded-lg border border-border bg-card">
+    <section className="rounded-xl border border-border bg-card">
       <div className="px-5 py-4 border-b border-border flex items-center gap-2">
         <FileText className="size-4 text-muted-foreground" />
         <span className="text-sm font-medium">System prompt</span>
@@ -514,29 +628,6 @@ function SkillResourceDetails({
         </ul>
       )}
     </details>
-  );
-}
-
-function pluralise(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
-function ManifestRow({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <div className="grid grid-cols-[120px_1fr] gap-4 px-5 py-2.5">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className={mono ? "font-mono text-foreground" : "text-foreground"}>
-        {value}
-      </dd>
-    </div>
   );
 }
 

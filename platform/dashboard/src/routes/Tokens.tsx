@@ -31,6 +31,7 @@ import { useProjectScoped } from "@/lib/active";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/page-header";
 import { isStaleKey } from "@/lib/keys";
+import { pluralise } from "@/lib/format";
 
 function formatRelative(iso: string | null): string {
   if (!iso) return "Never";
@@ -139,7 +140,7 @@ function JustMintedBanner({
         </span>
         <span className="flex items-center gap-1.5">
           <KeyRound className="size-3.5" />
-          {token.scopes.length} scope{token.scopes.length === 1 ? "" : "s"}
+          {pluralise(token.scopes.length, "scope")}
         </span>
         <button
           onClick={onDismiss}

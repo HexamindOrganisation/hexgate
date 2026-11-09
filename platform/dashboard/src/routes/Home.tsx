@@ -28,18 +28,14 @@ import {
   type AuditSummary,
   type TokenListItem,
 } from "@/lib/api";
-import {
-  type AuditFilters,
-  EMPTY_AUDIT_FILTERS,
-  useAuditFilters,
-} from "@/lib/audit-filters";
-import { fmtTokens, formatRelative } from "@/lib/format";
+import { type AuditFilters, useAuditFilters } from "@/lib/audit-filters";
+import { useAgentActivity24h } from "@/lib/audit-summary";
+import { fmtTokens, formatRelative, pluralise } from "@/lib/format";
 import { isStaleKey, STALE_KEY_DAYS } from "@/lib/keys";
 import { useNow } from "@/lib/use-now";
 import { cn } from "@/lib/utils";
 
 const LIVE_MS = 15_000;
-const SUMMARY_MS = 30_000;
 const SLOW_MS = 60_000;
 const ATTENTION_BURSTS = 2;
 
@@ -153,7 +149,7 @@ function deriveAttention({
       key: "anomaly-more",
       icon: <TriangleAlert />,
       tone: "bg-deny/15 text-deny",
-      title: `${more} more denial ${more === 1 ? "burst" : "bursts"} this week`,
+      title: `${pluralise(more, "more denial burst")} this week`,
       sub: "Ranked by severity and deny rate on Audit",
       cta: "Open audit",
       to: "/audit",
@@ -166,7 +162,7 @@ function deriveAttention({
       key: "approvals",
       icon: <Hourglass />,
       tone: "bg-approval/15 text-approval",
-      title: `${n} ${n === 1 ? "call" : "calls"} sent for approval in the last 24 hours`,
+      title: `${pluralise(n, "call")} sent for approval in the last 24 hours`,
       sub: "Gated by policy rather than allowed or denied outright",
       cta: "Review",
       to: "/audit",
@@ -191,7 +187,7 @@ function deriveAttention({
       key: "keys",
       icon: <KeyRound />,
       tone: "bg-muted text-foreground",
-      title: `${stale.length} API ${stale.length === 1 ? "key" : "keys"} unused for ${STALE_KEY_DAYS}+ days`,
+      title: `${pluralise(stale.length, "API key")} unused for ${STALE_KEY_DAYS}+ days`,
       sub: stale.map((t) => t.name).join(", "),
       cta: "Review keys",
       to: "/tokens",
@@ -206,18 +202,9 @@ export function HomePage() {
   const scope = useProjectScoped();
   const pid = scope.projectId;
   const on = !!pid;
-  const setAuditFilters = useAuditFilters((s) => s.setFilters);
-  // Links into Audit start from a clean slate, so a filter left over from
-  // an earlier visit can't hide what the link points at.
-  const openAudit = (filters: Partial<AuditFilters> = {}) =>
-    setAuditFilters(() => ({ ...EMPTY_AUDIT_FILTERS, ...filters }));
+  const openAudit = useAuditFilters((s) => s.openAudit);
 
-  const summaryQ = useQuery({
-    queryKey: ["audit", "summary", pid, { window: "24h" }],
-    enabled: on,
-    queryFn: () => api.getAuditSummary({ window: "24h" }, pid!),
-    refetchInterval: SUMMARY_MS,
-  });
+  const { summary: summaryQ, activityOf } = useAgentActivity24h(pid);
   const weekQ = useQuery({
     queryKey: ["audit", "ts", pid, { window: "7d" }],
     enabled: on,
@@ -322,12 +309,8 @@ export function HomePage() {
     };
   }, [weekQ.data]);
 
-  const byAgent = useMemo(
-    () => new Map(summaryQ.data?.by_agent.map((r) => [r.key, r])),
-    [summaryQ.data],
-  );
   const maxAgentCalls = Math.max(
-    ...agents.map((a) => byAgent.get(a.name)?.all ?? 0),
+    ...agents.map((a) => activityOf(a.name)?.all ?? 0),
     1,
   );
   const lastDecision = feedQ.data?.rows[0]?.occurred_at;
@@ -345,10 +328,7 @@ export function HomePage() {
           scope.projectName && (
             <>
               {agentsQ.isSuccess && (
-                <>
-                  {agents.length} {agents.length === 1 ? "agent" : "agents"}{" "}
-                  in{" "}
-                </>
+                <>{pluralise(agents.length, "agent")} in </>
               )}
               <span className="font-mono text-foreground">
                 {scope.projectName}
@@ -440,7 +420,11 @@ export function HomePage() {
               {
                 label: "Decisions",
                 value: totals?.all.toLocaleString(),
-                sub: summaryQ.isError ? "couldn't load" : "all outcomes",
+                // A failed poll keeps the last totals; only none is a failure.
+                sub:
+                  summaryQ.isError && !summaryQ.data
+                    ? "couldn't load"
+                    : "all outcomes",
               },
               {
                 label: "Denied",
@@ -560,46 +544,57 @@ export function HomePage() {
           ) : agentsQ.isError ? (
             <PanelNote>Couldn't load agents.</PanelNote>
           ) : agents.length ? (
-            agents.map((a) => {
-              const row = byAgent.get(a.name);
-              return (
-                <Link
-                  key={a.name}
-                  to="/agents"
-                  className="grid grid-cols-[minmax(0,1fr)_170px] items-center gap-3 border-t border-border/60 px-5 py-3 first:border-t-0 hover:bg-accent/50"
-                >
-                  <span className="min-w-0">
-                    <span className="block truncate font-mono text-[13px] font-medium">
-                      {a.name}
+            <>
+              {summaryQ.isError && !summaryQ.data && (
+                <PanelNote>
+                  Couldn't load the last 24 hours of activity.
+                </PanelNote>
+              )}
+              {agents.map((a) => {
+                const row = activityOf(a.name);
+                return (
+                  <Link
+                    key={a.name}
+                    to={`/agents?agent=${encodeURIComponent(a.name)}`}
+                    className="grid grid-cols-[minmax(0,1fr)_170px] items-center gap-3 border-t border-border/60 px-5 py-3 first:border-t-0 hover:bg-accent/50"
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate font-mono text-[13px] font-medium">
+                        {a.name}
+                      </span>
+                      <span className="block text-meta text-muted-foreground">
+                        {a.manifest
+                          ? pluralise(a.manifest.tools?.length ?? 0, "tool")
+                          : "not registered"}
+                      </span>
                     </span>
-                    <span className="block text-meta text-muted-foreground">
-                      {a.manifest
-                        ? `${a.manifest.tools?.length ?? 0} tools`
-                        : "not registered"}
+                    <span className="flex flex-col items-end gap-1.5">
+                      <span className="whitespace-nowrap text-meta text-muted-foreground">
+                        <span className="font-semibold text-foreground">
+                          {/* Unknown until the summary lands, not idle. */}
+                          {row ? row.all.toLocaleString() : "—"}
+                        </span>{" "}
+                        in 24h
+                        {!!row?.deny && (
+                          <span className="text-deny">
+                            {" "}
+                            · {row.deny.toLocaleString()} denied
+                          </span>
+                        )}
+                      </span>
+                      <span className="block h-1 w-full rounded-full bg-muted">
+                        <span
+                          className="block h-1 rounded-full bg-allow-fill"
+                          style={{
+                            width: `${((row?.all ?? 0) / maxAgentCalls) * 100}%`,
+                          }}
+                        />
+                      </span>
                     </span>
-                  </span>
-                  <span className="flex flex-col items-end gap-1.5">
-                    <span className="whitespace-nowrap text-meta text-muted-foreground">
-                      <span className="font-semibold text-foreground">
-                        {row?.all ?? 0}
-                      </span>{" "}
-                      in 24h
-                      {!!row?.deny && (
-                        <span className="text-deny"> · {row.deny} denied</span>
-                      )}
-                    </span>
-                    <span className="block h-1 w-full rounded-full bg-muted">
-                      <span
-                        className="block h-1 rounded-full bg-allow-fill"
-                        style={{
-                          width: `${((row?.all ?? 0) / maxAgentCalls) * 100}%`,
-                        }}
-                      />
-                    </span>
-                  </span>
-                </Link>
-              );
-            })
+                  </Link>
+                );
+              })}
+            </>
           ) : (
             <PanelNote>
               No agents yet. Register one with{" "}
