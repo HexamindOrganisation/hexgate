@@ -13,6 +13,7 @@ import {
   Panel,
   Position,
   ReactFlow,
+  ViewportPortal,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useNavigate } from "react-router-dom";
@@ -22,7 +23,9 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { usePolicyGraph } from "@/lib/policy_files";
 import type { PolicyGraph, PolicyGraphEdge } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { HEX_H, HEX_W, layeredLayout } from "@/lib/graph-layout";
+import { HEX_H, HEX_W, delegates, layeredLayout } from "@/lib/graph-layout";
+import { pluralise } from "@/lib/format";
+import { verdictLabel } from "@/lib/policy";
 
 // Verdict → edge color (green allow, amber approval, red deny) — mid-tone
 // hexes that read on both the light and dark graph ground.
@@ -89,6 +92,8 @@ type EdgeData = Pick<
   /** Points the edge passes through (layout coordinates), so it routes
    * around nodes it doesn't touch. */
   bends?: { x: number; y: number }[];
+  /** Offset of its arrival at the target, apart from a parallel edge's. */
+  endDy?: number;
 };
 
 // The hover-focus state is passed through CONTEXT, not through node/edge data,
@@ -100,10 +105,10 @@ type FocusValue = {
   activeEdges: Set<number> | null;
   hoverNode: string | null;
   hoverEdge: number | null;
-  // `animate` turns on the flowing-dot animation; `depth` is each node's
+  // `animate` turns on the flowing-dot animation; `col` is each node's
   // column (role → agent hops → tool), used to stagger the flow outward.
   animate: boolean;
-  depth: Map<string, number>;
+  col: Record<string, number>;
 };
 const FocusCtx = createContext<FocusValue>({
   activeNodes: null,
@@ -111,7 +116,7 @@ const FocusCtx = createContext<FocusValue>({
   hoverNode: null,
   hoverEdge: null,
   animate: false,
-  depth: new Map(),
+  col: {},
 });
 
 /** A hexagon node (SVG outline + centered label), styled by kind. */
@@ -209,16 +214,25 @@ const ARROW_GAP = HEX_W / 2 + 4;
 
 type EdgeGeometry = { path: string; labelX: number; labelY: number };
 
+type Point = { x: number; y: number };
+const midpoint = (p: Point, q: Point) => ({
+  x: (p.x + q.x) / 2,
+  y: (p.y + q.y) / 2,
+});
+
 /** Through any bend points with horizontal tangents, so an edge leaves and
- * enters its nodes level and runs level through each lane. The label sits
- * midway along the bends. */
-function bentPath(points: { x: number; y: number }[]): EdgeGeometry {
+ * enters its nodes level and runs level through each lane. The label sits on
+ * the middle bend, or midway along the middle segment, so it's on the edge
+ * and inside a reserved lane, never over a hex. */
+function bentPath(points: Point[], endDy = 0): EdgeGeometry {
   const last = points[points.length - 1];
   const before = points[points.length - 2];
-  // Arrive at the tip facing the side the edge comes from.
+  // Arrive at the hex's side facing the edge; off the tip (a fanned edge)
+  // the slanted border sits further in, by its slope (34 across, 53 down).
+  const gap = ARROW_GAP - (Math.abs(endDy) * 34) / 53;
   const end = {
-    x: last.x + (before.x > last.x ? ARROW_GAP : -ARROW_GAP),
-    y: last.y,
+    x: last.x + (before.x > last.x ? gap : -gap),
+    y: last.y + endDy,
   };
   const pts = [...points.slice(0, -1), end];
   let path = `M${pts[0].x},${pts[0].y}`;
@@ -228,12 +242,14 @@ function bentPath(points: { x: number; y: number }[]): EdgeGeometry {
     const mx = (p.x + q.x) / 2;
     path += ` C${mx},${p.y} ${mx},${q.y} ${q.x},${q.y}`;
   }
-  // Midway along the bends, or along the line when there are none.
-  const via = points.length > 2 ? points.slice(1, -1) : [pts[0], end];
-  const mid = {
-    x: via.reduce((a, p) => a + p.x, 0) / via.length,
-    y: via.reduce((a, p) => a + p.y, 0) / via.length,
-  };
+  const bends = points.slice(1, -1);
+  const n = bends.length;
+  const mid =
+    n % 2 === 1
+      ? bends[(n - 1) / 2]
+      : n
+        ? midpoint(bends[n / 2 - 1], bends[n / 2])
+        : midpoint(pts[0], end);
   return { path, labelX: mid.x, labelY: mid.y };
 }
 
@@ -255,11 +271,14 @@ function PolicyEdge({
   const dimmed = focus.activeEdges ? !focus.activeEdges.has(idx) : false;
   const hovered = focus.hoverEdge === idx;
   const inFocus = focus.activeEdges ? focus.activeEdges.has(idx) : true;
-  const { path, labelX, labelY } = bentPath([
-    { x: sourceX, y: sourceY },
-    ...(data?.bends ?? []),
-    { x: targetX, y: targetY },
-  ]);
+  const { path, labelX, labelY } = bentPath(
+    [
+      { x: sourceX, y: sourceY },
+      ...(data?.bends ?? []),
+      { x: targetX, y: targetY },
+    ],
+    data?.endDy,
+  );
   const color = VERDICT[data?.verdict ?? "allow"] ?? "#8a93a3";
   const dashed = data?.verdict === "deny" || data?.via === "handoff";
   const label =
@@ -274,10 +293,9 @@ function PolicyEdge({
   const baseWidth = data?.verdict === "deny" ? 2.2 : 2.6;
   // A flowing dot travels source→target when the edge is selected/hovered, or
   // when Animate is on and the edge is in focus. The start is staggered by the
-  // source's depth from a role, so a click's paths light role → agent → tool in
-  // sequence.
+  // source's column, so a click's paths light role → agent → tool in sequence.
   const flowing = selected || hovered || (focus.animate && inFocus);
-  const flowDelay = (focus.depth.get(source) ?? 0) * 0.4;
+  const flowDelay = (focus.col[source] ?? 0) * 0.4;
   return (
     <>
       <BaseEdge
@@ -332,26 +350,43 @@ function PolicyEdge({
   );
 }
 
-/** A column heading; it pans and zooms with the graph. */
-function ColumnLabel({ data }: NodeProps<Node<NodeData>>) {
+/** The column headings, drawn in the viewport so they pan and zoom with the
+ * graph without being nodes (no clicks, hovers or tab stops to guard). */
+function ColumnLabels({
+  columns,
+}: {
+  columns: { title: string; x: number; top: number }[];
+}) {
   return (
-    <div
-      style={{ width: HEX_W }}
-      className="text-center font-mono text-[13px] font-medium uppercase tracking-wider text-muted-foreground"
-    >
-      {data.label}
-    </div>
+    <ViewportPortal>
+      {columns.map((c) => (
+        <div
+          key={c.title}
+          style={{
+            position: "absolute",
+            width: HEX_W,
+            transform: `translate(${c.x - HEX_W / 2}px, ${c.top - 40}px)`,
+          }}
+          className="pointer-events-none text-center font-mono text-[13px] font-medium uppercase tracking-wider text-muted-foreground"
+        >
+          {c.title}
+        </div>
+      ))}
+    </ViewportPortal>
   );
 }
 
-const nodeTypes = { hex: HexNode, column: ColumnLabel };
+const nodeTypes = { hex: HexNode };
 const edgeTypes = { policy: PolicyEdge };
 
 const nodeLabel = (id: string) => id.slice(id.indexOf(":") + 1);
-const COLUMN_PREFIX = "column:";
 
-const verdictLabel = (v: string) =>
-  v === "approval_required" ? "approval" : v;
+/** id → the name the graph shows (`mcp:mcp-demo-read` is `demo-read`), so
+ * every panel names a node as its hexagon does. */
+function labelLookup(graph: PolicyGraph): (id: string) => string {
+  const labels = new Map(graph.nodes.map((n) => [n.id, n.label]));
+  return (id) => labels.get(id) ?? nodeLabel(id);
+}
 
 /** A verdict chip; `constraints` add a "*" with the conditions on hover. */
 function VerdictTag({
@@ -381,10 +416,12 @@ function EdgeList({
   title,
   edges,
   end,
+  labelOf,
 }: {
   title: string;
   edges: PolicyGraphEdge[];
   end: "source" | "target";
+  labelOf: (id: string) => string;
 }) {
   if (edges.length === 0) return null;
   return (
@@ -396,7 +433,7 @@ function EdgeList({
         {edges.map((e, i) => (
           <li key={i} className="flex items-center justify-between gap-2">
             <span className="truncate">
-              {nodeLabel(e[end])}
+              {labelOf(e[end])}
               {e.kind === "reach" && (
                 <span className="text-muted-foreground"> · {e.via}</span>
               )}
@@ -413,10 +450,12 @@ function EdgeList({
 function NodePanel({
   graph,
   id,
+  labelOf,
   onClose,
 }: {
   graph: PolicyGraph;
   id: string;
+  labelOf: (id: string) => string;
   onClose: () => void;
 }) {
   const node = graph.nodes.find((n) => n.id === id);
@@ -427,18 +466,18 @@ function NodePanel({
   const open = calls.filter((e) => e.verdict !== "deny");
   const summary =
     node.kind === "agent"
-      ? `Calls ${open.length} of ${calls.length} tools — ${
+      ? `Calls ${open.length} of ${pluralise(calls.length, "tool")} — ${
           open.filter((e) => e.constraints.length > 0).length
         } with constraints, ${
           open.filter((e) => e.verdict === "approval_required").length
         } behind approval.`
       : node.kind === "role"
-        ? `Admitted by ${from.filter((e) => e.verdict !== "deny").length} of ${from.length} agents.`
-        : `Callable by ${to.filter((e) => e.verdict !== "deny").length} of ${to.length} agents.`;
+        ? `Admitted by ${from.filter((e) => e.verdict !== "deny").length} of ${pluralise(from.length, "agent")}.`
+        : `Callable by ${to.filter((e) => e.verdict !== "deny").length} of ${pluralise(to.length, "agent")}.`;
   return (
     <aside
       aria-label={`${node.kind} ${node.label}`}
-      className="max-h-[45vh] w-72 overflow-y-auto rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur"
+      className="max-h-[40vh] w-72 overflow-y-auto rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur"
     >
       <div className="flex items-start justify-between gap-2">
         <div>
@@ -460,17 +499,25 @@ function NodePanel({
       {node.kind === "agent" && (
         <>
           <EdgeList
+            labelOf={labelOf}
             title="Admitted roles"
             edges={to.filter((e) => e.kind === "admission")}
             end="source"
           />
           <EdgeList
+            labelOf={labelOf}
             title="Reached by"
             edges={to.filter((e) => e.kind === "reach")}
             end="source"
           />
-          <EdgeList title="Tools" edges={calls} end="target" />
           <EdgeList
+            labelOf={labelOf}
+            title="Tools"
+            edges={calls}
+            end="target"
+          />
+          <EdgeList
+            labelOf={labelOf}
             title="Reaches"
             edges={from.filter((e) => e.kind === "reach")}
             end="target"
@@ -478,10 +525,10 @@ function NodePanel({
         </>
       )}
       {node.kind === "role" && (
-        <EdgeList title="Agents" edges={from} end="target" />
+        <EdgeList labelOf={labelOf} title="Agents" edges={from} end="target" />
       )}
       {(node.kind === "tool" || node.kind === "mcp") && (
-        <EdgeList title="Called by" edges={to} end="source" />
+        <EdgeList labelOf={labelOf} title="Called by" edges={to} end="source" />
       )}
     </aside>
   );
@@ -500,12 +547,14 @@ type BypassWarning = {
  * *different* constraints, and A can (transitively) reach B — so A can delegate
  * to B to call T beyond its own limit. Computed from the graph's call/reach
  * edges + their constraints. */
-function bypassWarnings(graph: PolicyGraph): BypassWarning[] {
+function bypassWarnings(
+  graph: PolicyGraph,
+  labelOf: (id: string) => string,
+): BypassWarning[] {
   const reachOut = new Map<string, string[]>();
   graph.edges.forEach((e) => {
-    // Only a permitted reach can be used to delegate — a denied one can't, so it
-    // never enables a bypass.
-    if (e.kind === "reach" && e.verdict !== "deny") {
+    // A denied reach can't be used to delegate, so it never enables a bypass.
+    if (delegates(e)) {
       const a = reachOut.get(e.source) ?? [];
       a.push(e.target);
       reachOut.set(e.source, a);
@@ -547,9 +596,9 @@ function bypassWarnings(graph: PolicyGraph): BypassWarning[] {
         seen.add(key);
         out.push({
           toolId,
-          tool: nodeLabel(toolId),
-          strict: nodeLabel(a.agent),
-          loose: nodeLabel(b.agent),
+          tool: labelOf(toolId),
+          strict: labelOf(a.agent),
+          loose: labelOf(b.agent),
           strictC: a.constraints,
           looseC: b.constraints,
         });
@@ -569,7 +618,11 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
   const [pinned, setPinned] = useState<string | null>(null);
   const [animate, setAnimate] = useState(false);
   const lay = useMemo(() => layeredLayout(graph), [graph]);
-  const warnings = useMemo(() => bypassWarnings(graph), [graph]);
+  const labelOf = useMemo(() => labelLookup(graph), [graph]);
+  const warnings = useMemo(
+    () => bypassWarnings(graph, labelOf),
+    [graph, labelOf],
+  );
 
   // Directed adjacency (out + in) for transitive reachability.
   const adj = useMemo(() => {
@@ -585,10 +638,6 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
     });
     return { out, inc };
   }, [graph]);
-
-  // Each node's column staggers the flow animation, so dots ripple outward
-  // role → agent → tool in the order the columns show.
-  const depth = useMemo(() => new Map(Object.entries(lay.col)), [lay]);
 
   // Provided via context so it never rebuilds the nodes/edges arrays (which
   // would flash the graph).
@@ -660,16 +709,8 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
   // Stable across hover (depend only on graph and its layout), so React Flow
   // doesn't regenerate markers or thrash edge mouse events.
   const nodes: Node<NodeData>[] = useMemo(
-    () => [
-      ...lay.columns.map((c, i) => ({
-        id: `${COLUMN_PREFIX}${i}`,
-        type: "column",
-        position: { x: c.x - HEX_W / 2, y: c.top - 40 },
-        data: { label: c.title, kind: "column" },
-        draggable: false,
-        selectable: false,
-      })),
-      ...graph.nodes.map((n) => ({
+    () =>
+      graph.nodes.map((n) => ({
         id: n.id,
         type: "hex",
         position: {
@@ -679,7 +720,6 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
         data: { label: n.label, kind: n.kind },
         draggable: false,
       })),
-    ],
     [graph, lay],
   );
 
@@ -703,14 +743,17 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
           constraints: e.constraints,
           roles: e.roles,
           bends: lay.bends[i],
+          endDy: lay.endDy[i],
         },
       })),
     [graph, lay],
   );
 
   const ctxValue = useMemo<FocusValue>(
-    () => ({ ...focus, animate, depth }),
-    [focus, animate, depth],
+    // Each node's column staggers the flow animation, so dots ripple outward
+    // role → agent → tool in the order the columns show.
+    () => ({ ...focus, animate, col: lay.col }),
+    [focus, animate, lay],
   );
 
   return (
@@ -724,29 +767,25 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
           const idx = Number(edge.id.slice(1));
           setSelected(graph.edges[idx] ?? null);
         }}
-        onNodeClick={(_, node) => {
-          // A heading is part of the canvas: clicking it clears, like the pane.
-          if (node.type === "column") {
-            setSelected(null);
-            setPinned(null);
-            return;
-          }
-          setPinned((p) => (p === node.id ? null : node.id));
-        }}
+        onNodeClick={(_, node) =>
+          setPinned((p) => (p === node.id ? null : node.id))
+        }
         onPaneClick={() => {
           setSelected(null);
           setPinned(null);
         }}
-        onNodeMouseEnter={(_, node) => {
-          if (node.type !== "column") setHover({ node: node.id });
-        }}
+        onNodeMouseEnter={(_, node) => setHover({ node: node.id })}
         onNodeMouseLeave={() => setHover(null)}
         onEdgeMouseEnter={(_, edge) =>
           setHover({ edge: Number(edge.id.slice(1)) })
         }
         onEdgeMouseLeave={() => setHover(null)}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
+        // Room above the top row for the column headings, which sit in the
+        // viewport rather than among the fitted nodes.
+        fitViewOptions={{
+          padding: { top: "96px", right: 0.2, bottom: 0.2, left: 0.2 },
+        }}
         proOptions={{ hideAttribution: true }}
         minZoom={0.3}
         maxZoom={1.8}
@@ -764,6 +803,7 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
         }}
       >
         <Background color="var(--gr-dots)" gap={22} />
+        <ColumnLabels columns={lay.columns} />
         <Controls
           showInteractive={false}
           style={{
@@ -794,12 +834,15 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
             <NodePanel
               graph={graph}
               id={pinned}
+              labelOf={labelOf}
               onClose={() => setPinned(null)}
             />
           )}
           {/* Stacked under the node panel so the two never overlap. */}
           {selected && (
-            <div className="w-64 rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur">
+            // Capped and scrolling like the node panel, so the two together
+            // stay clear of the canvas bottom and the bypass warnings.
+            <div className="max-h-[25vh] w-64 overflow-y-auto rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur">
               <div className="mb-2 flex items-center justify-between">
                 <VerdictTag verdict={selected.verdict} />
                 <button
@@ -810,7 +853,7 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
                 </button>
               </div>
               <div className="mb-1 text-foreground">
-                {nodeLabel(selected.source)}
+                {labelOf(selected.source)}
                 <span className="text-muted-foreground/50">
                   {" "}
                   {selected.kind === "reach"
@@ -819,7 +862,7 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
                       ? "→ admits →"
                       : "→ calls →"}{" "}
                 </span>
-                {nodeLabel(selected.target)}
+                {labelOf(selected.target)}
               </div>
               {selected.roles.length > 0 && (
                 <div className="mb-2 text-[10px] text-muted-foreground">

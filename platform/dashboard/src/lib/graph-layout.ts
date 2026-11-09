@@ -12,11 +12,14 @@ import type { PolicyGraph } from "./api";
 /** A node's box (the graph's hexagon); positions are node centres. */
 export const HEX_W = 136;
 export const HEX_H = 118;
-/** Column pitch and row pitch; both leave room for lanes beside the hexes. */
+/** Least column pitch, and row pitch; both leave room for lanes beside the
+ * hexes. A column with more loops than fit grows wider. */
 export const COL_W = 300;
 export const ROW_H = 150;
 /** First loop lane right of a column's centre, clear of the hex's side tip. */
 const LOOP_X = HEX_W / 2 + 16;
+/** Gap between loop lanes: wider than a lane's label, so two never overlap. */
+export const LANE_W = 64;
 /** Height of a bend slot: a lane an edge passes through. */
 const BEND_H = 32;
 /** Gap between edges that join the same two nodes. */
@@ -33,7 +36,15 @@ export interface LayeredLayout {
   columns: { title: string; x: number; top: number }[];
   /** Bend points per edge index (empty for adjacent columns). */
   bends: Record<number, Point[]>;
+  /** Vertical offset of an edge's arrival at its target, so edges joining the
+   * same two nodes don't share one arrowhead. */
+  endDy: Record<number, number>;
 }
+
+/** Whether an edge lets its source delegate to its target: a permitted
+ * reach. A denied one delegates nothing. */
+export const delegates = (e: { kind: string; verdict: string }) =>
+  e.kind === "reach" && e.verdict !== "deny";
 
 const push = <K, V>(m: Map<K, V[]>, k: K, v: V) => {
   const a = m.get(k);
@@ -52,8 +63,7 @@ function columnsOf(graph: PolicyGraph): {
   const out = new Map<string, string[]>();
   const reached = new Set<string>();
   for (const e of graph.edges) {
-    if (e.kind !== "reach" || e.verdict === "deny" || e.source === e.target)
-      continue;
+    if (!delegates(e) || e.source === e.target) continue;
     push(out, e.source, e.target);
     reached.add(e.target);
   }
@@ -164,53 +174,57 @@ export function layeredLayout(graph: PolicyGraph): LayeredLayout {
     }
   }
 
+  // Each loop (same column, or self) gets its own lane beside its column,
+  // so unrelated loops never share a vertical run; a column with more loops
+  // than fit in COL_W pushes the next columns right.
+  const isLoop = (e: { source: string; target: string }) =>
+    col[e.source] != null && col[e.source] === col[e.target];
+  const loops = Array.from({ length: nCols }, () => 0);
+  for (const e of graph.edges) if (isLoop(e)) loops[col[e.source]]++;
+  // A column is as wide as its lanes plus the next column's half hex.
+  const width = (c: number) =>
+    Math.max(COL_W, LOOP_X + loops[c] * LANE_W + HEX_W / 2);
+  const colX = [0];
+  for (let c = 1; c < nCols; c++) colX[c] = colX[c - 1] + width(c - 1);
+
   const pos: LayeredLayout["pos"] = {};
   for (const n of graph.nodes) {
-    pos[n.id] = { x: col[n.id] * COL_W, y: y.get(n.id)! };
+    pos[n.id] = { x: colX[col[n.id]], y: y.get(n.id)! };
   }
   // Edges joining the same two nodes (either way) fan apart by SPREAD.
-  const pairKey = (e: { source: string; target: string }) =>
-    [e.source, e.target].sort().join("\u0000");
+  const keys = graph.edges.map((e) =>
+    [e.source, e.target].sort().join("\u0000"),
+  );
   const pairSize = new Map<string, number>();
-  for (const e of graph.edges) {
-    pairSize.set(pairKey(e), (pairSize.get(pairKey(e)) ?? 0) + 1);
-  }
+  for (const key of keys) pairSize.set(key, (pairSize.get(key) ?? 0) + 1);
   const pairSeen = new Map<string, number>();
-  // Each loop (same column, or self) gets its own lane beside its column,
-  // so unrelated loops never share a vertical run. Lanes wrap if a column
-  // has more loops than fit before the next column.
-  const lanesFit = Math.floor((COL_W - HEX_W / 2 - LOOP_X) / SPREAD);
   const loopLanes = new Map<number, number>();
   const bends: LayeredLayout["bends"] = {};
+  const endDy: LayeredLayout["endDy"] = {};
   graph.edges.forEach((e, i) => {
     const s = pos[e.source];
     const t = pos[e.target];
     if (!s || !t) return;
-    const key = pairKey(e);
-    const j = pairSeen.get(key) ?? 0;
-    pairSeen.set(key, j + 1);
-    const n = pairSize.get(key)!;
+    const j = pairSeen.get(keys[i]) ?? 0;
+    pairSeen.set(keys[i], j + 1);
+    const n = pairSize.get(keys[i])!;
     const spread = (j - (n - 1) / 2) * SPREAD;
-    const loop = col[e.source] === col[e.target];
-    let out = 0;
-    if (loop) {
-      const k = loopLanes.get(col[e.source]) ?? 0;
-      loopLanes.set(col[e.source], k + 1);
-      out = s.x + LOOP_X + (k % lanesFit) * SPREAD;
-    }
-    if (e.source === e.target) {
+    if (n > 1) endDy[i] = spread / 2;
+    if (isLoop(e)) {
+      const c = col[e.source];
+      const k = loopLanes.get(c) ?? 0;
+      loopLanes.set(c, k + 1);
+      const out = s.x + LOOP_X + k * LANE_W;
+      // A self-loop runs out and back beside its own node.
+      const [y1, y2] =
+        e.source === e.target ? [s.y - ROW_H / 4, s.y + ROW_H / 4] : [s.y, t.y];
       bends[i] = [
-        { x: out, y: s.y - ROW_H / 4 },
-        { x: out, y: s.y + ROW_H / 4 },
-      ];
-    } else if (loop) {
-      bends[i] = [
-        { x: out, y: s.y },
-        { x: out, y: t.y },
+        { x: out, y: y1 },
+        { x: out, y: y2 },
       ];
     } else if (bendIds[i]?.length) {
       bends[i] = bendIds[i].map(({ id, c }) => ({
-        x: c * COL_W,
+        x: colX[c],
         y: y.get(id)!,
       }));
     } else {
@@ -219,20 +233,27 @@ export function layeredLayout(graph: PolicyGraph): LayeredLayout {
     }
   });
 
-  // Titles by position (tools are always last); bend-only columns get none.
+  // Titles by position (tools and MCP servers are always last); bend-only
+  // columns get none.
+  const kind = new Map(graph.nodes.map((n) => [n.id, n.kind]));
   const columns = layers.flatMap((layer, c) => {
     if (!layer.some((id) => !id.startsWith("bend:"))) return [];
+    const onlyMcp = layer.every(
+      (id) => id.startsWith("bend:") || kind.get(id) === "mcp",
+    );
     const title =
       c === 0
         ? "Caller roles"
         : c === nCols - 1
-          ? "Tools"
+          ? onlyMcp
+            ? "MCP servers"
+            : "Tools"
           : c === 1
             ? "Agents"
             : `Agents · hop ${c - 1}`;
     // Lanes count, so a heading never sits on an edge.
     const top = Math.min(...layer.map((id) => y.get(id)! - height(id) / 2));
-    return [{ title, x: c * COL_W, top }];
+    return [{ title, x: colX[c], top }];
   });
-  return { pos, col, columns, bends };
+  return { pos, col, columns, bends, endDy };
 }

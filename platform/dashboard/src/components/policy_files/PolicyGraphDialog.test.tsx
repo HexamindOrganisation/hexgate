@@ -121,6 +121,9 @@ vi.mock("@xyflow/react", () => {
     Background: () => <div data-testid="bg" />,
     Controls: () => <div data-testid="controls" />,
     Panel: ({ children }: AnyProps) => <div>{children as React.ReactNode}</div>,
+    ViewportPortal: ({ children }: AnyProps) => (
+      <div data-testid="viewport">{children as React.ReactNode}</div>
+    ),
     Handle: () => <div data-testid="handle" />,
     BaseEdge: ({ path }: AnyProps) => <path d={path as string} />,
     EdgeLabelRenderer: ({ children }: AnyProps) => (
@@ -365,7 +368,7 @@ describe("PolicyGraphDialog", () => {
       name: "agent supervisor",
     });
     expect(panel).toHaveTextContent(
-      "Calls 1 of 1 tools — 1 with constraints, 1 behind approval.",
+      "Calls 1 of 1 tool — 1 with constraints, 1 behind approval.",
     );
     expect(panel).toHaveTextContent("Admitted roles");
     expect(panel).toHaveTextContent("admin");
@@ -378,14 +381,49 @@ describe("PolicyGraphDialog", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("labels the columns; clicking one clears like the canvas", async () => {
+  it("labels the columns in the viewport, not as nodes", async () => {
     stubGraph(GRAPH);
     renderDialog();
     const heading = await screen.findByText("Caller roles");
+    expect(screen.getByTestId("viewport")).toContainElement(heading);
     expect(screen.getByText("Agents · hop 1")).toBeInTheDocument();
-    await userEvent.click(screen.getByTestId("node-agent:supervisor"));
-    expect(screen.getByRole("complementary")).toBeInTheDocument();
-    await userEvent.click(heading);
-    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(screen.queryByTestId(/^node-column:/)).toBeNull();
+  });
+
+  it("names a node's neighbours by label and counts in the singular", async () => {
+    stubGraph({
+      ...GRAPH,
+      nodes: [
+        ...GRAPH.nodes,
+        { id: "mcp:mcp-demo-read", label: "demo-read", kind: "mcp" },
+      ],
+      edges: [
+        ...GRAPH.edges,
+        {
+          source: "agent:worker",
+          target: "mcp:mcp-demo-read",
+          kind: "call",
+          via: null,
+          verdict: "allow",
+          constraints: [],
+          roles: [],
+        },
+      ],
+    });
+    renderDialog();
+    await userEvent.click(await screen.findByTestId("node-mcp:mcp-demo-read"));
+    const panel = screen.getByRole("complementary");
+    expect(panel).toHaveTextContent("Callable by 1 of 1 agent.");
+    await userEvent.click(screen.getByTestId("node-agent:worker"));
+    expect(screen.getByRole("complementary")).toHaveTextContent("demo-read");
+    expect(screen.getByRole("complementary")).not.toHaveTextContent(
+      "mcp-demo-read",
+    );
+    // The edge card names it the same way.
+    await userEvent.click(screen.getByTestId("edge-e5"));
+    expect(screen.getByText(/→ calls →/).parentElement).toHaveTextContent(
+      "worker → calls → demo-read",
+    );
+    expect(document.body).not.toHaveTextContent("mcp-demo-read");
   });
 });

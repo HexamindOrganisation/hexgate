@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PolicyGraph, PolicyGraphEdge } from "./api";
-import { COL_W, HEX_W, ROW_H, layeredLayout } from "./graph-layout";
+import { COL_W, HEX_W, LANE_W, ROW_H, layeredLayout } from "./graph-layout";
 
 const edge = (
   source: string,
@@ -183,6 +183,48 @@ describe("layeredLayout", () => {
     }
   });
 
+  it("widens a column rather than share a lane when loops pile up", () => {
+    // Eight admitted agents, each reaching itself: eight loops in one column.
+    const ids = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    const g = graph(
+      [
+        ["r", "role"],
+        ...ids.map((id) => [id, "agent"] as [string, "agent"]),
+        ["t", "tool"],
+      ],
+      [
+        ...ids.map((id) => edge("r", id, "admission")),
+        ...ids.map((id) => edge(id, id, "reach")),
+        edge("a", "t", "call"),
+      ],
+    );
+    const { pos, bends } = layeredLayout(g);
+    const lanes = ids
+      .map((_, k) => bends[ids.length + k][0].x)
+      .sort((x, y) => x - y);
+    expect(new Set(lanes).size).toBe(ids.length);
+    // Lanes far enough apart for their labels.
+    for (let k = 1; k < lanes.length; k++) {
+      expect(lanes[k] - lanes[k - 1]).toBeGreaterThanOrEqual(LANE_W);
+    }
+    // The tools column moved right, past the last lane.
+    expect(pos.t.x - HEX_W / 2).toBeGreaterThan(lanes[lanes.length - 1]);
+  });
+
+  it("names the last column MCP servers when it holds only those", () => {
+    const g = graph(
+      [
+        ["a", "agent"],
+        ["m", "mcp"],
+      ],
+      [edge("a", "m", "call")],
+    );
+    expect(layeredLayout(g).columns.map((c) => c.title)).toEqual([
+      "Agents",
+      "MCP servers",
+    ]);
+  });
+
   it("fans apart edges joining the same two nodes", () => {
     // a calls t and reaches it as a tool: two curves, not one on another.
     const g = graph(
@@ -202,6 +244,9 @@ describe("layeredLayout", () => {
     expect(bends[1]).toHaveLength(1);
     expect(bends[2]).toHaveLength(1);
     expect(bends[1][0].y).not.toBe(bends[2][0].y);
+    // And they arrive apart, so neither arrowhead hides the other.
+    const { endDy } = layeredLayout(g);
+    expect(endDy[1]).not.toBe(endDy[2]);
     // A lone edge between adjacent columns needs no bend.
     expect(bends[0]).toEqual([]);
   });
