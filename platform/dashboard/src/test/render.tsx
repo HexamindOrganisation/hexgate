@@ -13,7 +13,7 @@ import { MemoryRouter } from "react-router-dom";
 
 /** Build a fresh QueryClient per test so cached requests don't leak
  * between cases (React Query caches by reference, not by request URL). */
-function makeQueryClient(): QueryClient {
+export function makeQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
       queries: {
