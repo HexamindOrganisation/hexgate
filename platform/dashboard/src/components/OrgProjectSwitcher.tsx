@@ -76,7 +76,15 @@ export function OrgProjectSwitcher({
                 {label.org}
               </span>
             )}
-            <span className="truncate font-mono text-[13px] font-medium text-foreground">
+            {/* Mono for a project name, not for a placeholder like it. */}
+            <span
+              className={cn(
+                "truncate text-[13px] font-medium",
+                label.placeholder
+                  ? "text-muted-foreground"
+                  : "font-mono text-foreground",
+              )}
+            >
               {label.project}
             </span>
           </span>
@@ -165,13 +173,20 @@ function switcherLabel(
   activeOrg: OrgWithRole | null,
   activeProject: ProjectRead | null,
   loading: boolean,
-): { project: string; org: string } {
+): { project: string; org: string; placeholder: boolean } {
   // Keep the org name visible while projects load, so an org switch doesn't
   // blank the context — only the project line reads "Loading…".
-  if (loading) return { project: "Loading…", org: activeOrg?.name ?? "" };
-  if (!activeOrg) return { project: "Pick an organization", org: "" };
+  if (loading)
+    return {
+      project: "Loading…",
+      org: activeOrg?.name ?? "",
+      placeholder: true,
+    };
+  if (!activeOrg)
+    return { project: "Pick an organization", org: "", placeholder: true };
   return {
     project: activeProject?.name ?? "No project",
     org: activeOrg.name,
+    placeholder: !activeProject,
   };
 }

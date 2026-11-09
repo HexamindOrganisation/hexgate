@@ -1,7 +1,7 @@
 /**
  * Tests for the sidebar app-shell.
  *
- * Four surfaces worth pinning:
+ * Surfaces worth pinning:
  *   1. The workspace nav renders its links, and collapsing the sidebar
  *      hides the labels (icon-only mode).
  *   2. The collapse toggle works from both the button and Cmd/Ctrl-B.
@@ -129,6 +129,20 @@ describe("AppShell", () => {
     expect(
       await screen.findByRole("link", { name: "Bans, 2 active bans" }),
     ).toHaveTextContent("2");
+  });
+
+  it("names a single active ban in the singular", async () => {
+    vi.restoreAllMocks();
+    stubFetch({
+      "/v1/users/me": USER,
+      "/v1/orgs": [ORG_A, ORG_B],
+      "/v1/orgs/org-a/projects": [PROJ_A1, PROJ_A2],
+      [`/v1/projects/${PROJ_A1.id}/bans`]: [{ id: "b1" }],
+    });
+    renderWithProviders(<AppShell />);
+    expect(
+      await screen.findByRole("link", { name: "Bans, 1 active ban" }),
+    ).toBeInTheDocument();
   });
 
   it("never asks a non-admin for bans (admin-only endpoint)", async () => {

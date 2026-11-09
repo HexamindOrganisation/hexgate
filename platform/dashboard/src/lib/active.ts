@@ -107,7 +107,15 @@ export function useProjectScoped(): ProjectScope {
   if (!activeProjectId) {
     return { projectId: null, status: "no-project", projectName: null };
   }
-  const projectName =
-    projectsQuery.data?.find((p) => p.id === activeProjectId)?.name ?? null;
-  return { projectId: activeProjectId, status: "ready", projectName };
+  // A saved id the list doesn't hold (the project was deleted) isn't usable:
+  // loading until the AppShell bootstrap swaps it, so no page requests it.
+  const project = projectsQuery.data?.find((p) => p.id === activeProjectId);
+  if (projectsQuery.data && !project) {
+    return { projectId: null, status: "loading", projectName: null };
+  }
+  return {
+    projectId: activeProjectId,
+    status: "ready",
+    projectName: project?.name ?? null,
+  };
 }
