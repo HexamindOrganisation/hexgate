@@ -368,6 +368,8 @@ export function TokensPage() {
                         <KeyRound className="size-3.5 text-muted-foreground" />
                         <span className="font-medium">{t.name}</span>
                         {isTest && <Badge variant="approval">test</Badge>}
+                        {/* Unused for 30+ days, a never-used key counted
+                            from its creation (Last used says "Never"). */}
                         {stale && <Badge variant="outline">stale</Badge>}
                       </span>
                     </td>

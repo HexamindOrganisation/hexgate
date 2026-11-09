@@ -24,4 +24,17 @@ describe("isStaleKey", () => {
     expect(isStaleKey(key("2026-10-20T11:59:00Z", null), NOW)).toBe(false);
     expect(isStaleKey(key("2026-08-01T00:00:00Z", null), NOW)).toBe(true);
   });
+
+  it("flags a key exactly 30 days unused, not a minute before", () => {
+    const at = (ms: number) => new Date(NOW - ms).toISOString();
+    expect(
+      isStaleKey(key("2026-01-01T00:00:00Z", at(30 * 86_400_000)), NOW),
+    ).toBe(true);
+    expect(
+      isStaleKey(
+        key("2026-01-01T00:00:00Z", at(30 * 86_400_000 - 60_000)),
+        NOW,
+      ),
+    ).toBe(false);
+  });
 });

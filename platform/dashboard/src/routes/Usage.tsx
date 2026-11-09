@@ -15,6 +15,11 @@ import { TopUsersCard } from "@/components/usage/top-users";
 import { useUsageFilters } from "@/lib/usage-filters";
 import { PageHeader } from "@/components/ui/page-header";
 import { fmtTokens } from "@/lib/format";
+import { cn } from "@/lib/utils";
+
+/** Input and output token colours, shared by the tiles and the split bar. */
+const INPUT_SWATCH = "bg-primary/40";
+const OUTPUT_SWATCH = "bg-primary";
 
 export function UsagePage() {
   const projectScope = useProjectScoped();
@@ -64,15 +69,14 @@ export function UsagePage() {
 
   const nDays = rangeDays(f.range, f.start_date, f.end_date);
   const hourly = !f.start_date && f.range === "24h";
-  // `fmt` overrides the plain count (e.g. compact tokens).
-  const avgLabel = (count: number, fmt?: (n: number) => string) => {
-    const per = hourly ? count / 24 : count / nDays;
-    const show =
-      fmt ??
-      ((n: number) =>
-        n.toLocaleString("en-US", { maximumFractionDigits: hourly ? 1 : 0 }));
-    return `${show(per)}/${hourly ? "hr" : "day"} avg`;
-  };
+  // `fmt` overrides the plain count (e.g. compact tokens). en-US, like
+  // fmtTokens beside it, so one strip never mixes decimal marks.
+  const avgLabel = (
+    count: number,
+    fmt = (n: number) =>
+      n.toLocaleString("en-US", { maximumFractionDigits: hourly ? 1 : 0 }),
+  ) =>
+    `${fmt(hourly ? count / 24 : count / nDays)}/${hourly ? "hr" : "day"} avg`;
   const inputPct = totals.total_tokens
     ? Math.round((totals.input_tokens / totals.total_tokens) * 100)
     : 0;
@@ -89,7 +93,14 @@ export function UsagePage() {
       <PageHeader
         title="Usage"
         description={
-          totals.calls > 0 ? (
+          // The previous range's totals stay on screen while the new ones
+          // load; don't word them as the new range's.
+          summaryQ.isPlaceholderData || !summaryQ.data ? (
+            <>
+              LLM token usage for project{" "}
+              <span className="font-mono text-foreground">{projectName}</span>
+            </>
+          ) : totals.calls > 0 ? (
             <>
               <span className="font-semibold text-foreground">
                 {fmtTokens(totals.total_tokens)} tokens
@@ -112,8 +123,20 @@ export function UsagePage() {
             </>
           ) : (
             <>
-              LLM token usage for project{" "}
-              <span className="font-mono text-foreground">{projectName}</span>
+              No model calls {rangePhrase(f.range, f.start_date)}
+              {/* Only blame the filters when the range has calls at all. */}
+              {scopeFiltered && rangeTotal > 0 ? (
+                " match these filters"
+              ) : (
+                <>
+                  {" "}
+                  for{" "}
+                  <span className="font-mono text-foreground">
+                    {projectName}
+                  </span>
+                </>
+              )}
+              .
             </>
           )
         }
@@ -131,7 +154,14 @@ export function UsagePage() {
       />
       <UsageActiveChips f={f} setF={setF} />
 
-      <div className="mb-4">
+      {/* The previous range's numbers stay while the new ones load: dim them
+          so they don't read as the new range's. */}
+      <div
+        className={cn(
+          "mb-4 transition-opacity",
+          summaryQ.isPlaceholderData && "opacity-50",
+        )}
+      >
         <StatStrip
           stats={[
             {
@@ -143,14 +173,14 @@ export function UsagePage() {
             {
               key: "input",
               label: "Input tokens",
-              swatchClass: "bg-primary/40",
+              swatchClass: INPUT_SWATCH,
               value: fmtTokens(totals.input_tokens),
               sub: `${inputPct}% of total`,
             },
             {
               key: "output",
               label: "Output tokens",
-              swatchClass: "bg-primary",
+              swatchClass: OUTPUT_SWATCH,
               value: fmtTokens(totals.output_tokens),
               sub: `${outputPct}% of total`,
             },
@@ -167,24 +197,31 @@ export function UsagePage() {
             {
               key: "input",
               value: totals.input_tokens,
-              className: "bg-primary/40",
+              className: INPUT_SWATCH,
             },
             {
               key: "output",
               value: totals.output_tokens,
-              className: "bg-primary",
+              className: OUTPUT_SWATCH,
             },
           ]}
         />
       </div>
 
-      <UsageBreakdownCard
-        byModel={summaryQ.data?.by_model ?? []}
-        byAgent={summaryQ.data?.by_agent ?? []}
-        byUser={summaryQ.data?.by_user.map(displayNoValue) ?? []}
-        f={f}
-        setF={setF}
-      />
+      <div
+        className={cn(
+          "transition-opacity",
+          summaryQ.isPlaceholderData && "opacity-50",
+        )}
+      >
+        <UsageBreakdownCard
+          byModel={summaryQ.data?.by_model ?? []}
+          byAgent={summaryQ.data?.by_agent ?? []}
+          byUser={summaryQ.data?.by_user.map(displayNoValue) ?? []}
+          f={f}
+          setF={setF}
+        />
+      </div>
       {projectId && (
         <div className="mt-4">
           <TopUsersCard projectId={projectId} f={f} setF={setF} />

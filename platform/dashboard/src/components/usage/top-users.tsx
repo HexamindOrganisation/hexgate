@@ -18,7 +18,7 @@ const WINDOWS: { id: TopUsersWindow; label: string }[] = [
   { id: "30d", label: "30 days" },
 ];
 
-// Input and output tokens stay out: the KPIs above already split them.
+// Input and output tokens stay out: the stat strip above already splits them.
 type TopUsersMetric = Exclude<UsageMetric, "input_tokens" | "output_tokens">;
 const METRIC_LABELS: Record<TopUsersMetric, string> = {
   total_tokens: "total tokens",
