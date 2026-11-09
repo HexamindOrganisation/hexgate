@@ -1,8 +1,8 @@
 """What a set of draft files would change compared with the saved policy files:
 per (agent, role, tool) grant, per agent for guards, usage and the opt-in gates.
 
-Both sides are the same compose resolution the editor and the compile path use;
-this module only compares them. Only :func:`diff_project` reads the store.
+Both sides are resolved from ``policy.yaml`` and its imports the way
+``/policy/preview`` resolves a draft; this module only compares them. Only :func:`diff_project` reads the store.
 """
 
 from __future__ import annotations
@@ -23,7 +23,8 @@ from hexgate_api.features.policy_modules.service import (
 )
 from hexgate_api.schemas import PolicyFileDraft
 
-# The agent-level fields compose puts, identically, on every role of an agent.
+# The agent-level fields: the policy.yaml resolver copies the agent's one value
+# onto each of its roles.
 AGENT_FIELDS = ("guards", "usage")
 # An agent gate no role declares is off: the runtime lets every caller through.
 OPEN = {"mode": "allow", "constraints": []}
@@ -38,7 +39,7 @@ GATES = {
 
 
 def _resolve(files: Mapping[str, str]) -> dict | None:
-    """Every declared agent's resolution, or None when the files don't compose."""
+    """Every declared agent's resolution, or None when the files don't resolve."""
     if ENTRY_FILE not in files:
         return None
     try:
@@ -169,8 +170,8 @@ def _tool_changes(agent: str, role: str, side_a, side_b, shown) -> list[dict]:
 
 
 def _field_changes(agent: str, a, b) -> list[dict]:
-    """The agent-level fields that differ between two resolutions. Compose puts
-    the same value on every role, so the ``default`` role speaks for the agent;
+    """The agent-level fields that differ between two resolutions. The resolver
+    copies the agent's one value onto each role, so ``default`` speaks for it;
     it is read through the serializer /policy/resolve uses, so a value reads the
     same there."""
     from hexgate.security import DEFAULT_ROLE_NAME
@@ -210,7 +211,7 @@ def _diff_agent_tools(agent: str, a, b, gates: tuple[dict, dict]) -> list[dict]:
 
 def diff_files(saved: Mapping[str, str], drafted: Mapping[str, str]) -> dict:
     """Compare the saved project with the drafted one. When either side does not
-    compose there is nothing to compare: ``changes`` is empty and ``composes``
+    resolve there is nothing to compare: ``changes`` is empty and ``composes``
     says which side failed (``/policy/check`` reports why)."""
     old = _resolve(saved)
     new = old if drafted == saved else _resolve(drafted)
