@@ -19,13 +19,14 @@ import { PolicyGraphDialog } from "./PolicyGraphDialog";
 import { TestPanel } from "./TestPanel";
 import { cn } from "@/lib/utils";
 import { MATRIX_MODE_TONE } from "@/lib/policy_files";
+import { verdictLabel } from "@/lib/policy";
 
 type Tab = "resolved" | "lints" | "test";
 
 function modeBadge(mode: string | undefined) {
-  if (mode === "allow") return "allow" as const;
-  if (mode === "deny") return "deny" as const;
-  if (mode === "approval_required") return "approval" as const;
+  if (mode === "allow" || mode === "deny" || mode === "approval_required") {
+    return verdictLabel(mode) as "allow" | "deny" | "approval";
+  }
   return "default" as const;
 }
 
