@@ -489,7 +489,7 @@ def test_resolve_ban_gate_none_in_local_policy_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """HEXGATE_LOCAL_POLICY is offline too — no ban feed, so the offline dev
-    loop never stalls on GET /v1/bans (plan §4.11)."""
+    loop never stalls on GET /v1/bans."""
     monkeypatch.setenv("HEXGATE_API_KEY", "fty_live_proj_secret")
     monkeypatch.setenv("HEXGATE_LOCAL_POLICY", "/tmp/policy.yaml")
     assert resolve_ban_gate("bot") is None

@@ -31,11 +31,11 @@ function AdminRequiredNotice() {
 }
 
 /**
- * Bans page ("kill switch" internally — never surfaced to users, §9.1).
+ * Bans page ("kill switch" internally — never surfaced to users).
  * Org-admins list, create, and revoke bans that stop an agent or user
  * from running at all, plus a feed of recently blocked attempts.
  *
- * States (§9.2): no-project → NoProjectEmptyState; loading + empty +
+ * States: no-project → NoProjectEmptyState; loading + empty +
  * populated are handled inside each panel. Non-admins are hard-blocked
  * (both ban reads are admin-only server-side).
  */
@@ -48,7 +48,7 @@ export function BansPage() {
     undefined,
   );
 
-  // Cross-page tie-ins (§9.6) deep-link with `?ban_user=` / `?ban_agent=`:
+  // Cross-page tie-ins deep-link with `?ban_user=` / `?ban_agent=`:
   // seed the create dialog and open it. Params are cleared on close so a
   // refresh doesn't reopen the dialog.
   const [searchParams, setSearchParams] = useSearchParams();
@@ -106,7 +106,7 @@ export function BansPage() {
 
   return (
     <div className="mx-auto max-w-[1400px] space-y-5">
-      {/* Region A — header (§9.3) */}
+      {/* Region A — header */}
       <div className="flex items-start justify-between gap-6">
         <div>
           <h1 className="flex items-center gap-2.5 text-2xl font-semibold tracking-tight">

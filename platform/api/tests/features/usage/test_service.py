@@ -511,6 +511,6 @@ def test_when_only_the_user_rollup_is_absent_then_only_it_is_reported() -> None:
 
 
 def test_user_reads_get_their_own_pool_and_memo() -> None:
-    """README G9: a burst of cold users must not queue or evict agent reads."""
+    """A burst of cold users must not queue or evict agent reads."""
     assert service.get_user_usage_executor() is not service.get_usage_executor()
     assert service.get_user_usage_memo() is not service.get_usage_memo()

@@ -649,7 +649,7 @@ def test_construction_does_not_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Agent-level reach + admission (A3)
+# Agent-level reach + admission
 # ---------------------------------------------------------------------------
 
 

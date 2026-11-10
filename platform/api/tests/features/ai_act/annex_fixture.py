@@ -1,8 +1,8 @@
-"""The annex the renderer is tested against: PR 3's golden file, not a copy.
+"""The annex the renderer is tested against: the assembler's golden file.
 
 This module used to hold a hand-written dict in a shape the renderer invented
-while PR 3 was unmerged. Two schemas for one artifact is how the renderer came
-to read ``cover["project_name"]`` from an annex that stores
+while the assembler was unmerged. Two schemas for one artifact is how the
+renderer came to read ``cover["project_name"]`` from an annex that stores
 ``cover["project"]["name"]``, with every test still green. There is one annex
 shape, and ``golden_annex.json`` — written and asserted by the assembler's own
 tests — is it.

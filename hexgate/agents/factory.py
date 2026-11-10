@@ -615,7 +615,7 @@ class HexgateAgent:
         guard_observer: "GuardObserver | None" = None,
         client: HexgateClient | None = None,
     ) -> Self:
-        """Return a new agent with Gate 1 policy enforcement applied.
+        """Return a new agent with its policy enforced.
 
         ``policy`` may be a YAML path, a ``policies/`` directory,
         :class:`AgentPolicy`, :class:`PolicySet`, a

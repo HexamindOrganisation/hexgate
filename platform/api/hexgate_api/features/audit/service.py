@@ -160,9 +160,9 @@ def _decision_row(
 
 
 # Caps live on the single-row path only: it serves direct external API callers,
-# who may send anything. The batch path's one planned caller (the span-enricher
-# job, OTel migration design doc PR 5) truncates and redacts server-side before
-# inserting, so the batch functions trust their input instead of re-checking.
+# who may send anything. The batch path's one caller (the span-enricher
+# job) truncates and redacts server-side before inserting, so the batch
+# functions trust their input instead of re-checking.
 # Indices derived from the column list so a reorder cannot desynchronise them.
 _DECISION_PAYLOAD_CAPS = (
     (_DECISION_COLUMNS.index("arguments"), "arguments", MAX_ARGS_BYTES),

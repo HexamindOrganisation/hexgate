@@ -83,7 +83,7 @@ CLAUDE_FLAGS = [
     *["--disallowedTools", "WebFetch,WebSearch"],
 ]
 # No eval-only system prompt: the agent gets the request and the skill, as in
-# real use (design doc, Annex D).
+# real use.
 NO_RESULT = "no result event"
 USAGE_KEYS = ("usage", "total_cost_usd", "modelUsage", "duration_ms", "num_turns")
 # Claude Code's session log: the only place the expanded slash command is written.
@@ -381,7 +381,7 @@ def policy_checks(model: str | None = None):
             size, pulled = await pull(sandbox(), Path(tmp))
             case, answer = CASES[state.sample_id], state.output.completion
             score = grade(case, Path(tmp), answer, size, agent_ran(state) or pulled)
-        # What Claude Code reported, for the cost report (PR 15), and the
+        # What Claude Code reported, for the cost report, and the
         # `--model` asked for (None: the subscription's default).
         score.metadata["usage"] = state.store.get("usage")
         score.metadata["model"] = model

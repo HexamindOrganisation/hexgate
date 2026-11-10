@@ -1,8 +1,7 @@
 # Framework version-compatibility suite
 
 Determines which released versions of each supported framework hexgate can
-wrap with **working policy enforcement**. Full strategy:
-`plans/framework-version-compat-testing.md`.
+wrap with **working policy enforcement**.
 
 Frameworks: `pydantic_ai`, `openai-agents`, `google-adk`, `langchain`,
 `deepagents`.
@@ -106,6 +105,5 @@ Each cell is classified as:
 - **UNUSABLE / INCOMPAT** — the framework or probe couldn't load or construct at that
   version (old API, transitive-dep conflict).
 
-Current per-framework supported ranges and open issues are recorded in
-`plans/framework-version-compat-testing.md`; the last generated table is
+The last generated table of per-framework supported ranges is
 `build/framework-matrix/results.md`.

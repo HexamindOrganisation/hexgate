@@ -82,7 +82,7 @@ def test_authorisation_matrix_happy_path() -> None:
     refund = matrix.cell("refund_order", "default")
     assert (refund.mode, refund.constraint_text) == ("approval", "args.amount <= 500")
     assert matrix.cell("delete_database", "default").mode == "deny"
-    # ``cells`` is public, and PR 3 indexes it directly: pin the key order.
+    # ``cells`` is public: pin the key order.
     assert matrix.cells[("lookup_order", "default")] is matrix.cell(
         "lookup_order", "default"
     )

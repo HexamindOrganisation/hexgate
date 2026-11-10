@@ -92,7 +92,7 @@ fmt-check: ## Check formatting without writing changes
 check: lint fmt-check test ## Python CI parity: lint + fmt-check + test (no coverage overhead)
 
 .PHONY: check-all
-check-all: lint fmt-check coverage platform-api-check dashboard-lint dashboard-typecheck dashboard-fmt-check collector-check mcp-check ## Full stack: lint + fmt + tests with coverage on all four surfaces, plus the MCP server's lint + tests
+check-all: lint fmt-check coverage platform-api-check dashboard-lint dashboard-typecheck dashboard-fmt-check collector-check mcp-check nginx-check ## Full stack: lint + fmt + tests with coverage on all four surfaces, plus the MCP server's lint + tests and the box's nginx includes
 	# Dashboard tests via the coverage script (vitest --coverage); same
 	# entry point CI uses so a green `check-all` proves the surfaces
 	# Codecov sees are the same surfaces a contributor saw locally.
@@ -112,6 +112,10 @@ mcp-run: ## Run the MCP server on :8080 against the platform API on localhost:80
 .PHONY: mcp-test
 mcp-test: ## Run the MCP server test suite
 	cd platform/mcp && uv run pytest tests/
+
+.PHONY: mcp-test-integration
+mcp-test-integration: ## Login-to-save end to end: the platform API as a subprocess on SQLite, no ClickHouse (needs uv and opa)
+	cd platform/mcp && uv run pytest -m integration
 
 .PHONY: mcp-check
 mcp-check: ## Lint + format check + test on the MCP server
@@ -456,6 +460,10 @@ dashboard-typecheck: ## Typecheck dashboard TypeScript
 # from HEXGATE_HTTP_PORT in the env file. Full runbook: platform/DEPLOY.md.
 STAGE ?= staging
 DEPLOY_COMPOSE = docker compose -p hexgate-$(STAGE) --env-file platform/.env.$(STAGE) -f platform/docker-compose.deploy.yml
+
+.PHONY: nginx-check
+nginx-check: ## nginx -t on the box's per-stage includes (platform/nginx), and prod/staging drift (needs nginx)
+	bash platform/nginx/check.sh
 
 # The env file is pulled from Scaleway (secret /hexgate/<stage>), not hand-copied.
 .PHONY: platform-env-pull

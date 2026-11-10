@@ -2,9 +2,9 @@
 
 Author a guard with ``@before_tool`` / ``@after_tool``; it observes a call,
 rewrites its args (before) or its result (after), or halts. Register guards as one
-flat ``guards=[...]`` list on the agent. See ``tool-guards-explained.md`` for the
-intuition, ``docs/adr/R-GUARD-001..008`` for the decisions, and the later phases
-(egress, more official plugins) in ``ROADMAP.md``.
+flat ``guards=[...]`` list on the agent. See ``docs/adr/R-GUARD-001..008`` for
+the decisions, and the later phases (egress, more official plugins) in
+``ROADMAP.md``.
 """
 
 from __future__ import annotations

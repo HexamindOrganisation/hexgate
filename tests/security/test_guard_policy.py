@@ -233,7 +233,7 @@ def test_non_empty_guards_preserved_in_dump() -> None:
     assert "guards" not in dumped["tools"]["send_email"]
 
 
-# --- PR3: bundle carriage + stance projection + filter (R-GUARD-007) -----------
+# --- bundle carriage + stance projection + filter (R-GUARD-007) ----------------
 
 
 def test_guard_stance_single_role() -> None:
@@ -513,7 +513,7 @@ def test_validate_guard_policy_rejects_ambiguous_name() -> None:
         validate_guard_policy(engine, [g_a, g_b], agent_name="a")
 
 
-# --- PR4: authoring lints (R-GUARD-006 / R-GUARD-007) --------------------------
+# --- authoring lints (R-GUARD-006 / R-GUARD-007) -------------------------------
 
 
 def _manifest(*names: str) -> SimpleNamespace:

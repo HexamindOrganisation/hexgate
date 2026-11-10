@@ -32,6 +32,8 @@ make test-one T=tests/security/test_bundle.py   # single file
 | `serve` | `hexgate serve` — bridge this SDK to the platform |
 | `platform-api-install` / `platform-api-test` | Deps / unit tests for the API |
 | `demo-platform` | Print the multi-terminal recipe |
+| **Box config** | |
+| `nginx-check` | `nginx -t` and drift checks on the box's include files in `platform/nginx/` (part of `check-all`). Needs `nginx` on PATH, an optional prerequisite (`brew install nginx`, `apt install nginx`): without it the check is skipped with a notice, and CI runs it |
 | **Misc** | |
 | `build` / `clean` | Package + tidy |
 

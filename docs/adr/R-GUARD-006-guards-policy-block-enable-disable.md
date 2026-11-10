@@ -45,7 +45,7 @@ governs the agent, not a tool or a caller.
   (not a bare bool) so a later version can add fields without a grammar break.
 - The "manifest is the contract" closed-world check (a guard named in a policy but
   absent from the agent's manifest → stop cold) is enforced where the manifest is
-  available — registration / enforcement (PR3, R-GUARD-007) — NOT at policy-parse
+  available — registration / enforcement (R-GUARD-007) — NOT at policy-parse
   time, which has no manifest.
 
 ## Why
@@ -89,15 +89,15 @@ parse-time rejected a guard name not yet in a manifest, a policy written ahead o
 (or independently from) its agent would fail to load, and inheritance/module
 composition — which resolve policies with no agent in hand — could not run at all.
 The stop-cold guarantee is not weakened, only relocated to the seam that has both
-halves: PR3 rejects an enable/disable that names an undeclared guard.
+halves: R-GUARD-007 rejects an enable/disable that names an undeclared guard.
 
 ## Consequences
 
-- PR3 (R-GUARD-007) reads `effective_guards` off the signed bundle at pipeline
+- R-GUARD-007 reads `effective_guards` off the signed bundle at pipeline
   build, filters the guard list, and applies the closed-world "stop cold" check
   against the manifest.
 - Analyzer lints for the block (a guard rule that no manifest guard matches, a
-  redundant override) are deferred to PR4.
+  redundant override) are deferred to a later change.
 - `BaseToolPolicy` carries **no** `guards` field, so a `tools:` / `default_policy` /
   `admission:` / `agents:` / `skills:` entry cannot hold one. A `BaseToolPolicy`
   before-validator rejects a `guards:` on any of them with a message that names the fix

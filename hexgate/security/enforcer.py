@@ -120,7 +120,8 @@ def _usage_paths_of(engine: PolicyEngine, method: str) -> frozenset[str]:
     return paths() if paths is not None else frozenset()
 
 
-# The engine method 6b adds; until then every engine reads as allow (G3).
+# The engine method that reports the usage roots' fail mode; an engine without
+# it reads as allow.
 _ON_UNAVAILABLE_METHOD = "usage_on_unavailable"
 
 
@@ -187,7 +188,7 @@ class _BoundPolicy:
 @dataclass(frozen=True, slots=True)
 class UsageRefresh:
     """One boundary's usage refresh: the source, the scope and the paths of the
-    policy loaded when the run started (02 §5.5 Rule 2)."""
+    policy loaded when the run started."""
 
     source: PlatformUsageSource
     scope: UsageScope

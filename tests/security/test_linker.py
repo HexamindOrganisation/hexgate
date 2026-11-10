@@ -1,8 +1,8 @@
 """Tests for the policy linker — composing a module bundle into one policy.
 
 The fold is the crown jewel, so these are pure (no opa needed) except the final
-parity test. Fixtures mirror ``policy-modules-plan.md``'s worked example, with
-the two boundary postures kept internally consistent:
+parity test. Fixtures share one worked example, with the two boundary postures
+kept internally consistent:
 
 - **floor** boundary (``default_policy: allow``) — only subtracts what it names;
   unlisted tools pass through to capabilities.

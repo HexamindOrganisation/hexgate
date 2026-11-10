@@ -21,8 +21,6 @@ Roles are bindings, not inheritance, for two reasons that bite at scale. Authore
 
 Boundaries are role-independent on purpose: every role folds against the same boundaries, so a misconfigured role binding can never exceed a ceiling. Role escalation past a boundary is structurally impossible, not merely discouraged.
 
-Full narrative (the worked examples, the store shape, the alternatives) lives in the design doc and the authoring guide; this ADR is the citable decision, not a copy. See `../../policy-modules-phase3-design.md` and `../../how-to-structure-policy-modules.md`, and the Notion "Multi-module policy: structure and design decisions".
-
 ## Consequences
 
 - Capabilities become the reusable, reviewable unit; a role is a one-line list. Change a capability once and every role that imports it updates.

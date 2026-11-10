@@ -1,7 +1,7 @@
 """The `usage:` policy block: what `agent_usage.*` reads when the snapshot is missing.
 
 Agent-wide like the guard stance (R-GUARD-006/007): every role must resolve to one
-`on_unavailable`, checked when the policy set loads. Absent means `allow` (G3). A
+`on_unavailable`, checked when the policy set loads. Absent means `allow`. A
 `deny` is signed into the bundle manifest, and a usage-free policy's dump and
 manifest bytes must not move. These tests pin the model shape, placement,
 inheritance, cross-role agreement, the serializer drop and the bundle carriage.
@@ -120,7 +120,7 @@ def test_explicit_null_usage_in_a_role_is_rejected(inherits: list[str]) -> None:
 
 
 def test_absent_usage_reads_allow() -> None:
-    """G3: a policy that says nothing fails open."""
+    """A policy that says nothing fails open."""
     assert AgentPolicy().usage_on_unavailable() is OnUnavailable.ALLOW
 
 

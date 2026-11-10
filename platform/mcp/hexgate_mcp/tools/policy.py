@@ -43,7 +43,8 @@ COVERAGE: Spec = {
 
 
 class PolicyDraft(BaseModel):
-    """An unsaved policy file, overlaid on the project's stored files."""
+    """An unsaved policy file, applied over the stored file of the same name
+    or added beside the stored files."""
 
     name: str
     content: str
@@ -61,48 +62,47 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         return await api.post(path, token.token, body)
 
     async def refuse_without_store(
-        project_id: str, draft: PolicyDraft | None = None
+        project_id: str, drafts: list[PolicyDraft] | None = None
     ) -> None:
         """A project with neither an entry file nor a role binding enforces
         each agent's own policy (the API's `is_modular`), which these routes
         never read: resolve and graph answer a `default` role importing every
         capability in the library (or nothing), check the module store's lints
-        and the test route that same `default` role. A draft takes effect only
-        as the entry file itself, or as a stored file beside one (the API's
-        own test): otherwise the preview answers a link-error when there is
-        no entry file, and for the saved policy beside one, and the test route
-        answers for the saved policy."""
-        if draft is not None and draft.name == ENTRY_FILE:
+        and the test route that same `default` role. Drafts apply over the
+        stored files, so they take effect beside a stored entry file or with
+        an entry-file draft, and a draft may add a file not stored yet; on the
+        module store they would change nothing."""
+        if _drafts_entry(drafts):
             return
         files = await read(project_id, "/policy-files")
         if _has_entry(files):
-            # A new file is read only once policy.yaml imports it, and an
-            # import of a file not stored fails to link: one call takes one
-            # draft, so the file is saved first (it changes nothing while
-            # nothing imports it), then the importing policy.yaml drafted.
-            if draft is not None and not any(f["name"] == draft.name for f in files):
+            # A stored file cannot import one that isn't saved yet, so drafts
+            # that are all new files are read by nothing: the API would answer
+            # for the saved policy as if they were fine.
+            stored = {f["name"] for f in files}
+            if drafts and all(d.name not in stored for d in drafts):
                 raise ToolError(
-                    f"{draft.name!r} is not stored yet, so nothing imports it and "
-                    "the draft cannot apply; save it first with policy_save "
-                    "(or, without the 'policy:write' scope, from the "
-                    "dashboard's Policies page; it changes nothing while "
-                    f"nothing imports it), then draft the {ENTRY_FILE!r} that "
-                    "imports it"
+                    f"nothing imports {sorted(d.name for d in drafts)}, so the "
+                    "drafts would not be read; draft each together with the "
+                    f"file that imports it (such as {ENTRY_FILE!r})"
                 )
             return
-        # Bindings first: without them a retry without the draft is refused
+        # Bindings first: without them a retry without the drafts is refused
         # too, so the draft refusal would send the model round once for nothing.
         if not (await read(project_id, "/policy-roles"))["roles"]:
             raise ToolError(
                 f"this project has no {ENTRY_FILE!r} and no role bindings, so "
                 "each agent enforces its own policy, which this tool does not read"
             )
-        if draft is not None:
+        if drafts:
+            # The API refuses these too (files_with_drafts), but the preview
+            # answers with a lint the model would read as a policy error, and
+            # the test route with a 422 that names no way forward.
             # Not "draft policy.yaml instead": saving a first one moves the
             # whole project's enforcement onto the file store.
             raise ToolError(
                 f"this project has no {ENTRY_FILE!r}, so a draft file cannot "
-                "apply to it; call again without the draft. Saving a first "
+                "apply to it; call again without drafts. Saving a first "
                 f"{ENTRY_FILE!r} would switch every agent onto the file store"
             )
 
@@ -206,16 +206,23 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         return result_text(bindings)
 
     @mcp.tool(annotations=READ_ONLY, structured_output=False)
-    async def policy_check(project_id: str, draft: PolicyDraft | None = None) -> str:
+    async def policy_check(
+        project_id: str, drafts: list[PolicyDraft] | None = None
+    ) -> str:
         """Lint the project's policy: errors such as a policy that does not
-        compose, and warnings such as dead grants. Pass a `draft` file to
-        check it as if it were saved. A file
-        `policy.yaml` does not import is not read, so its draft changes
-        nothing until the import exists."""
-        await refuse_without_store(project_id, draft)
-        if draft is None:
+        compose, and warnings such as dead grants. Pass `drafts`, each a whole
+        file by `name`, to check them together as if they were saved; the
+        answer then also holds the generic (`"*"`) view they resolve to, which
+        leaves out roles declared under `agents:` (policy_dry_run with
+        `agent` evaluates those).
+        A file nothing imports is not read: draft a new file
+        together with the `policy.yaml` that imports it."""
+        await refuse_without_store(project_id, drafts)
+        if not drafts:
             return result_text(await read(project_id, "/policy/check"))
-        body = draft.model_dump()
+        # The preview, not POST /policy/check: it also returns the generic
+        # view the drafts resolve to, which no other tool shows.
+        body = {"drafts": _dump(drafts)}
         return result_text(await post(project_id, "/policy/preview", body))
 
     @mcp.tool(annotations=READ_ONLY, structured_output=False)
@@ -253,20 +260,21 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         args: dict[str, Any] | None = None,
         agent: str | None = None,
         attributes: dict[str, Any] | None = None,
-        draft: PolicyDraft | None = None,
+        drafts: list[PolicyDraft] | None = None,
     ) -> str:
         """Would this tool call be allowed? Evaluates one call of `tool` with
         `args` by a caller in `role`, as `agent` runs it (by default the
         generic view every agent starts from), against the resolved policy;
-        `attributes` are the caller's ctx.* values. Pass a `draft` file to
-        evaluate against it as if it were saved. A file
-        `policy.yaml` does not import is not read, so its draft changes
-        nothing until the import exists. With a `policy.yaml` draft, `agent`
-        is not checked against the draft's own agents: an agent it does not
-        declare is evaluated under the generic view."""
-        await refuse_without_store(project_id, draft)
+        `attributes` are the caller's ctx.* values. Pass `drafts`, each a
+        whole file by `name`, to evaluate against them as if they were saved.
+        With a `policy.yaml` draft, `agent` is not checked against the draft's
+        own agents: an agent it does not declare is evaluated under the
+        generic view.
+        A file nothing imports is not read: draft a new file
+        together with the `policy.yaml` that imports it."""
+        await refuse_without_store(project_id, drafts)
         # A draft policy.yaml may declare an agent the saved graph lacks.
-        if draft is None or draft.name != ENTRY_FILE:
+        if not _drafts_entry(drafts):
             await refuse_unknown_agent(project_id, agent)
         body = {
             "role": role,
@@ -274,7 +282,7 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
             "args": args,
             "agent": agent,
             "attributes": attributes,
-            "draft": draft.model_dump() if draft else None,
+            "drafts": _dump(drafts) if drafts else None,
         }
         # Unset: left out, so the API applies its own defaults.
         body = {k: v for k, v in body.items() if v is not None}
@@ -283,3 +291,11 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
 
 def _has_entry(files: list[dict[str, Any]]) -> bool:
     return any(f["name"] == ENTRY_FILE for f in files)
+
+
+def _drafts_entry(drafts: list[PolicyDraft] | None) -> bool:
+    return any(d.name == ENTRY_FILE for d in drafts or ())
+
+
+def _dump(drafts: list[PolicyDraft]) -> list[dict[str, Any]]:
+    return [d.model_dump() for d in drafts]

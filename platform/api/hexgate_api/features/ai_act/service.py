@@ -64,7 +64,7 @@ JWKS_PATH = "/v1/.well-known/keys"
 # like, not a copy of the log — the log stays queryable through the audit API.
 DECISION_SAMPLE_LIMIT = 20
 APPROVAL_SAMPLE_LIMIT = 20
-# Bans are the kill switch: the spec wants every enforcement, so the cap is
+# Bans are the kill switch: the report wants every enforcement, so the cap is
 # high and the annex says when it clipped rather than pretending it did not.
 BAN_ENFORCEMENT_LIMIT = 500
 
