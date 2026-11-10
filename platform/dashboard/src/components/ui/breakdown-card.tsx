@@ -72,7 +72,7 @@ export function BreakdownCardShell<
   emptyMessage,
   legend,
   columns = 2,
-  collapseAt,
+  collapseAt = 10,
 }: {
   dims: { id: Dim; label: string }[];
   dim: Dim;
@@ -91,23 +91,19 @@ export function BreakdownCardShell<
   legend: ReactNode;
   /** Bar grid columns; 1 when the card sits in a narrow column. */
   columns?: 1 | 2;
-  /** Show the first N rows, then a "Show all" that scrolls the rest. */
+  /** Show the first N rows (10 by default, so no caller silently cuts the
+   * list), then a "Show all" that scrolls the rest. */
   collapseAt?: number;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  // Reset expansion when the dimension changes (the row set changes), so a
-  // long list expanded under one tab doesn't leak — uncollapsible — into a
-  // short one. A metric change only re-sorts the same rows, so it's kept.
-  const stateKey = dim;
-  const [prevKey, setPrevKey] = useState(stateKey);
-  if (stateKey !== prevKey) {
-    setPrevKey(stateKey);
-    setExpanded(false);
-  }
-  const overflowing = collapseAt != null && rows.length > collapseAt;
-  const collapsed = overflowing && !expanded;
-  const shown = collapsed ? rows.slice(0, collapseAt) : rows;
-  const hidden = rows.length - (collapseAt ?? rows.length);
+  // Expanded for one dimension only: a tab change (a new row set) collapses
+  // it; a metric change only re-sorts the same rows, so it's kept.
+  const [expandedFor, setExpandedFor] = useState<Dim | null>(null);
+  const expanded = expandedFor === dim;
+  const overflowing = rows.length > collapseAt;
+  const shown = overflowing && !expanded ? rows.slice(0, collapseAt) : rows;
+  // Expanded, the list scrolls past half again the collapsed rows (a bar row
+  // is about 2.5rem), so "Show all" never shows fewer than it did collapsed.
+  const maxRows = Math.ceil((collapseAt * 1.5) / columns);
   return (
     <Card className="flex flex-col p-6">
       <div className="mb-4 flex items-center justify-between">
@@ -137,7 +133,12 @@ export function BreakdownCardShell<
         </Select>
       </div>
       <div
-        className={`grid flex-1 gap-x-8 ${columns === 2 ? "grid-cols-2" : "grid-cols-1 content-start"} ${overflowing && expanded ? "max-h-72 overflow-y-auto scrollbar-thin" : ""}`}
+        className={`grid flex-1 gap-x-8 ${columns === 2 ? "grid-cols-2" : "grid-cols-1 content-start"} ${overflowing && expanded ? "overflow-y-auto scrollbar-thin" : ""}`}
+        style={
+          overflowing && expanded
+            ? { maxHeight: `${maxRows * 2.5}rem` }
+            : undefined
+        }
       >
         {rows.length ? (
           shown.map((row) => {
@@ -161,10 +162,13 @@ export function BreakdownCardShell<
         {overflowing && (
           <button
             type="button"
-            onClick={() => setExpanded((e) => !e)}
+            aria-expanded={expanded}
+            onClick={() => setExpandedFor(expanded ? null : dim)}
             className="ml-auto font-medium text-primary underline-offset-2 hover:underline"
           >
-            {expanded ? "Show fewer" : `Show all ${rows.length} · +${hidden}`}
+            {expanded
+              ? "Show fewer"
+              : `Show all ${rows.length} · +${rows.length - collapseAt}`}
           </button>
         )}
         <span className={overflowing ? "" : "ml-auto"}>
