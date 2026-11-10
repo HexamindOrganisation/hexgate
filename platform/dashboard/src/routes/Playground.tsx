@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Streamdown } from "streamdown";
 import {
@@ -71,6 +71,12 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
     projectId,
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Bumped on each opening, so the settings draft starts from what's applied.
+  const [settingsSession, setSettingsSession] = useState(0);
+  const openSettings = () => {
+    setSettingsSession((n) => n + 1);
+    setSettingsOpen(true);
+  };
   // Tagged with the project and name it was fetched for, so a switch never
   // reads the previous agent's roles while the new one loads.
   const [fetched, setFetched] = useState<{
@@ -79,13 +85,14 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   } | null>(null);
   const agentKey = `${projectId}\u0000${state.agentName ?? ""}`;
   const agent = fetched?.key === agentKey ? fetched.agent : null;
-  // The roles the user applied, per project: unset until they choose (the
-  // agent's first role then), [] for "no role". A set, not a scalar: the
-  // enforcer evaluates every role the caller carries.
-  const [roleChoice, setRoleChoice] = useState<Record<string, string[]>>({});
-  // Full-screen presentation mode (own tab, no app sidebar — see AppShell). The
-  // playground drops its breakout margins and swaps "open in tab" for a close.
-  // The acting name is subscribed inside the chip and the settings form rather
+  // The roles the user applied in this project, saved with the acting name:
+  // unset until they choose (the agent's first role then), [] for "no role".
+  // A set, not a scalar: the enforcer evaluates every role the caller carries.
+  const saved = usePlaygroundPrefs((s) => s.roles[projectId]);
+  const setRoles = usePlaygroundPrefs((s) => s.setRoles);
+  // Full-screen presentation mode (own tab, no app sidebar — see AppShell): no
+  // breakout margins, "Exit full screen", and a theme toggle for New chat. The
+  // acting name is subscribed inside the chip and the settings form rather
   // than here, so editing it doesn't re-render the whole transcript.
   const present = usePresentMode();
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -94,22 +101,21 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   // per-agent concept today (M1); a later global role registry moves this hook.
   useEffect(() => {
     if (!state.agentName) return;
-    const key = `${projectId}\u0000${state.agentName}`;
     let cancelled = false;
     api
       .getAgent(state.agentName, projectId)
       .then((a) => {
-        if (!cancelled) setFetched({ key, agent: a });
+        if (!cancelled) setFetched({ key: agentKey, agent: a });
       })
       .catch(() => {
-        if (!cancelled) setFetched({ key, agent: null });
+        if (!cancelled) setFetched({ key: agentKey, agent: null });
       });
     return () => {
       cancelled = true;
     };
-  }, [state.agentName, projectId]);
+  }, [state.agentName, projectId, agentKey]);
 
-  // Roles for the "Acting as" picker. A compose (modular) project has no
+  // Roles for the session settings. A compose (modular) project has no
   // per-agent role registry in the classic policy_yaml — its roles come from
   // resolving the agent's compose policy — so prefer those, and fall back to the
   // classic policy_yaml for a non-modular agent. (A classic project 422s on
@@ -129,7 +135,12 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   // agent that briefly has no roles: the chosen roles the agent still
   // defines, else its first role, unless "no role". While serve is down a
   // queued turn keeps the choice; an online agent with no roles gets none.
-  const choice = roleChoice[projectId];
+  // A choice applies to the agent it was made for, not whatever serves next;
+  // while none is serving (a restart clears the name) it still applies.
+  const choice =
+    saved && (!state.agentName || saved.agent === state.agentName)
+      ? saved.roles
+      : undefined;
   const agentOnline = state.agentOnline;
   const activeRoles = useMemo(() => {
     if (roleOptions.length === 0) return agentOnline ? [] : (choice ?? []);
@@ -139,8 +150,9 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   }, [choice, roleOptions, agentOnline]);
   // null: the roles weren't touched in the dialog, so the choice stands.
   const applyRoles = (roles: string[] | null) => {
-    if (roles === null) return;
-    setRoleChoice((prev) => ({ ...prev, [projectId]: roles }));
+    // With no agent serving (a restart), keep the choice's agent.
+    const agent = state.agentName ?? saved?.agent;
+    if (roles !== null && agent) setRoles(projectId, agent, roles);
   };
 
   // Whether the user was pinned to the bottom BEFORE the latest update — read
@@ -178,6 +190,15 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   }
 
   const empty = state.messages.length === 0;
+  // Calls held at the approval prompt (tool + arguments): their cards say
+  // so, not "Running".
+  const awaiting = useMemo(
+    () =>
+      new Set(
+        state.pendingApprovals.map((a) => callKey(a.tool_name, a.arguments)),
+      ),
+    [state.pendingApprovals],
+  );
 
   return (
     <AccentScope
@@ -204,11 +225,7 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
         </div>
         <div className="flex items-center gap-1">
           <DecisionSummary decisions={state.decisions} />
-          <button
-            type="button"
-            onClick={() => setSettingsOpen(true)}
-            className={BAR_BTN}
-          >
+          <button type="button" onClick={openSettings} className={BAR_BTN}>
             <SlidersHorizontal className="size-4" />
             Settings
           </button>
@@ -251,6 +268,7 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
                   message={m}
                   agentName={state.agentName}
                   present={present}
+                  awaiting={awaiting}
                 />
               ))}
             </div>
@@ -284,7 +302,7 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
               <IdentityChip
                 projectId={projectId}
                 activeRoles={activeRoles}
-                onClick={() => setSettingsOpen(true)}
+                onClick={openSettings}
               />
             }
           />
@@ -301,6 +319,8 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
       <SessionSettings
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
+        session={settingsSession}
+        agentName={state.agentName}
         projectId={projectId}
         roleOptions={roleOptions}
         activeRoles={activeRoles}
@@ -358,9 +378,7 @@ function AgentStatus({
   return (
     <Link
       to="/agents"
-      // Full screen is a demo tab: don't navigate away from it.
-      target={present ? "_blank" : undefined}
-      rel={present ? "noopener" : undefined}
+      {...newTabWhen(present)}
       className={cn(pill, "transition-colors hover:bg-accent")}
     >
       <Bot className="size-3.5 text-primary" />
@@ -407,7 +425,7 @@ function IdentityChip({
   activeRoles: string[];
   onClick: () => void;
 }) {
-  const name = usePlaygroundPrefs((s) => s.names[projectId] ?? "").trim();
+  const name = usePlaygroundPrefs((s) => s.names[projectId] ?? "");
   const caller = callerName(name, activeRoles) ?? "default caller";
   return (
     <button
@@ -431,23 +449,41 @@ function IdentityChip({
   );
 }
 
-/** "N decisions · M failed" for the session, red when any failed. */
-function DecisionSummary({ decisions }: { decisions: ToolCall[] }) {
+/** "N decisions · M denied · K not approved · J failed" for the session, red
+ * when any call was stopped or failed. Memoised: the page re-renders per
+ * streamed token. */
+const DecisionSummary = memo(function DecisionSummary({
+  decisions,
+}: {
+  decisions: ToolCall[];
+}) {
   if (decisions.length === 0) return null;
-  const failed = decisions.filter((d) => d.state === "failed").length;
+  const verdicts = decisions.map((d) => verdictOf(d, false));
+  const count = (v: Verdict) => verdicts.filter((x) => x === v).length;
+  const [denied, held, failed] = [
+    count("denied"),
+    count("held"),
+    count("failed"),
+  ];
   return (
     <span className="mr-2 hidden items-center gap-2 text-sm text-muted-foreground sm:flex">
       <span
         className={cn(
           "size-2 rounded-sm",
-          failed ? "bg-deny" : "bg-muted-foreground",
+          denied || failed
+            ? "bg-deny"
+            : held
+              ? "bg-approval"
+              : "bg-muted-foreground",
         )}
       />
       {pluralise(decisions.length, "decision")}
+      {denied > 0 && ` · ${denied} denied`}
+      {held > 0 && ` · ${held} not approved`}
       {failed > 0 && ` · ${failed} failed`}
     </span>
   );
-}
+});
 
 function EmptyState({ online }: { online: boolean }) {
   return (
@@ -531,14 +567,18 @@ function Composer({
 
 // ── Transcript ──────────────────────────────────────────────────────────────
 
-function MessageView({
+/** One message. Memoised: a streamed token re-renders only the turn it
+ * lands in, since untouched messages keep their identity. */
+const MessageView = memo(function MessageView({
   message,
   agentName,
   present,
+  awaiting,
 }: {
   message: ChatMessage;
   agentName: string | null;
   present: boolean;
+  awaiting: ReadonlySet<string>;
 }) {
   if (message.role === "user") {
     return (
@@ -556,7 +596,7 @@ function MessageView({
   }
 
   const turn = message.turn;
-  const hasSteps = !!turn && (turn.reasoning !== "" || turn.tools.length > 0);
+  const steps = turn && (turn.reasoning || turn.tools.length) ? turn : null;
   return (
     <div className="pg-enter flex items-start gap-3">
       <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg bg-action text-action-foreground">
@@ -565,19 +605,24 @@ function MessageView({
       <div className="min-w-0 flex-1 space-y-3 pt-0.5">
         {/* Intermediate steps: the agent's reasoning + each tool call, shown as
             a compact timeline before the final answer. */}
-        {hasSteps && (
+        {steps && (
           <div className="space-y-2">
-            {turn!.reasoning !== "" && (
+            {steps.reasoning !== "" && (
               <div className="border-l-2 border-border pl-3 text-xs italic text-muted-foreground">
-                {turn!.reasoning}
+                {steps.reasoning}
               </div>
             )}
-            {turn!.tools.map((t) => (
+            {steps.tools.map((t) => (
               <DecisionCard
                 key={t.id}
                 call={t}
                 agentName={agentName}
-                present={present}
+                // Only the turn that's running can be at the prompt.
+                awaiting={
+                  !!steps.streaming &&
+                  t.state === "started" &&
+                  awaiting.has(callKey(t.name, t.args))
+                }
               />
             ))}
           </div>
@@ -595,7 +640,7 @@ function MessageView({
       </div>
     </div>
   );
-}
+});
 
 /** The hexkit "goo" loader: a shimmering label over three dots that fuse into a
  * liquid blob via the #pg-goo SVG filter. Shown while the turn is still
@@ -638,15 +683,66 @@ function GooFilter() {
   );
 }
 
+/** What a call's card reports. A policy that stops a call doesn't always
+ * fail it (the OpenAI and Google ADK adapters return the verdict as the
+ * tool's result), so `hexgate serve` marks it on the event; an older serve
+ * that doesn't is read from the message's opening instead. */
+type Verdict =
+  | "allowed"
+  | "denied"
+  | "held"
+  | "failed"
+  | "running"
+  | "awaiting";
+
+// "[<marker>] <body>", as the SDK's verdict reader matches it (tool, reach
+// or skill); the wording says held from denied.
+const STOPPED_TEXT =
+  /^\[[a-z0-9_-]+\] (?:Tool|reach to agent|skill) '[^']*' (requires human approval|is denied by the agent policy|is not permitted by this agent's policy)/;
+
+function verdictOf(call: ToolCall, awaiting: boolean): Verdict {
+  if (call.state === "started") return awaiting ? "awaiting" : "running";
+  if (call.verdict) return call.verdict;
+  // null: serve said the tool ran. Only an older serve, with no field, is
+  // read from the text.
+  if (call.verdict === null)
+    return call.state === "failed" ? "failed" : "allowed";
+  const phrase = STOPPED_TEXT.exec(call.outputSummary?.trim() ?? "")?.[1];
+  if (phrase) return phrase === "requires human approval" ? "held" : "denied";
+  return call.state === "failed" ? "failed" : "allowed";
+}
+
+/** The key a held call and its approval prompt share: tool and arguments. */
+const callKey = (name: string, args: unknown) =>
+  `${name}\u0000${JSON.stringify(args)}`;
+
 const DECISION: Record<
-  ToolCall["state"],
+  Verdict,
   { label: string; dot: string; text: string; border: string }
 > = {
-  completed: {
+  allowed: {
     label: "Allowed",
     dot: "bg-muted-foreground",
     text: "text-foreground",
     border: "border-border",
+  },
+  denied: {
+    label: "Denied",
+    dot: "bg-deny",
+    text: "text-deny",
+    border: "border-deny/50",
+  },
+  held: {
+    label: "Not approved",
+    dot: "bg-approval",
+    text: "text-approval",
+    border: "border-approval/50",
+  },
+  awaiting: {
+    label: "Awaiting approval",
+    dot: "bg-approval",
+    text: "text-approval",
+    border: "border-approval/50",
   },
   failed: {
     label: "Failed",
@@ -654,7 +750,7 @@ const DECISION: Record<
     text: "text-deny",
     border: "border-deny/50",
   },
-  started: {
+  running: {
     label: "Running",
     dot: "bg-approval",
     text: "text-approval",
@@ -662,20 +758,24 @@ const DECISION: Record<
   },
 };
 
-/** One tool call inline in the turn, collapsible; a failed call opens by
- * default so the reason is in view. */
-function DecisionCard({
+/** One tool call inline in the turn, collapsible; a denied, held or failed
+ * call opens by default so the reason is in view. */
+const DecisionCard = memo(function DecisionCard({
   call,
   agentName,
-  present,
+  awaiting,
 }: {
   call: ToolCall;
   agentName: string | null;
-  present: boolean;
+  awaiting: boolean;
 }) {
+  const present = usePresentMode();
   const [open, setOpen] = useState<boolean | null>(null);
-  const shown = open ?? call.state === "failed";
-  const d = DECISION[call.state];
+  const verdict = verdictOf(call, awaiting);
+  const shown =
+    open ??
+    (verdict === "denied" || verdict === "held" || verdict === "failed");
+  const d = DECISION[verdict];
   return (
     <div className={cn("rounded-xl border bg-card", d.border)}>
       <button
@@ -702,9 +802,11 @@ function DecisionCard({
         <div className="space-y-2 px-3 pb-3 text-xs">
           <p className="text-muted-foreground">
             {call.outputSummary ??
-              (call.state === "started"
-                ? "Waiting for the tool to finish."
-                : "No summary returned.")}
+              (verdict === "awaiting"
+                ? "Waiting for approval: decide in the prompt above."
+                : call.state === "started"
+                  ? "Waiting for the tool to finish."
+                  : "No summary returned.")}
             {call.endedAt != null && (
               <span className="ml-1 font-mono">
                 · {Math.round(call.endedAt - call.startedAt)} ms
@@ -720,9 +822,7 @@ function DecisionCard({
           {agentName && call.state !== "started" && (
             <Link
               to={auditUrl({ agent: agentName, tool: call.name, range: "24h" })}
-              // Full screen is a demo tab: don't navigate away from it.
-              target={present ? "_blank" : undefined}
-              rel={present ? "noopener" : undefined}
+              {...newTabWhen(present)}
               className="inline-block font-medium text-primary hover:underline"
             >
               Open in audit
@@ -732,6 +832,12 @@ function DecisionCard({
       )}
     </div>
   );
+});
+
+/** Link props that open a new tab in full screen: a demo tab mustn't
+ * navigate away. */
+function newTabWhen(present: boolean) {
+  return present ? { target: "_blank", rel: "noopener" } : {};
 }
 
 // ── Approval prompts ────────────────────────────────────────────────────────
@@ -866,8 +972,8 @@ function ApprovalPromptCard({
         </Button>
         <Button
           size="sm"
-          // A decision colour, never the Playground accent.
-          className="h-7 gap-1.5 bg-success text-xs text-white hover:bg-success/90 dark:text-background"
+          // Neutral, never the Playground accent; green means "connected".
+          className="h-7 gap-1.5 bg-foreground text-xs text-background hover:bg-foreground/85"
           onClick={() => onDecide(request.decision_id, true)}
         >
           <Check className="size-3" />

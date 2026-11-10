@@ -10,17 +10,17 @@ import { SCHEME_ACCENTS } from "./theme";
 const migrate = usePlaygroundPrefs.persist.getOptions().migrate!;
 
 describe("playground prefs migration", () => {
-  it("turns stored preset values into ids, from v0 and v1", () => {
-    // v0's old dark blue, v1's light violet and an extra preset's value.
+  it("turns stored preset values into ids, from v0, v1 and v2", () => {
+    // v0's old dark blue, v1's light violet, v2's dark teal.
     expect(
       migrate({ accent: "226 78% 65%", names: { p1: "Maya" } }, 0),
     ).toEqual({ accent: "blue", names: { p1: "Maya" } });
     expect(
       migrate({ accent: SCHEME_ACCENTS.violet.light, names: {} }, 1),
     ).toMatchObject({ accent: "violet" });
-    expect(migrate({ accent: "blue", names: {} }, 2)).toMatchObject({
-      accent: "blue",
-    });
+    expect(
+      migrate({ accent: SCHEME_ACCENTS.teal.dark, names: {} }, 2),
+    ).toMatchObject({ accent: "teal" });
   });
 
   it("keeps a custom colour as hex and an unset accent unset", () => {
@@ -32,11 +32,23 @@ describe("playground prefs migration", () => {
     expect(migrate(current, 3)).toEqual(current);
   });
 
+  it("keeps a preset id or hex stored by v2, dropping a removed one", () => {
+    expect(migrate({ accent: "blue", names: {} }, 2)).toMatchObject({
+      accent: "blue",
+    });
+    expect(migrate({ accent: "#ff8800", names: {} }, 2)).toMatchObject({
+      accent: "#ff8800",
+    });
+    expect(migrate({ accent: "emerald", names: {} }, 2)).toMatchObject({
+      accent: "",
+    });
+  });
+
   it("drops a saved red, amber or green accent back to the app's", () => {
     for (const [accent, version] of [
       ["340 75% 55%", 0],
       ["38 92% 50%", 1],
-      ["emerald", 2],
+      ["152 60% 40%", 2],
     ] as const) {
       expect(migrate({ accent, names: {} }, version)).toMatchObject({
         accent: "",

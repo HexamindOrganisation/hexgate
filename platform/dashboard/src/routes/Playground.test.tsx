@@ -114,7 +114,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
-  usePlaygroundPrefs.setState({ accent: "", names: {} });
+  usePlaygroundPrefs.setState({ accent: "", names: {}, roles: {} });
 });
 
 function turnWith(tools: ToolCall[]): PlaygroundState["messages"] {
@@ -389,6 +389,106 @@ describe("PlaygroundPage", () => {
       roles: ["billing"],
       name: "maya",
     });
+  });
+
+  it("shows a denial returned as the tool's result as Denied", () => {
+    // The OpenAI and Google ADK adapters return the verdict as a string.
+    mockState = baseState({
+      messages: turnWith([
+        tool({
+          state: "completed",
+          outputSummary:
+            "[policy_denied] Tool 'refund_order' is denied by the agent policy. The tool was not executed.",
+        }),
+      ]),
+      decisions: [tool({ state: "completed" })],
+    });
+    renderWithProviders(<PlaygroundPage />);
+    expect(screen.getByText("Denied")).toBeInTheDocument();
+    expect(screen.queryByText("Allowed")).toBeNull();
+    // Open by default, so the reason is in view.
+    expect(
+      screen.getByText(/is denied by the agent policy/),
+    ).toBeInTheDocument();
+  });
+
+  it("trusts serve's verdict, whatever the adapter's shape", () => {
+    // LangChain: the denial streams as failed; serve marks it denied. And a
+    // long denial whose summary was cut still reads as one.
+    mockState = baseState({
+      messages: turnWith([
+        tool({
+          id: "t1",
+          state: "failed",
+          verdict: "denied",
+          outputSummary: "nope",
+        }),
+        tool({
+          id: "t2",
+          name: "issue_refund",
+          state: "completed",
+          verdict: "held",
+          outputSummary: `[approval_required] ${"x".repeat(200)}...`,
+        }),
+      ]),
+      decisions: [
+        tool({ id: "t1", state: "failed", verdict: "denied" }),
+        tool({ id: "t2", state: "completed", verdict: "held" }),
+      ],
+    });
+    renderWithProviders(<PlaygroundPage />);
+    expect(screen.getByText("Denied")).toBeInTheDocument();
+    expect(screen.getByText("Not approved")).toBeInTheDocument();
+    expect(screen.queryByText("Failed")).toBeNull();
+    expect(
+      screen.getByText(/2 decisions · 1 denied · 1 not approved/),
+    ).toBeInTheDocument();
+  });
+
+  it("doesn't carry a saved role choice to another agent", async () => {
+    usePlaygroundPrefs.setState({
+      roles: { p1: { agent: "other-bot", roles: [] } },
+    });
+    mockState = baseState();
+    renderWithProviders(<PlaygroundPage />);
+    await userEvent.type(
+      screen.getByLabelText("Message the agent"),
+      "hi{Enter}",
+    );
+    // billing-bot is serving: its first role, not other-bot's "no role".
+    expect(sendChat).toHaveBeenCalledWith("hi", {
+      roles: ["billing"],
+      name: "",
+    });
+  });
+
+  it("says a call held at the approval prompt awaits approval", () => {
+    mockState = baseState({
+      // The running turn, with a call the prompt holds (same tool, same args).
+      messages: turnWith([tool({ state: "started", endedAt: undefined })]).map(
+        (m) => (m.turn ? { ...m, turn: { ...m.turn, streaming: true } } : m),
+      ),
+      pendingApprovals: [approval()],
+    });
+    renderWithProviders(<PlaygroundPage />);
+    expect(screen.getByText("Awaiting approval")).toBeInTheDocument();
+    expect(screen.queryByText("Running")).toBeNull();
+  });
+
+  it("keeps the applied roles after leaving the page and coming back", async () => {
+    mockState = baseState();
+    const { unmount } = renderWithProviders(<PlaygroundPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "billing" }));
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    // e.g. "Open in audit", then back.
+    unmount();
+    renderWithProviders(<PlaygroundPage />);
+    await userEvent.type(
+      screen.getByLabelText("Message the agent"),
+      "hi{Enter}",
+    );
+    expect(sendChat).toHaveBeenCalledWith("hi", { roles: [], name: "" });
   });
 
   it("caps a large argument in the call header", () => {

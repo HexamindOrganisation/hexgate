@@ -14,19 +14,11 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { accentForeground, hexToHslChannels, hslChannelsToHex } from "./color";
-import { SCHEMES, SCHEME_ACCENTS, useIsDark } from "./theme";
+import { SCHEMES, SCHEME_ACCENTS, schemeAccent, useIsDark } from "./theme";
 
-/** Accent presets: the app's schemes, per palette. No red, amber or green:
- * those mean deny, approval and connected. */
-export const PLAYGROUND_ACCENTS: readonly {
-  id: string;
-  label: string;
-  light: string;
-  dark: string;
-}[] = SCHEMES;
-
-/** Rose, amber and emerald, as stored before they were dropped (raw HSL, or
- * an id): a saved one goes back to the app's accent. */
+/** The rose, amber and emerald presets (raw HSL, or the id this branch's v2
+ * stored), dropped since red, amber and green mean deny, approval and
+ * connected: a saved one resets to the app's. */
 const DROPPED_ACCENTS = new Set([
   "340 75% 55%",
   "38 92% 50%",
@@ -41,16 +33,21 @@ interface PlaygroundPrefs {
   accent: string;
   /** Acting name per project id (the demo caller identity). */
   names: Record<string, string>;
+  /** Applied roles per project id, for the agent they were picked for; unset
+   * = that agent's first role, [] = none. Kept here with the name, so a trip
+   * to Audit or a full-screen tab keeps the role a call ran as. */
+  roles: Record<string, { agent: string; roles: string[] }>;
   setAccent: (accent: string) => void;
   setName: (projectId: string, name: string) => void;
+  setRoles: (projectId: string, agent: string, roles: string[]) => void;
 }
 
 /** The accent's `--primary` channels in this palette, or null for the app's. */
 export function resolveAccent(accent: string, dark: boolean): string | null {
   if (!accent) return null;
   if (accent.startsWith("#")) return hexToHslChannels(accent);
-  const preset = PLAYGROUND_ACCENTS.find((p) => p.id === accent);
-  return preset ? (dark ? preset.dark : preset.light) : null;
+  const preset = SCHEMES.find((p) => p.id === accent);
+  return preset ? schemeAccent(preset.id, dark) : null;
 }
 
 /** CSS vars that repaint a subtree in `channels`: the highlight, focus ring
@@ -82,18 +79,15 @@ const V0_ACCENTS: Record<string, string> = {
   "262 70% 58%": SCHEME_ACCENTS.violet.dark,
 };
 
-/** A stored accent → today's form: "" for none or a dropped preset, kept if
- * already an id or a hex, else (raw HSL) a preset id when it matches one in
- * either palette, else the same colour as a custom hex. */
+/** A stored accent before v3 → a preset id: raw HSL when it matches a preset
+ * in either palette, else the same colour as a hex; "" for a dropped preset.
+ * An id or a hex (stored by v2) is kept. */
 function accentToId(channels: string): string {
   if (!channels || DROPPED_ACCENTS.has(channels)) return "";
-  if (
-    channels.startsWith("#") ||
-    PLAYGROUND_ACCENTS.some((p) => p.id === channels)
-  )
+  if (channels.startsWith("#") || SCHEMES.some((p) => p.id === channels))
     return channels;
   const v = V0_ACCENTS[channels] ?? channels;
-  const preset = PLAYGROUND_ACCENTS.find((p) => p.light === v || p.dark === v);
+  const preset = SCHEMES.find((p) => p.light === v || p.dark === v);
   return preset ? preset.id : hslChannelsToHex(v);
 }
 
@@ -102,9 +96,12 @@ export const usePlaygroundPrefs = create<PlaygroundPrefs>()(
     (set) => ({
       accent: "",
       names: {},
+      roles: {},
       setAccent: (accent) => set({ accent }),
       setName: (projectId, name) =>
         set((s) => ({ names: { ...s.names, [projectId]: name } })),
+      setRoles: (projectId, agent, roles) =>
+        set((s) => ({ roles: { ...s.roles, [projectId]: { agent, roles } } })),
     }),
     {
       name: "hexgate-playground",
@@ -112,8 +109,8 @@ export const usePlaygroundPrefs = create<PlaygroundPrefs>()(
       version: 3,
       migrate: (persisted, version) => {
         const s = persisted as PlaygroundPrefs;
-        // Earlier versions stored raw HSL (pinning one palette's value) or
-        // presets since dropped; v3 stores a live preset id, a hex or "".
+        // Earlier versions stored raw HSL, pinning one palette's value; v3
+        // stores a preset id (or a hex) so it follows light and dark.
         if (version < 3) return { ...s, accent: accentToId(s.accent ?? "") };
         return s;
       },

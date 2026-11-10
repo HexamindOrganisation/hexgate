@@ -10,9 +10,8 @@ import {
 import { schemeAccent, useIsDark, useTheme, SCHEMES } from "@/lib/theme";
 import { hslChannelsToHex } from "@/lib/color";
 import {
-  PLAYGROUND_ACCENTS,
-  accentVars,
   resolveAccent,
+  usePlaygroundAccent,
   usePlaygroundPrefs,
 } from "@/lib/playground_prefs";
 import { PRESENT_URL, usePresentMode } from "@/lib/present";
@@ -37,7 +36,7 @@ export function AccentPicker() {
     (accent.startsWith("#")
       ? accent
       : hslChannelsToHex(current ?? schemeAccent(appScheme, dark)));
-  const vars = accentVars(current);
+  const vars = usePlaygroundAccent();
   const commitDraft = () => {
     if (draft !== null) {
       setAccent(draft);
@@ -80,11 +79,11 @@ export function AccentPicker() {
           >
             Same as app
           </button>
-          {PLAYGROUND_ACCENTS.map((p) => (
+          {SCHEMES.map((p) => (
             <AccentSwatch
               key={p.id}
               label={p.label}
-              color={dark ? p.dark : p.light}
+              color={schemeAccent(p.id, dark)}
               selected={selected === p.id}
               onSelect={() => setAccent(p.id)}
             />

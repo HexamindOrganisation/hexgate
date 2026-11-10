@@ -11,43 +11,45 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { buildChatFrame } from "@/lib/playground";
+import { buildChatFrame, callerName } from "@/lib/playground";
 import {
   usePlaygroundAccent,
   usePlaygroundPrefs,
 } from "@/lib/playground_prefs";
 import { cn } from "@/lib/utils";
 
-/** Who the agent thinks it's talking to: the acting name (per project) and
- * roles. Edits are a draft until Apply, and take effect from the next turn. */
-export function SessionSettings({
-  open,
-  onOpenChange,
-  projectId,
-  roleOptions,
-  activeRoles,
-  onApply,
-  onReset,
-  canReset,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+interface FormProps {
   projectId: string;
+  /** The serving agent, or null when none is serving yet. */
+  agentName: string | null;
   roleOptions: string[];
   activeRoles: string[];
   /** null when the roles weren't touched, so the applied choice stands. */
   onApply: (roles: string[] | null) => void;
   onReset: () => void;
   canReset: boolean;
+}
+
+/** Who the agent thinks it's talking to: the acting name (per project) and
+ * roles. Edits are a draft until Apply, and take effect from the next turn. */
+export function SessionSettings({
+  open,
+  onOpenChange,
+  session,
+  agentName,
+  projectId,
+  roleOptions,
+  activeRoles,
+  onApply,
+  onReset,
+  canReset,
+}: FormProps & {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Bumped by the caller on each opening, so the draft starts fresh. */
+  session: number;
 }) {
   const accent = usePlaygroundAccent();
-  // A fresh draft per opening, kept mounted while the dialog animates out.
-  const [session, setSession] = useState(0);
-  const [wasOpen, setWasOpen] = useState(open);
-  if (open !== wasOpen) {
-    setWasOpen(open);
-    if (open) setSession((n) => n + 1);
-  }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* Portalled out of the Playground, so it carries the accent itself. */}
@@ -55,6 +57,7 @@ export function SessionSettings({
         <SettingsForm
           key={session}
           projectId={projectId}
+          agentName={agentName}
           roleOptions={roleOptions}
           activeRoles={activeRoles}
           onApply={(roles) => {
@@ -79,22 +82,14 @@ export function SessionSettings({
 /** Keyed per opening, so the draft starts from the applied values. */
 function SettingsForm({
   projectId,
+  agentName,
   roleOptions,
   activeRoles,
   onApply,
   onCancel,
   onReset,
   canReset,
-}: {
-  projectId: string;
-  roleOptions: string[];
-  activeRoles: string[];
-  /** null when the roles weren't touched, so the applied choice stands. */
-  onApply: (roles: string[] | null) => void;
-  onCancel: () => void;
-  onReset: () => void;
-  canReset: boolean;
-}) {
+}: FormProps & { onCancel: () => void }) {
   const savedName = usePlaygroundPrefs((s) => s.names[projectId] ?? "");
   const setName = usePlaygroundPrefs((s) => s.setName);
   const [name, setDraftName] = useState(savedName);
@@ -111,7 +106,13 @@ function SettingsForm({
         : roleOptions.filter((r) => r === role || prev.includes(r)),
     );
   };
-  const context = buildChatFrame("", { roles, name }).user_attenuation;
+  // Untouched roles aren't applied (Apply sends null), so the turn carries
+  // the live roles: preview those, not the draft captured at opening.
+  const sentRoles = rolesTouched ? roles : activeRoles;
+  const context = buildChatFrame("", {
+    roles: sentRoles,
+    name,
+  }).user_attenuation;
 
   return (
     <form
@@ -134,7 +135,8 @@ function SettingsForm({
         <Input
           value={name}
           onChange={(e) => setDraftName(e.target.value)}
-          placeholder="playground"
+          // What an empty name sends, by the same rule as the turn itself.
+          placeholder={callerName("", sentRoles) ?? "default caller"}
           className="font-mono"
         />
         <span className="block text-xs text-muted-foreground">
@@ -179,7 +181,9 @@ function SettingsForm({
           </>
         ) : (
           <p className="text-xs text-muted-foreground">
-            The served agent has no roles yet, so the default policy decides.
+            {agentName
+              ? "The served agent has no roles yet, so the default policy decides."
+              : "No agent is serving yet; its roles show here once it connects."}
           </p>
         )}
       </div>
