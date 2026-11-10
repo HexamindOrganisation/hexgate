@@ -687,6 +687,41 @@ class PolicyCoverageResponse(BaseModel):
     agents: list[AgentCoverageOut] = Field(default_factory=list)
 
 
+class SimilarReasonsOut(BaseModel):
+    """What two agents share. Tool names and role names are identifiers; the
+    description words come from text the agent's code or a library wrote, so
+    they go out marked untrusted."""
+
+    shared_tools: list[str] = Field(default_factory=list)
+    shared_name_words: list[str] = Field(default_factory=list)
+    shared_roles: list[str] = Field(default_factory=list)
+    untrusted_shared_description_words: list[str] = Field(default_factory=list)
+
+
+class SimilarAgentOut(BaseModel):
+    """One registered agent that resembles the one asked about. ``score`` is
+    the points its reasons earn. ``has_policy`` is False when the project
+    policy has no section for it (it enforces the ``"*"`` view) or its own
+    stored policy is empty; ``roles`` are the roles the project policy defines
+    for it (none without a project policy). Read
+    the policy itself with ``/policy/resolve?agent=``."""
+
+    agent: str
+    score: float
+    has_policy: bool
+    roles: list[str] = Field(default_factory=list)
+    reasons: SimilarReasonsOut
+
+
+class SimilarAgentsResponse(BaseModel):
+    """The agents closest to ``agent``, best first. ``has_manifest`` False
+    means ``agent`` has no usable manifest, so only shared roles could match."""
+
+    agent: str
+    has_manifest: bool
+    matches: list[SimilarAgentOut] = Field(default_factory=list)
+
+
 # --- Agent manifest registration ---------------------------------------------
 # These mirror hexgate/manifest/models.py so SDK and platform stay in sync.
 

@@ -15,7 +15,7 @@ import logging
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.constants import OAUTH_SCOPE_KEY
@@ -23,7 +23,7 @@ from hexgate_api.core.db import get_session
 from hexgate_api.core.locks import project_lock
 from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.project import require_project_admin
-from hexgate_api.features.policy_modules import coverage, service
+from hexgate_api.features.policy_modules import coverage, service, similar
 from hexgate_api.models import OrganizationMember, PolicyFile, PolicyModule, User
 from hexgate_api.schemas import (
     PolicyCheckRequest,
@@ -42,6 +42,7 @@ from hexgate_api.schemas import (
     ResolvedPolicyResponse,
     RoleBindingsRead,
     RoleBindingsWrite,
+    SimilarAgentsResponse,
 )
 
 if TYPE_CHECKING:  # the SDK is imported lazily at run time
@@ -617,6 +618,42 @@ async def api_policy_coverage(
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PolicyCoverageResponse(agents=agents)
+
+
+@router.get(
+    "/projects/{project_id}/policy/similar-agents",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
+async def api_policy_similar_agents(
+    project_id: str,
+    agent: str,
+    limit: int = Query(default=5, ge=1, le=20),
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> SimilarAgentsResponse:
+    """The other registered agents closest to ``agent`` by keyword (shared
+    tools, tool-name and description words, roles), best first, each with the
+    reasons it ranked and whether it has a policy to start from. 404 for an
+    ``agent`` that is not registered; 422 as for ``/policy/coverage``."""
+    try:
+        has_manifest, matches = await similar.similar_agents(
+            session, project_id, agent, limit
+        )
+    except similar.UnknownAgentError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"agent {agent!r} is not registered"
+        ) from exc
+    except coverage.PolicyLoadError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"the stored policy of agent {exc.agent!r} does not load",
+        ) from exc
+    except service.compose_error_types() as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return SimilarAgentsResponse(
+        agent=agent, has_manifest=has_manifest, matches=matches
+    )
 
 
 @router.post(
