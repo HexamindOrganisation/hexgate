@@ -6,6 +6,7 @@ import {
   usePolicyMatrix,
 } from "@/lib/policy_files";
 import { isModular } from "@/lib/file_tree";
+import { roleModesOf, type RoleMode } from "@/lib/role-modes";
 import { useAgentSelection } from "@/lib/agent_param";
 import {
   Ban,
@@ -21,7 +22,6 @@ import {
   type AgentManifestView,
   type GuardDefinition,
   type InputSchema,
-  type PolicyMatrixCell,
   type SkillDefinition,
   type SkillResources,
   type ToolDefinition,
@@ -87,22 +87,10 @@ export function AgentsPage() {
     modular && !!active,
     toolNames,
   ).data;
-  const roleModes = useMemo(() => {
-    if (!matrix) return undefined;
-    const listed = new Set(matrix.tools);
-    return (tool: string): RoleMode[] => {
-      const defaulted = !listed.has(tool);
-      return matrix.roles.map((role) => {
-        const cell = matrix.cells[tool]?.[role];
-        return {
-          role,
-          mode: cell?.mode,
-          constraint: cell?.constraint ?? null,
-          defaulted,
-        };
-      });
-    };
-  }, [matrix]);
+  const roleModes = useMemo(
+    () => (matrix ? roleModesOf(matrix) : undefined),
+    [matrix],
+  );
   const activeActivity = active ? activityOf(active.name) : null;
   const canManageBans = useCanManageBans();
 
@@ -363,14 +351,7 @@ export function ManifestView({
 }
 
 /** How each role treats one tool, from the composed policy. */
-export interface RoleMode {
-  role: string;
-  mode: PolicyMatrixCell["mode"] | undefined;
-  /** The engine's condition text, when the cell is constrained. */
-  constraint: string | null;
-  /** The policy lists the tool for no role: every chip is a fallback. */
-  defaulted: boolean;
-}
+export type { RoleMode };
 
 function ToolsSection({
   tools,

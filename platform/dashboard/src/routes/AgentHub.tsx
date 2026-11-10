@@ -5,10 +5,11 @@ import { Ban, ChevronRight, ScrollText, ShieldCheck } from "lucide-react";
 
 import { api, type AgentManifestView } from "@/lib/api";
 import { usePolicyFiles, usePolicyMatrix } from "@/lib/policy_files";
-import { ENTRY_FILE } from "@/lib/file_tree";
+import { isModular } from "@/lib/file_tree";
+import { roleModesOf } from "@/lib/role-modes";
 import { useProjectScoped } from "@/lib/active";
 import { useCanManageBans } from "@/lib/bans";
-import { useAuditSummary24h } from "@/lib/audit-summary";
+import { useAgentActivity24h } from "@/lib/audit-summary";
 import { auditUrl } from "@/lib/audit-filters";
 import { formatDate } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
@@ -16,9 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { cn } from "@/lib/utils";
-import { ManifestView, type RoleMode } from "./Agents";
-
-type Activity = { all: number; deny: number; needs_approval: number };
+import { ManifestView } from "./Agents";
 
 /**
  * `/agents/:name` — the single-agent hub. This is the first step of the
@@ -39,21 +38,14 @@ export function AgentHub() {
   });
   const agent = manifests.data?.find((m) => m.name === name) ?? null;
 
-  // 24h activity — shares Home's cache entry.
-  const summary = useAuditSummary24h(scope.projectId);
-  const activity: Activity | null =
-    agent && summary.data
-      ? (summary.data.by_agent.find((r) => r.key === agent.name) ?? {
-          all: 0,
-          deny: 0,
-          needs_approval: 0,
-        })
-      : null;
+  // 24h activity, by the same rule as Home and /agents.
+  const { summary, activityOf } = useAgentActivity24h(scope.projectId);
+  const activity = agent ? activityOf(agent.name) : null;
 
   // Roles x tools for this agent, as the engine tabulates them. Only projects
   // with a policy.yaml compose; others have no matrix.
   const policyFiles = usePolicyFiles(scope.projectId);
-  const modular = !!policyFiles.data?.some((f) => f.name === ENTRY_FILE);
+  const modular = isModular(policyFiles.data);
   const toolNames = useMemo(
     () => agent?.manifest?.tools?.map((t) => t.name) ?? [],
     [agent],
@@ -64,19 +56,10 @@ export function AgentHub() {
     modular && !!agent,
     toolNames,
   ).data;
-  const roleModes = useMemo(() => {
-    if (!matrix) return undefined;
-    return (tool: string): RoleMode[] =>
-      matrix.roles.map((role) => {
-        const cell = matrix.cells[tool]?.[role];
-        return {
-          role,
-          mode: cell?.mode,
-          constraint: cell?.constraint ?? null,
-          defaulted: !matrix.tools.includes(tool),
-        };
-      });
-  }, [matrix]);
+  const roleModes = useMemo(
+    () => (matrix ? roleModesOf(matrix) : undefined),
+    [matrix],
+  );
 
   const canManageBans = useCanManageBans();
 
@@ -129,6 +112,7 @@ export function AgentHub() {
         agent={agent}
         activity={activity}
         activityError={summary.isError && !summary.data}
+        activityStale={summary.isError && !!summary.data}
         canManageBans={canManageBans}
       />
       <ManifestView agent={agent} roleModes={roleModes} />
@@ -151,19 +135,21 @@ function Breadcrumb({ name }: { name: string }) {
   );
 }
 
-/* NOTE: AgentHeader and the roleModes memo mirror Agents.tsx on purpose, for
-   now — H1b makes /agents list-only (dropping its inline card) and H2 replaces
-   this header with the graph-hero Overview, so a shared extraction here would
-   be reworked immediately. Kept parallel until then. */
+/* NOTE: this header parallels the agent card on /agents (the 24h counts and
+   their loading / stale states, which both take from useAgentActivity24h).
+   H1b makes /agents list-only, dropping that card, so the header isn't shared
+   for now. */
 function AgentHeader({
   agent,
   activity,
   activityError,
+  activityStale,
   canManageBans,
 }: {
   agent: AgentManifestView;
-  activity: Activity | null;
+  activity: { all: number; deny: number; needs_approval: number } | null;
   activityError: boolean;
+  activityStale: boolean;
   canManageBans: boolean;
 }) {
   return (
@@ -237,23 +223,23 @@ function AgentHeader({
           Couldn't load the last 24 hours of activity.
         </p>
       ) : (
-        activity && (
+        <>
+          {/* Always laid out (dashes while loading), so the card doesn't
+              grow when the numbers land. */}
           <div className="mt-4 grid grid-cols-3 border-t border-border/60 pt-4 text-meta">
-            {(
-              [
-                { label: "Calls · 24h", value: activity.all, className: "" },
-                {
-                  label: "Denied",
-                  value: activity.deny,
-                  className: "text-deny",
-                },
-                {
-                  label: "Sent for approval",
-                  value: activity.needs_approval,
-                  className: "text-approval",
-                },
-              ] satisfies { label: string; value: number; className: string }[]
-            ).map((stat) => (
+            {[
+              { label: "Calls · 24h", value: activity?.all, className: "" },
+              {
+                label: "Denied",
+                value: activity?.deny,
+                className: "text-deny",
+              },
+              {
+                label: "Sent for approval",
+                value: activity?.needs_approval,
+                className: "text-approval",
+              },
+            ].map((stat) => (
               <div key={stat.label}>
                 <div className="text-muted-foreground">{stat.label}</div>
                 <div
@@ -262,12 +248,17 @@ function AgentHeader({
                     stat.className,
                   )}
                 >
-                  {stat.value.toLocaleString()}
+                  {stat.value?.toLocaleString() ?? "—"}
                 </div>
               </div>
             ))}
           </div>
-        )
+          {activityStale && (
+            <p className="mt-2 text-meta text-muted-foreground">
+              Couldn't refresh; these are the last counts loaded.
+            </p>
+          )}
+        </>
       )}
     </Card>
   );
