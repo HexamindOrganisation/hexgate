@@ -45,7 +45,6 @@ export function VerifyEmailPage() {
     return (
       <AuthShell
         tone="muted"
-        spin
         title="Verifying…"
         description="Hang tight — one moment."
       />
