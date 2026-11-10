@@ -528,9 +528,15 @@ def test_when_policy_coverage_exceeds_the_cap_then_whole_agents_are_kept(token):
 def similar_match(name: str, **extra) -> dict:
     return {
         "agent": name,
-        "score": 4.5,
+        "score": 0.45,
         "has_policy": True,
         "roles": ["support"],
+        "signals": {
+            "tools": 0.5,
+            "name_words": 0.4,
+            "description_words": 0.2,
+            "roles": 1.0,
+        },
         "reasons": {
             "shared_tools": ["issue_refund"],
             "shared_name_words": [],

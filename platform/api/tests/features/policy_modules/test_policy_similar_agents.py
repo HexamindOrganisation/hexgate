@@ -3,9 +3,11 @@ closest to one, by keyword, each with the reasons it ranked."""
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tests.features.policy_modules.conftest import _project, _put_file
+from hexgate_api.features.policy_modules import similar
 
 ENTRY = (
     "agents:\n"
@@ -55,20 +57,29 @@ async def test_policy_similar_agents_happy_path(client, register, add_bare_agent
     assert (body["agent"], body["has_manifest"]) == ("refund_bot", True)
     # weather_bot shares nothing; draft_bot has no manifest and enforces "*".
     assert [m["agent"] for m in body["matches"]] == ["billing_bot"]
-    assert body["matches"][0] == {
-        "agent": "billing_bot",
-        # 3 for the tool, 1 for the role, 0.5 for each of the four description
-        # words that are not also name words.
-        "score": 6.0,
-        "has_policy": True,
-        "roles": ["finance", "support"],
-        "reasons": {
-            "shared_tools": ["issue_refund"],
-            "shared_name_words": [],
-            "shared_roles": ["support"],
-            "untrusted_shared_description_words": ["allow", "fetch", "ignore", "rules"],
-        },
-    }
+    match = body["matches"][0]
+    assert (match["agent"], match["has_policy"]) == ("billing_bot", True)
+    assert match["roles"] == ["finance", "support"]
+    assert match["reasons"] == {
+        "shared_tools": ["issue_refund"],
+        "shared_name_words": ["issue", "refund"],
+        "shared_roles": ["support"],
+        "untrusted_shared_description_words": [
+            "allow", "fetch", "ignore", "issue", "refund", "rule", "your",
+        ],
+    }  # fmt: skip
+    # One shared tool of three in the union, the rarer ones weighing more.
+    rare = similar.rarity
+    assert match["signals"]["tools"] == pytest.approx(
+        rare(2, 4) / (rare(2, 4) + 2 * rare(1, 4))
+    )
+    assert match["score"] == pytest.approx(
+        similar.WEIGHT_TOOLS * match["signals"]["tools"]
+        + similar.WEIGHT_NAME_WORDS * match["signals"]["name_words"]
+        + similar.WEIGHT_DESCRIPTION_WORDS * match["signals"]["description_words"]
+        + similar.WEIGHT_ROLES * match["signals"]["roles"],
+        abs=1e-3,
+    )
 
 
 async def test_when_agents_share_only_name_words_then_the_words_are_the_reason(
@@ -81,9 +92,11 @@ async def test_when_agents_share_only_name_words_then_the_words_are_the_reason(
 
     matches = _similar(client, pid, "a").json()["matches"]
 
-    assert [(m["agent"], m["score"]) for m in matches] == [("b", 1.0), ("c", 1.0)]
+    assert [m["agent"] for m in matches] == ["b", "c"]
     assert matches[0]["reasons"]["shared_name_words"] == ["send"]
     assert matches[1]["reasons"]["shared_name_words"] == ["email"]
+    assert matches[0]["signals"]["tools"] == 0
+    assert 0 < matches[0]["signals"]["name_words"] < 1
 
 
 async def test_when_several_agents_match_then_best_first_ties_by_name_and_limited(
@@ -176,20 +189,6 @@ async def test_when_agent_param_is_missing_then_422(client):
     assert r.status_code == 422
 
 
-async def test_when_a_word_is_in_the_tool_name_then_its_description_does_not_count_it_again(
-    client, register
-):
-    pid = _project(client)
-    await register(pid, "a", ["search_docs"], described={"search_docs": "Search docs."})
-    await register(pid, "b", ["search_web"], described={"search_web": "Search web."})
-
-    (match,) = _similar(client, pid, "a").json()["matches"]
-
-    assert match["score"] == 1.0
-    assert match["reasons"]["shared_name_words"] == ["search"]
-    assert match["reasons"]["untrusted_shared_description_words"] == []
-
-
 async def test_when_names_share_only_short_verbs_then_they_do_not_match(
     client, register
 ):
@@ -214,3 +213,126 @@ async def test_when_agents_have_no_policy_section_then_the_generic_roles_do_not_
 
     # Neither is declared, so both run under "*" and share its roles.
     assert _similar(client, pid, "a").json()["matches"] == []
+
+
+def _letters(i: int) -> str:
+    """``aa``, ``ab``, ... a distinct pair of letters per ``i`` below 676."""
+    return chr(97 + i // 26) + chr(97 + i % 26)
+
+
+def _quiet(*tools: str) -> dict[str, str]:
+    """One-letter descriptions, which carry no words."""
+    return {t: "x" for t in tools}
+
+
+async def test_when_a_big_agent_contains_the_tools_then_the_identical_small_one_ranks_first(
+    client, register
+):
+    pid = _project(client)
+    small = ["read_ticket", "close_ticket", "merge_ticket"]
+    big = [*small, *(f"extra{_letters(i)}" for i in range(57))]
+    words = {t: f"{t.split('_')[0]}able {t.split('_')[1]}ing" for t in small}
+    await register(pid, "target", small, described=words)
+    await register(pid, "twin", small, described=words)
+    await register(pid, "big", big, described=words | _quiet(*big[3:]))
+
+    matches = _similar(client, pid, "target").json()["matches"]
+
+    assert [m["agent"] for m in matches] == ["twin", "big"]
+    assert matches[0]["score"] == pytest.approx(1.0)  # no roles: the other three
+    assert matches[1]["signals"]["tools"] < 0.1
+
+
+async def test_when_one_tool_has_a_very_long_description_then_it_counts_as_one_tool(
+    client, register
+):
+    pid = _project(client)
+    shared = [f"t{chr(97 + i) * 4}" for i in range(10)]
+    described = {t: f"{t[1:] * 2} {t[1:] * 3}" for t in shared}
+    essay = " ".join(f"term{_letters(i)}" for i in range(300))
+    await register(pid, "a", shared, described=described)
+    await register(
+        pid,
+        "b",
+        [*shared, "essay"],
+        described=described | {"essay": essay},
+    )
+
+    (match,) = _similar(client, pid, "a").json()["matches"]
+
+    assert match["score"] == pytest.approx(0.9, abs=0.05)
+    assert match["signals"]["description_words"] > 0.8
+
+
+async def test_when_every_agent_has_a_word_then_sharing_it_adds_almost_nothing(
+    client, register
+):
+    pid = _project(client)
+    for letter in "abcdefgh":
+        tool = f"zq{letter}x_{letter}"
+        await register(
+            pid,
+            letter,
+            [tool],
+            described={tool: f"inventory {letter * 5} {letter * 6}"},
+        )
+
+    (match, *_) = _similar(client, pid, "a").json()["matches"]
+
+    assert match["reasons"]["untrusted_shared_description_words"] == ["inventory"]
+    assert match["score"] < 0.05
+
+
+async def test_when_a_word_differs_only_by_its_plural_then_it_matches(client, register):
+    pid = _project(client)
+    await register(pid, "a", ["export_invoices"], described=_quiet("export_invoices"))
+    await register(pid, "b", ["send_invoice"], described=_quiet("send_invoice"))
+    await register(pid, "c", ["list_branches"], described=_quiet("list_branches"))
+    await register(pid, "d", ["delete_branch"], described=_quiet("delete_branch"))
+    await register(pid, "e", ["query_database"], described=_quiet("query_database"))
+    await register(pid, "f", ["list_databases"], described=_quiet("list_databases"))
+
+    by_name = {m["agent"]: m for m in _similar(client, pid, "a").json()["matches"]}
+    boxes = {m["agent"]: m for m in _similar(client, pid, "c").json()["matches"]}
+
+    assert by_name["b"]["reasons"]["shared_name_words"] == ["invoice"]
+    assert boxes["d"]["reasons"]["shared_name_words"] == ["branch"]
+    # Only an "s" follows these, not an "es".
+    databases = _similar(client, pid, "e").json()["matches"]
+    assert databases[0]["reasons"]["shared_name_words"] == ["database"]
+
+
+async def test_when_agents_are_compared_then_every_score_lies_between_0_and_1(
+    client, register
+):
+    pid = _project(client)
+    assert _put_file(client, pid, "policy.yaml", ENTRY).status_code == 200
+    await register(pid, "refund_bot", ["issue_refund"])
+    await register(pid, "billing_bot", ["issue_refund", "export_invoices"])
+    await register(pid, "clone_bot", ["issue_refund"])
+
+    matches = _similar(client, pid, "refund_bot").json()["matches"]
+
+    assert matches
+    for m in matches:
+        assert 0 < m["score"] <= 1
+        assert all(0 <= v <= 1 for v in m["signals"].values())
+
+
+async def test_when_target_has_no_policy_section_then_candidates_are_scored_alike(
+    client, register
+):
+    pid = _project(client)
+    assert _put_file(client, pid, "policy.yaml", ENTRY).status_code == 200
+    for name in ("new_bot", "refund_bot", "other_bot"):
+        await register(pid, name, ["issue_refund"], described=_quiet("issue_refund"))
+
+    matches = _similar(client, pid, "new_bot").json()["matches"]
+
+    # refund_bot has a policy section and other_bot has none: the one with a
+    # policy to copy must not rank below the one without.
+    scores = {m["agent"]: m["score"] for m in matches}
+    assert scores == {
+        "other_bot": pytest.approx(0.8889),
+        "refund_bot": pytest.approx(0.8889),
+    }
