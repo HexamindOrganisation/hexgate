@@ -21,8 +21,10 @@ engineering snapshot.
 
 ## Building a bundle
 
-The compile step needs the `opa` binary — see the
-[`hexgate policy` CLI](/cli/policy#prerequisite-opa).
+The compile step needs the [Open Policy
+Agent](https://www.openpolicyagent.org/) `opa` binary: `brew install opa` on
+macOS, or see its [install
+page](https://www.openpolicyagent.org/docs/latest/#running-opa).
 
 ```bash
 hexgate policy build policy.yaml --out ./bundle

@@ -1,0 +1,97 @@
+---
+title: "Connect Claude Code (MCP server)"
+description: "Let Claude Code read your projects, agents and audit log and write policy through the Hexgate MCP server, with a login you can scope and revoke."
+---
+
+The Hexgate **MCP server** lets an AI client such as Claude Code work on a
+project's policy: read the agents and the audit log, write a policy, check it,
+dry-run calls against it, and save it. The client logs in as you, for the
+projects you choose and the scopes it asks for, and you can end the login at any time.
+
+## Connect Claude Code
+
+The server is at `/mcp` on the platform's address:
+
+| Platform | MCP server URL |
+|---|---|
+| Hexgate Cloud | `https://app.hexgate.ai/mcp` |
+| Staging | `https://app.staging.hexgate.ai/mcp` |
+| Self-hosted | Your `HEXGATE_MCP_RESOURCE_URL` (`http://localhost:8080/mcp` by default). Behind the reverse proxy of the reference deploy it is `<HEXGATE_PUBLIC_URL>/mcp`; see [environment variables](/reference/environment#mcp-server-and-oauth-login) |
+
+1. Register it once:
+
+   ```bash
+   claude mcp add -s user --transport http hexgate https://app.hexgate.ai/mcp
+   ```
+
+2. Start a new Claude Code session. A server added during a session is not
+   picked up by it.
+3. Run `/mcp`, choose **hexgate** and **Authenticate**. Your browser opens the
+   Hexgate dashboard, which asks you to sign in if you are not already, then
+   shows a consent page.
+4. Review the consent page (below) and **Approve**. Claude Code now lists the
+   Hexgate tools.
+
+There is no API key to copy: the login is a token Claude Code renews by itself.
+
+## What you approve
+
+The consent page names the client, the scopes it asks for, and the projects you
+can let it reach. You **tick the projects**: a client only ever reaches the ones
+ticked, even in an organisation where you are an admin of more. **Deny** ends
+the login with nothing granted.
+
+| Scope | What it lets the client do |
+|---|---|
+| `projects:read` | List the projects you chose, with the id of each one's organisation. |
+| `agents:read` | Read the agent manifests of those projects. |
+| `audit:read` | Read their audit decisions. |
+| `policy:read` | Read, resolve, check and dry-run their policies. |
+| `policy:write` | Save policy files in them. |
+
+Scopes limit what you let the client do; your own rights still apply on top.
+Saving a policy file needs admin rights on the project, for example, whatever the
+scope says. A tool called without its scope is refused and says which scope the
+connection lacks. To change what a client may do, revoke it and connect again.
+
+## Tools
+
+| Tool | Scope | What it does |
+|---|---|---|
+| `projects_list` | `projects:read` | The projects you ticked, with the ids every other tool takes. |
+| `agents_list` | `agents:read` | A project's agents with their latest registered manifest. |
+| `audit_decisions` | `audit:read` | A project's policy decisions, newest first, filtered by agent, role, tool, user, outcome or session. |
+| `policy_list_files`, `policy_read_file` | `policy:read` | The policy files of a project and their contents. |
+| `policy_resolve`, `policy_graph`, `policy_list_roles` | `policy:read` | The effective policy per role, as a graph, and the role bindings. |
+| `policy_check` | `policy:read` | Lint the policy, optionally with unsaved draft files. |
+| `policy_dry_run` | `policy:read` | Would this call be allowed, for a role and an agent, optionally against drafts. |
+| `policy_save` | `policy:write` | Create or replace one policy file. Nothing is saved if the result is invalid. |
+| `policy_reference` | none | The policy documentation, so the client can learn the format. |
+
+Text an agent's code or its users produced (a tool description, a call's
+arguments, a denial reason) comes back in fields named `untrusted_*`. The
+server marks it so the client reads it as data and not as instructions.
+
+The policy reference tool serves only the [Policy](/policy/yaml-shape) pages.
+
+On your own machine, a server started with `HEXGATE_MCP_LOCAL_POLICY_DIR` also
+has `policy_write_local`, which writes policy files into that folder instead of
+the platform. It is never on in a deployed server; see
+[environment variables](/reference/environment#mcp-server-and-oauth-login).
+
+## Connected apps
+
+Every login you have approved is listed under **Connected apps** in the
+dashboard's account settings, beside Account: the client's name, the scopes and
+projects it was given, when it connected and when it last renewed its access (not on every call it makes). Check it
+after any consent you are unsure about.
+
+**Revoke** logs that client out: it can no longer renew its access and has to
+ask you again. A token it already holds keeps working until it expires, within
+10 minutes. A login also ends on its own after 30 days without use, and in any case 90 days after you approved it.
+
+## Run it locally
+
+To try the whole flow on your machine, the repo's `run-platform` skill starts
+the API, the dashboard and the MCP server and registers the local one with
+Claude Code. The server listens on `http://localhost:8080/mcp` there.

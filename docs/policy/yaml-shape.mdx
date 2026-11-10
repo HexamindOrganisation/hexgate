@@ -33,7 +33,7 @@ tools:
 
 - `allow`
 - `deny`
-- `approval_required` — see [Approval-required tool calls](/concepts/approval-required)
+- `approval_required` — the call pauses until a person approves it; it also takes `constraints`, see [End to end](/policy/constraints#end-to-end)
 
 ## Skills
 
@@ -145,5 +145,6 @@ inject policy later.
 Agents that need per-role behaviour ship a `policies/` directory (one file per
 role, with inheritance) instead of a single `policy.yaml`. A legacy single-file
 `policy.yaml` is treated as the `default` role — no migration needed. See
-[Request context + roles](/concepts/user-scope#role-policies-one-file-per-role) for the
-multi-file shape and inheritance rules.
+[Inheritance unions them](/policy/constraints#inheritance-unions-them) for how
+policy-level constraints accumulate through `inherits:`; every other field
+overrides.
