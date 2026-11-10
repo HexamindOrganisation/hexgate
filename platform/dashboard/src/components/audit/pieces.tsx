@@ -201,7 +201,6 @@ export function BreakdownCard({
       ]}
       onMetricChange={setSort}
       columns={1}
-      collapseAt={10}
       emptyMessage="No decisions match."
       legend={
         <>

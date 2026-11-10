@@ -92,6 +92,17 @@ describe("BreakdownCardShell · show all", () => {
     ).toBeInTheDocument();
   });
 
+  it("never shows fewer rows expanded than collapsed", async () => {
+    setup(12);
+    const button = screen.getByRole("button", { name: /Show all 12/ });
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    const grid = screen.getByText("tool-0").parentElement as HTMLElement;
+    // 10 collapsed rows in 2 columns = 5 rows deep, about 2.5rem each.
+    expect(parseFloat(grid.style.maxHeight)).toBeGreaterThanOrEqual(5 * 2.5);
+  });
+
   it("collapses again when the dimension changes (same mount)", async () => {
     renderWithProviders(<Harness vary="dim" />);
     await userEvent.click(screen.getByRole("button", { name: /Show all 12/ }));
