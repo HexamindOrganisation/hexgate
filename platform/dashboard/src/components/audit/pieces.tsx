@@ -17,9 +17,11 @@ import type {
   AuditDecisionRow,
   AuditOutcome,
 } from "@/lib/api";
-import type {
-  AuditFilters as Filters,
-  SetAuditFilters as SetFilters,
+import {
+  type AuditFilters as Filters,
+  MAX_LIMIT,
+  PAGE_SIZE,
+  type SetAuditFilters as SetFilters,
 } from "@/lib/audit-filters";
 import { ActiveFilterChips } from "@/components/ui/active-filter-chips";
 import { Callout } from "@/components/ui/callout";
@@ -297,6 +299,7 @@ export function EventsTable({
   onLoadMore,
   loadingMore,
   onExport,
+  emptyText = "No decisions match the current filters.",
 }: {
   rows: AuditDecisionRow[];
   total: number;
@@ -305,6 +308,8 @@ export function EventsTable({
   onLoadMore: () => void;
   loadingMore?: boolean;
   onExport?: () => void;
+  /** Shown with no rows: also how a caller says loading or failed. */
+  emptyText?: string;
 }) {
   // Rows arrive newest first, so consecutive runs share a day.
   const groups: { label: string; rows: AuditDecisionRow[] }[] = [];
@@ -405,24 +410,31 @@ export function EventsTable({
           ))}
           {!rows.length && (
             <div className="py-10 text-center text-meta text-muted-foreground">
-              No decisions match the current filters.
+              {emptyText}
             </div>
           )}
         </div>
       </div>
-      {rows.length < total && (
-        <div className="border-t border-border px-5 py-3 text-center">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onLoadMore}
-            disabled={loadingMore}
-          >
-            {loadingMore
-              ? "Loading…"
-              : `Load 40 more · ${(total - rows.length).toLocaleString()} remaining`}
-          </Button>
+      {rows.length < total && rows.length >= MAX_LIMIT ? (
+        <div className="border-t border-border px-5 py-3 text-center text-meta text-muted-foreground">
+          Showing the newest {MAX_LIMIT.toLocaleString()}; narrow the filters to
+          see older ones.
         </div>
+      ) : (
+        rows.length < total && (
+          <div className="border-t border-border px-5 py-3 text-center">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onLoadMore}
+              disabled={loadingMore}
+            >
+              {loadingMore
+                ? "Loading…"
+                : `Load ${Math.min(PAGE_SIZE, MAX_LIMIT - rows.length, total - rows.length)} more · ${(total - rows.length).toLocaleString()} remaining`}
+            </Button>
+          </div>
+        )
       )}
     </Card>
   );
