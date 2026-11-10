@@ -62,8 +62,10 @@ export function OrgProjectSwitcher({
         <button
           type="button"
           className={cn(
-            "flex w-full items-center gap-2.5 rounded-xl border border-border bg-card p-1.5 text-left",
-            "transition-colors hover:bg-accent",
+            // Sits on the sidebar's card surface: no fill of its own, and the
+            // sidebar's one hover shade (full accent is the active nav row).
+            "flex w-full items-center gap-2.5 rounded-xl border border-border bg-transparent p-1.5 text-left",
+            "transition-colors hover:bg-accent/60",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           )}
         >
