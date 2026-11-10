@@ -355,7 +355,7 @@ function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
                     "truncate rounded-md px-2 py-1 font-mono text-[12px] transition-colors",
                     isActive
                       ? "bg-accent/70 text-foreground"
-                      : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                      : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
                   )
                 }
               >
