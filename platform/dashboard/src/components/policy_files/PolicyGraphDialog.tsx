@@ -608,7 +608,14 @@ function bypassWarnings(
   return out;
 }
 
-export function PolicyFlow({ graph }: { graph: PolicyGraph }) {
+export function PolicyFlow({
+  graph,
+  embedded = false,
+}: {
+  graph: PolicyGraph;
+  /** Inside a scrolling page: the wheel scrolls the page, not the canvas. */
+  embedded?: boolean;
+}) {
   const [selected, setSelected] = useState<PolicyGraphEdge | null>(null);
   // A hovered node/edge is a temporary preview; a *pinned* node (clicked) shows
   // the persistent transitive focus.
@@ -789,11 +796,13 @@ export function PolicyFlow({ graph }: { graph: PolicyGraph }) {
         proOptions={{ hideAttribution: true }}
         minZoom={0.3}
         maxZoom={1.8}
-        // Map-like feel: drag empty space OR two-finger trackpad scroll to pan;
+        // Map-like feel: drag empty space OR two-finger trackpad scroll to pan
+        // (drag only when embedded in a page, where the wheel scrolls it);
         // pinch (or the +/- controls) to zoom. Default scroll-to-zoom reads as
         // "can't pan" on a Mac trackpad.
         panOnDrag
-        panOnScroll
+        panOnScroll={!embedded}
+        preventScrolling={!embedded}
         zoomOnScroll={false}
         zoomOnPinch
         style={{
