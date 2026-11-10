@@ -20,7 +20,7 @@ import { useProjectScoped } from "@/lib/active";
 import { useCanManageBans } from "@/lib/bans";
 import { useAgentActivity24h } from "@/lib/audit-summary";
 import { auditUrl } from "@/lib/audit-filters";
-import { agentSubgraph } from "@/lib/agent-graph";
+import { agentReachCounts, agentSubgraph } from "@/lib/agent-graph";
 import { formatDate, pluralise } from "@/lib/format";
 import { PolicyFlow } from "@/components/policy_files/PolicyGraphDialog";
 import { Badge } from "@/components/ui/badge";
@@ -73,14 +73,20 @@ export function AgentHub() {
   );
 
   // The agent's local graph (its roles, tools and reached agents), filtered
-  // from the project graph — no backend change. Classic projects 404 (no
-  // graph), handled by the placeholder below.
+  // from the project graph — no backend change. Every project has one (a
+  // classic project's comes from its tier store): a 422 means the modules
+  // don't compose, a 404 that the project isn't visible to the user.
   const graphQuery = usePolicyGraph(scope.projectId, undefined, !!agent);
   const graph = graphQuery.data;
-  // Classic (non-compose) projects 404 the graph endpoint — that's "no graph",
-  // not a failure; anything else is a real error.
-  const graph404 =
-    graphQuery.error instanceof ApiError && graphQuery.error.status === 404;
+  const status =
+    graphQuery.error instanceof ApiError ? graphQuery.error.status : null;
+  const graphError: GraphError | null = !graphQuery.isError
+    ? null
+    : status === 422
+      ? "compose"
+      : status === 404
+        ? "gone"
+        : "load";
   const subgraph = useMemo(
     () => (graph && agent ? agentSubgraph(graph, agent.name) : null),
     [graph, agent],
@@ -138,9 +144,12 @@ export function AgentHub() {
         agent={agent}
         activity={activity}
         activityError={summary.isError && !summary.data}
+        activityStale={summary.isError && !!summary.data}
         subgraph={subgraph}
-        graphLoading={graphQuery.isLoading}
-        graphError={graphQuery.isError && !graph404}
+        // The previous project's graph, kept while this one loads, isn't this
+        // agent's: show it as loading.
+        graphLoading={graphQuery.isLoading || graphQuery.isPlaceholderData}
+        graphError={graphError}
       />
       <ManifestView agent={agent} roleModes={roleModes} />
     </div>
@@ -162,60 +171,53 @@ function Breadcrumb({ name }: { name: string }) {
   );
 }
 
-/** Overview: the agent's graph as the centrepiece, with a KPI strip. */
+type GraphError = "compose" | "gone" | "load";
+
+/** Overview: the 24h strip, then the agent's graph as the centrepiece. */
 function AgentOverview({
   agent,
   activity,
   activityError,
+  activityStale,
   subgraph,
   graphLoading,
   graphError,
 }: {
   agent: AgentManifestView;
   activity: { all: number; deny: number; needs_approval: number } | null;
-  /** The 24h summary failed (vs still loading) — surface it, don't fake 0s. */
+  /** The 24h summary never loaded: "—" in the strip and a note. */
   activityError: boolean;
+  /** A later poll failed: the last counts stay, marked as such. */
+  activityStale: boolean;
   subgraph: PolicyGraph | null;
   graphLoading: boolean;
-  graphError: boolean;
+  graphError: GraphError | null;
 }) {
-  const missing = activity === null;
-  const num = (n: number | undefined) =>
-    missing ? "—" : (n ?? 0).toLocaleString();
+  const num = (n: number | undefined) => n?.toLocaleString() ?? "—";
   const tools = agent.manifest?.tools?.length ?? 0;
   const skills = agent.manifest?.skills?.length ?? 0;
   const kpis: { label: string; value: string; className?: string }[] = [
     { label: "Calls · 24h", value: num(activity?.all) },
     { label: "Denied", value: num(activity?.deny), className: "text-deny" },
     {
-      label: "Approvals",
+      label: "Sent for approval",
       value: num(activity?.needs_approval),
       className: "text-approval",
     },
     { label: "Resources", value: `${tools + skills}` },
   ];
 
-  // Caption counts come from the agent's OWN outbound edges in the graph, so
-  // "can reach" never includes a caller that reaches into it, and MCP servers
-  // aren't mislabelled as tools.
-  const kindById = new Map(subgraph?.nodes.map((n) => [n.id, n.kind]) ?? []);
-  const selfId = subgraph?.nodes.find(
-    (n) => n.kind === "agent" && n.label === agent.name,
-  )?.id;
-  const out = selfId
-    ? (subgraph?.edges.filter((e) => e.source === selfId) ?? [])
-    : [];
-  const reached = (kind: string) =>
-    new Set(
-      out.filter((e) => kindById.get(e.target) === kind).map((e) => e.target),
-    ).size;
-  const caption = [
-    reached("tool") && pluralise(reached("tool"), "tool"),
-    reached("mcp") && pluralise(reached("mcp"), "server"),
-    reached("agent") && pluralise(reached("agent"), "agent"),
-  ]
-    .filter(Boolean)
-    .join(", ");
+  // What the agent itself may use: its own outbound edges, never a denied one.
+  const reach = subgraph?.nodes.length ? agentReachCounts(subgraph) : null;
+  const caption = reach
+    ? [
+        reach.tools && pluralise(reach.tools, "tool"),
+        reach.mcpTools && pluralise(reach.mcpTools, "MCP tool"),
+        reach.agents && pluralise(reach.agents, "agent"),
+      ]
+        .filter(Boolean)
+        .join(", ")
+    : "";
 
   const hasGraph = !graphLoading && !!subgraph && subgraph.nodes.length > 1;
   return (
@@ -235,36 +237,53 @@ function AgentOverview({
           </div>
         ))}
       </div>
-      {activityError && (
-        <div className="border-b border-border px-4 py-2 text-meta text-deny">
-          Couldn't load the last 24 hours of activity.
+      {(activityError || activityStale) && (
+        <div className="border-b border-border px-4 py-2 text-meta text-muted-foreground">
+          {activityError
+            ? "Couldn't load the last 24 hours of activity."
+            : "Couldn't refresh; these are the last counts loaded."}
         </div>
       )}
       <div className="px-4 py-2.5 text-meta text-muted-foreground">
         What <span className="font-mono text-foreground">{agent.name}</span> can
-        reach{hasGraph && caption && ` — ${caption}`}
+        reach{hasGraph && ` — ${caption || "nothing it may use yet"}`}
       </div>
-      {graphLoading ? (
-        <Placeholder>Loading graph…</Placeholder>
-      ) : hasGraph ? (
-        <div className="h-[420px] border-t border-border">
-          <PolicyFlow graph={subgraph} />
+      {hasGraph && graphError && (
+        // A refetch failed over the cached graph: it may predate the policy.
+        <div className="border-t border-border px-4 py-2 text-meta text-muted-foreground">
+          {graphError === "compose"
+            ? "The policy modules don't compose any more"
+            : "Couldn't refresh the graph"}
+          ; the graph below is the last one loaded.
         </div>
-      ) : graphError ? (
-        <Placeholder>Couldn't load the graph. Refresh to retry.</Placeholder>
-      ) : agent.manifest === null ? (
-        <Placeholder>Register the agent to see its graph.</Placeholder>
-      ) : subgraph && subgraph.nodes.length <= 1 ? (
-        <Placeholder>
-          No roles, tools or reach mapped to this agent yet.
-        </Placeholder>
+      )}
+      {hasGraph ? (
+        <div className="h-[420px] border-t border-border">
+          <PolicyFlow graph={subgraph} embedded />
+        </div>
       ) : (
         <Placeholder>
-          No policy graph — add a policy.yaml to map roles, tools and reach.
+          {graphPlaceholder(graphLoading, graphError, agent.name)}
         </Placeholder>
       )}
     </Card>
   );
+}
+
+/** Why there's no graph to show. */
+function graphPlaceholder(
+  loading: boolean,
+  error: GraphError | null,
+  name: string,
+): string {
+  if (loading) return "Loading graph…";
+  if (error === "compose")
+    return "The policy modules don't compose, so there's no graph: fix the lints in Policies.";
+  if (error === "gone")
+    return "You don't have access to this project's policy any more.";
+  if (error === "load") return "Couldn't load the graph. Refresh to retry.";
+  // The graph comes from the policy, not the manifest.
+  return `Nothing in the policy maps roles, tools or reach to ${name} yet.`;
 }
 
 function Placeholder({ children }: { children: React.ReactNode }) {

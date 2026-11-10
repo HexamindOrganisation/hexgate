@@ -46,7 +46,8 @@ export interface LayeredLayout {
 export const delegates = (e: { kind: string; verdict: string }) =>
   e.kind === "reach" && e.verdict !== "deny";
 
-const push = <K, V>(m: Map<K, V[]>, k: K, v: V) => {
+/** Append `v` to the list at `k`, starting it if need be. */
+export const push = <K, V>(m: Map<K, V[]>, k: K, v: V) => {
   const a = m.get(k);
   if (a) a.push(v);
   else m.set(k, [v]);

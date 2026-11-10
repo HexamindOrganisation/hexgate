@@ -168,6 +168,42 @@ function renderHub(
   );
 }
 
+/** The hub for support_bot, with `/policy/graph` answering `graph`. */
+function renderHubWithGraph(graph: unknown, status = 200) {
+  stubFetch("admin");
+  const answer = vi.mocked(window.fetch).getMockImplementation()!;
+  vi.mocked(window.fetch).mockImplementation(async (input, init) =>
+    new URL(String(input), "http://localhost").pathname.endsWith(
+      "/policy/graph",
+    )
+      ? new Response(JSON.stringify(graph), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        })
+      : answer(input, init),
+  );
+  return renderWithProviders(
+    <Routes>
+      <Route path="/agents/:name" element={<AgentHub />} />
+    </Routes>,
+    { initialRoute: "/agents/support_bot" },
+  );
+}
+
+const graphEdge = (
+  source: string,
+  target: string,
+  verdict: "allow" | "deny" = "allow",
+) => ({
+  source,
+  target,
+  kind: "call",
+  via: null,
+  verdict,
+  constraints: [],
+  roles: [],
+});
+
 describe("AgentHub", () => {
   beforeEach(() => {
     act(() => {
@@ -242,10 +278,86 @@ describe("AgentHub", () => {
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(3);
   });
 
+  it("shows an agent the policy doesn't name through the generic * agent", async () => {
+    renderHubWithGraph({
+      roles: [],
+      nodes: [
+        { id: "agent:*", kind: "agent", label: "*" },
+        { id: "tool:refund", kind: "tool", label: "refund" },
+      ],
+      edges: [graphEdge("agent:*", "tool:refund")],
+    });
+    expect(await screen.findByTestId("agent-graph")).toBeInTheDocument();
+    expect(screen.getByText(/can reach — 1 tool$/)).toBeInTheDocument();
+  });
+
+  it("counts only what the agent may use, MCP tools apart", async () => {
+    renderHubWithGraph({
+      roles: [],
+      nodes: [
+        { id: "agent:support_bot", kind: "agent", label: "support_bot" },
+        { id: "tool:refund", kind: "tool", label: "refund" },
+        { id: "tool:wipe", kind: "tool", label: "wipe" },
+        { id: "tool:mcp-demo-a", kind: "mcp", label: "demo-a" },
+        { id: "tool:mcp-demo-b", kind: "mcp", label: "demo-b" },
+      ],
+      edges: [
+        graphEdge("agent:support_bot", "tool:refund"),
+        graphEdge("agent:support_bot", "tool:wipe", "deny"),
+        graphEdge("agent:support_bot", "tool:mcp-demo-a"),
+        graphEdge("agent:support_bot", "tool:mcp-demo-b"),
+      ],
+    });
+    expect(
+      await screen.findByText(/can reach — 1 tool, 2 MCP tools$/),
+    ).toBeInTheDocument();
+  });
+
+  it("marks a cached graph as old when a refetch fails", async () => {
+    stubFetch("admin");
+    const client = makeQueryClient();
+    client.setQueryData(
+      ["policy-graph", PROJECT, null],
+      {
+        roles: [],
+        nodes: [
+          { id: "agent:support_bot", kind: "agent", label: "support_bot" },
+          { id: "tool:refund", kind: "tool", label: "refund" },
+        ],
+        edges: [graphEdge("agent:support_bot", "tool:refund")],
+        // Loaded long ago, so the page refetches it.
+      },
+      { updatedAt: 0 },
+    );
+    const answer = vi.mocked(window.fetch).getMockImplementation()!;
+    vi.mocked(window.fetch).mockImplementation(async (input, init) =>
+      new URL(String(input), "http://localhost").pathname.endsWith(
+        "/policy/graph",
+      )
+        ? new Response(JSON.stringify({ detail: "x" }), { status: 422 })
+        : answer(input, init),
+    );
+    renderWithProviders(
+      <Routes>
+        <Route path="/agents/:name" element={<AgentHub />} />
+      </Routes>,
+      { initialRoute: "/agents/support_bot", client },
+    );
+    expect(await screen.findByText(/the last one loaded/)).toBeInTheDocument();
+    expect(screen.getByTestId("agent-graph")).toBeInTheDocument();
+  });
+
+  it("says the policy doesn't compose on a 422", async () => {
+    renderHubWithGraph({ detail: "boom" }, 422);
+    expect(await screen.findByText(/don't compose/)).toBeInTheDocument();
+  });
+
   it("says the agent has nothing mapped when it isn't in the graph", async () => {
     renderHub("support_bot", "admin", false, false, true);
     expect(
-      await screen.findByText(/No roles, tools or reach mapped/),
+      await screen.findByText(
+        /Nothing in the policy maps roles, tools or reach/,
+      ),
     ).toBeInTheDocument();
   });
 
