@@ -117,7 +117,7 @@ policy = AgentPolicy.model_validate({
 `file_scope` is not a security boundary yet. Its path matching is being reworked:
 today some spellings of a path, such as `../`, absolute paths or
 symlinks, can reach files the patterns were meant to exclude. Use it to steer an
-agent away from files, and rely on the [workspace sandbox](/concepts/sandbox) to
+agent away from files, and rely on the workspace sandbox to
 contain it.
 </Warning>
 

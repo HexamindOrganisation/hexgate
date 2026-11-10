@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -120,3 +121,17 @@ def test_when_policy_reference_is_called_then_text_is_sent_once(key):
     assert response.status_code == 200
     assert '"isError":false' in response.text
     assert "structuredContent" not in response.text
+
+
+def test_served_docs_link_only_to_served_pages():
+    # An agent follows a link by calling policy_reference, which serves only
+    # docs/policy: a link to any other site page leads nowhere.
+    sections = reference.load_sections(REPO_DOCS)
+    broken = [
+        f"{name}: {target}"
+        for name, text in sections.items()
+        for target in re.findall(r"\]\((/[^)\s]*)\)", text)
+        if re.fullmatch(r"/policy/([^/#]+)(#.*)?", target) is None
+        or target.split("/")[2].split("#")[0] not in sections
+    ]
+    assert broken == []

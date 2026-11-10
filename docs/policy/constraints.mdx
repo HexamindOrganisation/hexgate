@@ -387,7 +387,7 @@ fails closed, like any missing field.
 - **One value per agent.** The snapshot is fetched per agent, so every role must
   resolve to the same mode, and a role that says nothing reads `allow`. A `deny` in
   some roles only fails to load, with an error that names each role's value.
-- **It is signed.** The mode travels in the [signed policy bundle](/concepts/signed-bundles), so a caller can't
+- **It is signed.** The mode travels in the [signed policy bundle](/policy/signing), so a caller can't
   strip `deny`. An SDK that predates the key **ignores** it in a signed bundle and
   fails open; it rejects the policy only when it loads the YAML itself (a local
   policy, or a platform with no compiled bundle). Upgrade every SDK and the platform
@@ -818,7 +818,7 @@ on the pydantic engine); across roles a name must map to a single value.
 
 ### Pinning a skill's content
 
-A [skill](/concepts/skills) is matched by name, so editing an approved skill does
+A skill is matched by name, so editing an approved skill does
 not revoke its approval. Every skill decision carries these arguments, so pinning
 needs no new syntax — just a constraint and a constant:
 
@@ -859,7 +859,7 @@ skills:
 The hash covers the `SKILL.md` body at every level, so a pin on a rule whose `via`
 includes `resource` or `script` also stops those when the instructions change —
 but it does not cover the resource and script files themselves. On
-[Google ADK](/adapters/google-adk#skills), a `script` decision also carries the
+Google ADK, a `script` decision also carries the
 script's invocation as `args.script_args`, `args.short_options` and
 `args.positional_args`.
 
