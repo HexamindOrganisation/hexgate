@@ -4,13 +4,13 @@
  * 24h activity for one agent, and handles the unknown-agent case.
  */
 
-import { act, screen } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes } from "react-router-dom";
 
 import { useActive } from "@/lib/active";
 import { AgentHub } from "@/routes/AgentHub";
-import { renderWithProviders } from "@/test/render";
+import { makeQueryClient, renderWithProviders } from "@/test/render";
 
 const PROJECT = "p1";
 
@@ -127,10 +127,44 @@ describe("AgentHub", () => {
       await screen.findByRole("heading", { name: "support_bot" }),
     ).toBeInTheDocument();
     expect(screen.getByText("langchain")).toBeInTheDocument();
-    // 24h activity.
-    expect(screen.getByText("Calls · 24h")).toBeInTheDocument();
-    expect(screen.getByText("15")).toBeInTheDocument();
-    expect(screen.getByText("4")).toBeInTheDocument();
+    // 24h activity, each number under its own label.
+    const value = async (label: string) =>
+      (await screen.findByText(label)).nextElementSibling;
+    await waitFor(async () =>
+      expect(await value("Calls · 24h")).toHaveTextContent("15"),
+    );
+    expect(await value("Denied")).toHaveTextContent("4");
+    expect(await value("Sent for approval")).toHaveTextContent("1");
+  });
+
+  it("marks the counts as old when a refresh fails", async () => {
+    stubFetch("admin");
+    const client = makeQueryClient();
+    client.setQueryData(["audit", "summary", PROJECT, { window: "24h" }], {
+      totals: { all: 15, allow: 10, deny: 4, needs_approval: 1 },
+      by_agent: [
+        { key: "support_bot", all: 15, allow: 10, deny: 4, needs_approval: 1 },
+      ],
+      by_role: [],
+      by_tool: [],
+      by_user: [],
+    });
+    // The next poll fails.
+    const answer = vi.mocked(window.fetch).getMockImplementation()!;
+    vi.mocked(window.fetch).mockImplementation(async (input, init) =>
+      new URL(String(input), "http://localhost").pathname.endsWith(
+        "/audit/summary",
+      )
+        ? new Response("boom", { status: 500 })
+        : answer(input, init),
+    );
+    renderWithProviders(
+      <Routes>
+        <Route path="/agents/:name" element={<AgentHub />} />
+      </Routes>,
+      { initialRoute: "/agents/support_bot", client },
+    );
+    expect(await screen.findByText(/Couldn't refresh/)).toBeInTheDocument();
   });
 
   it("shows how each role treats the agent's tools (engine matrix)", async () => {
