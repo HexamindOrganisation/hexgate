@@ -4,8 +4,10 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowLeft, LogOut, Users } from "lucide-react";
+import { AlertTriangle, LogOut, Users } from "lucide-react";
 
+import { BackToOrgs } from "@/components/BackToOrgs";
+import { Card } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -89,7 +91,7 @@ export function OrgSettingsPage() {
     // friendlier message without an API round-trip.
     return (
       <div className="mx-auto max-w-3xl space-y-4 p-6">
-        <BackToOrgs onClick={() => navigate("/orgs")} />
+        <BackToOrgs />
         <Alert variant="destructive">
           <AlertDescription>
             Organization not found, or you no longer have access to it.
@@ -142,7 +144,7 @@ export function OrgSettingsPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <BackToOrgs onClick={() => navigate("/orgs")} />
+      <BackToOrgs />
 
       <PageHeader
         title="Organization settings"
@@ -160,7 +162,8 @@ export function OrgSettingsPage() {
       <form
         onSubmit={form.handleSubmit(onSubmit)}
         id="org-settings-form"
-        className="rounded-xl border border-border bg-card"
+        // The Card's look on a form element.
+        className="rounded-xl border border-border bg-card text-card-foreground"
       >
         <div className="space-y-4 p-5">
           {!canEdit && (
@@ -218,11 +221,11 @@ export function OrgSettingsPage() {
         )}
       </form>
 
-      <section className="flex items-center gap-4 rounded-xl border border-border bg-card p-5">
+      <Card className="flex flex-wrap items-center gap-4 p-5">
         <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
           <Users className="size-4" />
         </span>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1 basis-60">
           <h2 className="text-sm font-medium">Members</h2>
           <p className="text-xs text-muted-foreground">
             See who has access, invite teammates, change roles, or remove
@@ -236,9 +239,9 @@ export function OrgSettingsPage() {
         >
           Manage members
         </Button>
-      </section>
+      </Card>
 
-      <section className="rounded-xl border border-deny/40 bg-card">
+      <Card className="border-deny/40">
         <div className="flex items-start gap-4 p-5">
           <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-deny/10 text-deny">
             <AlertTriangle className="size-4" />
@@ -263,7 +266,7 @@ export function OrgSettingsPage() {
             Leave organization
           </Button>
         </div>
-      </section>
+      </Card>
 
       <ConfirmDialog
         open={confirmLeaveOpen}
@@ -276,14 +279,5 @@ export function OrgSettingsPage() {
         onConfirm={onLeave}
       />
     </div>
-  );
-}
-
-function BackToOrgs({ onClick }: { onClick: () => void }) {
-  return (
-    <Button variant="ghost" size="sm" onClick={onClick} className="-ml-2">
-      <ArrowLeft className="size-3.5" />
-      Back to organizations
-    </Button>
   );
 }

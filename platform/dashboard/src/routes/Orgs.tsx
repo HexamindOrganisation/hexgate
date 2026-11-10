@@ -5,6 +5,7 @@ import { Building2, ChevronRight, Plus } from "lucide-react";
 import { CreateOrgDialog } from "@/components/CreateOrgDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { useActive } from "@/lib/active";
 import { useOrgs, type OrgWithRole, type Role } from "@/lib/orgs";
@@ -46,15 +47,13 @@ export function OrgsPage() {
       />
 
       {orgsQuery.isError && (
-        <div className="rounded-xl border border-border bg-card p-6 text-sm text-deny">
+        <Card className="p-6 text-sm text-deny">
           Could not load organizations. Try refreshing the page.
-        </div>
+        </Card>
       )}
 
       {orgsQuery.isLoading && (
-        <div className="rounded-xl border border-border bg-card p-6 text-sm text-muted-foreground">
-          Loading…
-        </div>
+        <Card className="p-6 text-sm text-muted-foreground">Loading…</Card>
       )}
 
       {orgsQuery.data && orgsQuery.data.length === 0 && (
@@ -62,28 +61,32 @@ export function OrgsPage() {
       )}
 
       {orgsQuery.data && orgsQuery.data.length > 0 && (
-        <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
+        <Card className="divide-y divide-border overflow-hidden">
           {orgsQuery.data.map((org) => (
             <button
               key={org.id}
               type="button"
               onClick={() => openOrg(org)}
-              className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent"
+              // Inset ring: the list's rounded clip would cut an outline.
+              className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
             >
               <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
                 <Building2 className="size-4" />
               </span>
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium">{org.name}</div>
-                <div className="truncate font-mono text-xs text-muted-foreground">
+              {/* Spans: a button holds phrasing content only. */}
+              <span className="block min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">
+                  {org.name}
+                </span>
+                <span className="block truncate font-mono text-xs text-muted-foreground">
                   {org.slug}
-                </div>
-              </div>
+                </span>
+              </span>
               <RoleBadge role={org.role} />
               <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
             </button>
           ))}
-        </div>
+        </Card>
       )}
 
       <CreateOrgDialog
@@ -104,7 +107,7 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
   // land here. Still possible (e.g., they joined another org and left
   // their personal one), so render a useful zero-state.
   return (
-    <div className="flex flex-col items-center gap-3 rounded-xl border border-border bg-card p-10 text-center">
+    <Card className="flex flex-col items-center gap-3 p-10 text-center">
       <span className="grid size-11 place-items-center rounded-xl bg-action text-action-foreground">
         <Building2 className="size-5" />
       </span>
@@ -117,7 +120,7 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
         <Plus className="size-4" />
         Create organization
       </Button>
-    </div>
+    </Card>
   );
 }
 
@@ -130,10 +133,7 @@ function RoleBadge({ role }: { role: Role }) {
     member: "outline",
   };
   return (
-    <Badge
-      variant={variant[role]}
-      className="ml-auto shrink-0 font-normal capitalize"
-    >
+    <Badge variant={variant[role]} className="shrink-0 font-normal capitalize">
       {role}
     </Badge>
   );
