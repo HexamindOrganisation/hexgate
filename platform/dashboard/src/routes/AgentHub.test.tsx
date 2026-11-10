@@ -1,20 +1,14 @@
-/**
- * Tests for the /agents/:name hub — the agent-first page. It composes the
- * manifest (via ManifestView), the per-role policy (engine matrix) and the
- * 24h activity for one agent, and handles the unknown-agent case.
- */
+/** The /agents/:name hub: the header above the tabs, the Overview's 24h strip
+ * and graph, the Resources tab's manifest and per-role policy, and the
+ * unknown-agent case. */
 
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Route, Routes } from "react-router-dom";
+import { Routes } from "react-router-dom";
 
 import { useActive } from "@/lib/active";
-import {
-  AgentHub,
-  AgentOverviewTab,
-  AgentResourcesTab,
-} from "@/routes/AgentHub";
+import { agentHubRoute } from "@/routes/agent-hub-routes";
 import { makeQueryClient, renderWithProviders } from "@/test/render";
 
 // Stub the heavy graph (ReactFlow) — the hub only needs it to mount with the
@@ -174,15 +168,9 @@ function renderHub(
   } = {},
 ) {
   stubFetch(role, manifestError, summaryError, noAgentInGraph);
-  return renderWithProviders(
-    <Routes>
-      <Route path="/agents/:name" element={<AgentHub />}>
-        <Route index element={<AgentOverviewTab />} />
-        <Route path="resources" element={<AgentResourcesTab />} />
-      </Route>
-    </Routes>,
-    { initialRoute: `/agents/${name}${tab}` },
-  );
+  return renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
+    initialRoute: `/agents/${name}${tab}`,
+  });
 }
 
 /** The hub for support_bot, with `/policy/graph` answering `graph`. */
@@ -199,12 +187,9 @@ function renderHubWithGraph(graph: unknown, status = 200) {
         })
       : answer(input, init),
   );
-  return renderWithProviders(
-    <Routes>
-      <Route path="/agents/:name" element={<AgentHub />} />
-    </Routes>,
-    { initialRoute: "/agents/support_bot" },
-  );
+  return renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
+    initialRoute: "/agents/support_bot",
+  });
 }
 
 const graphEdge = (
@@ -266,12 +251,10 @@ describe("AgentHub", () => {
         ? new Response("boom", { status: 500 })
         : answer(input, init),
     );
-    renderWithProviders(
-      <Routes>
-        <Route path="/agents/:name" element={<AgentHub />} />
-      </Routes>,
-      { initialRoute: "/agents/support_bot", client },
-    );
+    renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
+      initialRoute: "/agents/support_bot",
+      client,
+    });
     expect(await screen.findByText(/Couldn't refresh/)).toBeInTheDocument();
   });
 
@@ -289,9 +272,49 @@ describe("AgentHub", () => {
   it("navigates from the Overview graph to the Resources tab", async () => {
     renderHub("support_bot");
     expect(await screen.findByTestId("agent-graph")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("link", { name: /Resources/ }));
-    // The manifest's tools live on Resources now, not the Overview.
+    // The manifest's tools live on Resources, not the Overview.
+    expect(screen.queryByText("refund")).not.toBeInTheDocument();
+    const overview = screen.getByRole("link", { name: "Overview" });
+    const resources = screen.getByRole("link", { name: /Resources/ });
+    expect(overview).toHaveAttribute("aria-current", "page");
+    // One tool, no skills.
+    expect(resources).toHaveTextContent("Resources1");
+    await userEvent.click(resources);
     expect(await screen.findByText("refund")).toBeInTheDocument();
+    expect(resources).toHaveAttribute("aria-current", "page");
+    expect(overview).not.toHaveAttribute("aria-current");
+  });
+
+  it("shows no resource count for an agent that never registered", async () => {
+    stubFetch("admin");
+    const answer = vi.mocked(window.fetch).getMockImplementation()!;
+    vi.mocked(window.fetch).mockImplementation(async (input, init) =>
+      new URL(String(input), "http://localhost").pathname.endsWith(
+        "/agents/manifest",
+      )
+        ? new Response(
+            JSON.stringify([
+              {
+                ...MANIFEST,
+                manifest: null,
+                version: null,
+                content_hash: null,
+              },
+            ]),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          )
+        : answer(input, init),
+    );
+    renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
+      initialRoute: "/agents/support_bot",
+    });
+    expect(await screen.findByText("not registered")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Resources/ })).toHaveTextContent(
+      /^Resources$/,
+    );
+    expect(
+      screen.getByText("Resources", { selector: "div" }).nextElementSibling,
+    ).toHaveTextContent("—");
   });
 
   it("shows em-dashes, not fake zeros, when 24h activity fails to load", async () => {
@@ -362,12 +385,10 @@ describe("AgentHub", () => {
         ? new Response(JSON.stringify({ detail: "x" }), { status: 422 })
         : answer(input, init),
     );
-    renderWithProviders(
-      <Routes>
-        <Route path="/agents/:name" element={<AgentHub />} />
-      </Routes>,
-      { initialRoute: "/agents/support_bot", client },
-    );
+    renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
+      initialRoute: "/agents/support_bot",
+      client,
+    });
     expect(await screen.findByText(/the last one loaded/)).toBeInTheDocument();
     expect(screen.getByTestId("agent-graph")).toBeInTheDocument();
   });

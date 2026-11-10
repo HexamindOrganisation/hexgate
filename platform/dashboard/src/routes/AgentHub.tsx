@@ -36,14 +36,8 @@ import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { cn } from "@/lib/utils";
 import { ManifestView } from "./Agents";
 
-/**
- * `/agents/:name` — the single-agent hub. This is the first step of the
- * agent-first navigation: everything about one agent lives on its own page
- * instead of being scattered across Agents / Policies / Audit. For now the
- * body is the agent's manifest + per-role policy (reusing `ManifestView` and
- * the engine matrix); later PRs turn the header into tabs (Overview graph,
- * Resources, Playground, Decision log).
- */
+/** `/agents/:name`: everything about one agent on its own page. The header
+ * stays above the tabs; each tab renders in the `Outlet` from `HubContext`. */
 export function AgentHub() {
   const { name } = useParams<{ name: string }>();
   const scope = useProjectScoped();
@@ -146,12 +140,7 @@ export function AgentHub() {
     <div className="mx-auto max-w-[960px] space-y-4">
       <Breadcrumb name={agent.name} />
       <AgentHeader agent={agent} canManageBans={canManageBans} />
-      <HubTabs
-        resources={
-          (agent.manifest?.tools?.length ?? 0) +
-          (agent.manifest?.skills?.length ?? 0)
-        }
-      />
+      <HubTabs resources={resourceCount(agent)} />
       <Outlet
         context={
           {
@@ -186,7 +175,6 @@ export interface HubContext {
   graphError: GraphError | null;
 }
 
-/** The Overview tab — the agent's graph + KPI strip. */
 export function AgentOverviewTab() {
   return <AgentOverview {...useOutletContext<HubContext>()} />;
 }
@@ -197,7 +185,15 @@ export function AgentResourcesTab() {
   return <ManifestView agent={ctx.agent} roleModes={ctx.roleModes} />;
 }
 
-function HubTabs({ resources }: { resources: number }) {
+/** Tools + skills, or null for an agent that never registered: a 0 would
+ * assert what the "not registered yet" copy refuses to. */
+function resourceCount(agent: AgentManifestView): number | null {
+  const m = agent.manifest;
+  if (!m) return null;
+  return (m.tools?.length ?? 0) + (m.skills?.length ?? 0);
+}
+
+function HubTabs({ resources }: { resources: number | null }) {
   const tab =
     "border-b-2 px-3 py-2 text-sm transition-colors -mb-px flex items-center gap-1.5";
   const cls = ({ isActive }: { isActive: boolean }) =>
@@ -217,9 +213,11 @@ function HubTabs({ resources }: { resources: number }) {
       </NavLink>
       <NavLink to="resources" className={cls}>
         Resources
-        <span className="rounded bg-muted px-1.5 text-[11px] text-muted-foreground">
-          {resources}
-        </span>
+        {resources !== null && (
+          <Badge variant="outline" className="ml-1 font-mono text-[11px]">
+            {resources}
+          </Badge>
+        )}
       </NavLink>
     </nav>
   );
@@ -251,20 +249,8 @@ function AgentOverview({
   subgraph,
   graphLoading,
   graphError,
-}: {
-  agent: AgentManifestView;
-  activity: { all: number; deny: number; needs_approval: number } | null;
-  /** The 24h summary never loaded: "—" in the strip and a note. */
-  activityError: boolean;
-  /** A later poll failed: the last counts stay, marked as such. */
-  activityStale: boolean;
-  subgraph: PolicyGraph | null;
-  graphLoading: boolean;
-  graphError: GraphError | null;
-}) {
-  const num = (n: number | undefined) => n?.toLocaleString() ?? "—";
-  const tools = agent.manifest?.tools?.length ?? 0;
-  const skills = agent.manifest?.skills?.length ?? 0;
+}: Omit<HubContext, "roleModes">) {
+  const num = (n: number | null | undefined) => n?.toLocaleString() ?? "—";
   const kpis: { label: string; value: string; className?: string }[] = [
     { label: "Calls · 24h", value: num(activity?.all) },
     { label: "Denied", value: num(activity?.deny), className: "text-deny" },
@@ -273,7 +259,7 @@ function AgentOverview({
       value: num(activity?.needs_approval),
       className: "text-approval",
     },
-    { label: "Resources", value: `${tools + skills}` },
+    { label: "Resources", value: num(resourceCount(agent)) },
   ];
 
   // What the agent itself may use: its own outbound edges, never a denied one.
@@ -363,10 +349,9 @@ function Placeholder({ children }: { children: React.ReactNode }) {
   );
 }
 
-/* NOTE: AgentHeader and the roleModes memo mirror Agents.tsx on purpose, for
-   now — H1b makes /agents list-only (dropping its inline card) and H2 replaces
-   this header with the graph-hero Overview, so a shared extraction here would
-   be reworked immediately. Kept parallel until then. */
+/* NOTE: AgentHeader mirrors the inline card in Agents.tsx on purpose: H1b
+   makes /agents list-only and drops that card, so a shared extraction now
+   would be reworked immediately. */
 function AgentHeader({
   agent,
   canManageBans,
