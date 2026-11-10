@@ -381,7 +381,7 @@ export function AppShell() {
                 <button
                   type="button"
                   onClick={() => navigate("/")}
-                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <ArrowLeft className="size-4" />
                   Back to workspace
@@ -397,7 +397,7 @@ export function AppShell() {
           <Button
             variant="ghost"
             size="icon"
-            className="size-8 shrink-0 text-muted-foreground"
+            className="size-8 shrink-0 text-muted-foreground hover:bg-accent/60"
             title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             aria-label={
               sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"
@@ -489,7 +489,7 @@ function AccountChip({ collapsed }: { collapsed: boolean }) {
             type="button"
             title={collapsed ? user.email : undefined}
             className={cn(
-              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent",
+              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent/60",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               collapsed && "justify-center",
             )}
