@@ -475,10 +475,12 @@ def test_policy_coverage_happy_path(token):
     assert [sent(r) for r in api_requests()] == [("GET", "/policy/coverage", {})]
 
 
-def test_when_project_has_no_policy_store_then_policy_coverage_carries_the_409(token):
-    detail = "the project has no 'policy.yaml' and no role bindings"
+def test_when_an_agent_policy_does_not_load_then_policy_coverage_carries_the_422(
+    token,
+):
+    detail = "the stored policy of agent 'bot' does not load"
     mock_api()
-    respx.get(f"{API_URL}{BASE}/policy/coverage").respond(409, json={"detail": detail})
+    respx.get(f"{API_URL}{BASE}/policy/coverage").respond(422, json={"detail": detail})
 
     assert detail in error(call(token, "policy_coverage"))
 
