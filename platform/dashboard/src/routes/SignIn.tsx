@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -13,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { googleOAuthAvailable, useLogin, useUser } from "@/lib/auth";
+import { useLogin, useUser } from "@/lib/auth";
 import { clearConsentReturn } from "@/lib/oauth_consent";
 
 const SignInSchema = z.object({
@@ -29,13 +28,6 @@ export function SignInPage() {
   const location = useLocation();
   const from = (location.state as { from?: string } | null)?.from;
   const login = useLogin();
-  const [googleAvailable, setGoogleAvailable] = useState(false);
-
-  // Probe once on mount — the button stays hidden when Google sign-in
-  // isn't enabled on the backend (HEXGATE_GOOGLE_CLIENT_ID unset).
-  useEffect(() => {
-    googleOAuthAvailable().then(setGoogleAvailable);
-  }, []);
 
   const form = useForm<SignInValues>({
     resolver: zodResolver(SignInSchema),
@@ -133,7 +125,7 @@ export function SignInPage() {
           {login.isPending ? "Signing in…" : "Sign in"}
         </Button>
 
-        {googleAvailable && <GoogleContinue returnTo={from} />}
+        <GoogleContinue returnTo={from} />
       </form>
     </AuthShell>
   );

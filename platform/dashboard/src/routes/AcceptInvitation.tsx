@@ -35,7 +35,7 @@ export function AcceptInvitationPage() {
   // we'd flash "sign in to accept" for a moment while /users/me is
   // still in flight on a signed-in tab.
   if (!inviteId || preview.isLoading || userLoading) {
-    return <AuthShell tone="muted" spin title="Loading invitation…" />;
+    return <AuthShell tone="muted" title="Loading invitation…" />;
   }
 
   if (preview.error) {
@@ -138,8 +138,9 @@ function SignedOut({
       <div className="space-y-4">
         <Alert>
           <AlertDescription>
-            Sign in as <span className="font-medium">{invitation.email}</span>{" "}
-            to accept this invitation.
+            Sign in as{" "}
+            <span className="break-all font-medium">{invitation.email}</span> to
+            accept this invitation.
           </AlertDescription>
         </Alert>
         <div className="space-y-2">
@@ -288,7 +289,10 @@ function AcceptCard({
           <dt className="text-muted-foreground">Your role</dt>
           <dd className="col-span-2 capitalize">{invitation.role}</dd>
           <dt className="text-muted-foreground">Email</dt>
-          <dd className="col-span-2 font-mono text-xs">{invitation.email}</dd>
+          {/* Long addresses break anywhere: the column is narrow. */}
+          <dd className="col-span-2 min-w-0 break-all font-mono text-xs">
+            {invitation.email}
+          </dd>
         </dl>
         <div className="space-y-2">
           <Button

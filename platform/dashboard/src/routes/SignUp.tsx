@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -13,13 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  googleOAuthAvailable,
-  useLogin,
-  useRegister,
-  useRequestVerify,
-  useUser,
-} from "@/lib/auth";
+import { useLogin, useRegister, useRequestVerify, useUser } from "@/lib/auth";
 import { clearConsentReturn } from "@/lib/oauth_consent";
 
 const SignUpSchema = z
@@ -44,18 +37,16 @@ export function SignUpPage() {
   const register = useRegister();
   const login = useLogin();
   const requestVerify = useRequestVerify();
-  const [googleAvailable, setGoogleAvailable] = useState(false);
-
-  useEffect(() => {
-    googleOAuthAvailable().then(setGoogleAvailable);
-  }, []);
+  // Where the user was headed before sign-in sent them here (an invite, an
+  // MCP consent request): they land back there once the account exists.
+  const from = (useLocation().state as { from?: string } | null)?.from;
 
   const form = useForm<SignUpValues>({
     resolver: zodResolver(SignUpSchema),
     defaultValues: { email: "", password: "", confirm: "" },
   });
 
-  if (!loading && user) return <Navigate to="/" replace />;
+  if (!loading && user) return <Navigate to={from ?? "/"} replace />;
 
   async function onSubmit(values: SignUpValues) {
     clearConsentReturn(); // as on SignIn: no stale consent stash survives
@@ -73,7 +64,7 @@ export function SignUpPage() {
       });
       // Kick off verification — non-blocking; user already signed in.
       requestVerify.mutate(values.email);
-      navigate("/", { replace: true });
+      navigate(from ?? "/", { replace: true });
     } catch {
       // Error path renders via register.error / login.error below.
     }
@@ -155,7 +146,7 @@ export function SignUpPage() {
           {pending ? "Creating…" : "Create account"}
         </Button>
 
-        {googleAvailable && <GoogleContinue />}
+        <GoogleContinue returnTo={from} />
       </form>
     </AuthShell>
   );
