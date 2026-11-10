@@ -635,17 +635,20 @@ class UncoveredSubagentOut(BaseModel):
 
 
 class AgentCoverageOut(BaseModel):
-    """One registered agent's coverage. ``has_policy`` is False when the policy
-    has no section of its own for it (it enforces the ``"*"`` view);
+    """One registered agent's coverage. ``has_policy`` is False when the
+    project policy has no section for it (it enforces the ``"*"`` view) or, in
+    a project without one, when its own stored policy is empty;
     ``has_manifest`` is False when no usable manifest is registered, so its
-    empty lists mean "unknown", not "covered". An uncovered tool falls to
-    ``default_policy``; an uncovered sub-agent is denied when ``reach_gated``
+    empty lists mean "unknown", not "covered". An uncovered tool falls to its
+    role's default, at worst ``default_policy``; an uncovered sub-agent is denied when ``reach_gated``
     and not checked at all otherwise."""
 
     agent: str
     has_policy: bool
     has_manifest: bool
-    default_policy: str  # "allow" | "deny" | "approval_required"
+    # The most permissive default any role applies to an uncovered tool:
+    # "allow" | "approval_required" | "deny".
+    default_policy: str
     reach_gated: bool
     uncovered_tools: list[UncoveredToolOut] = Field(default_factory=list)
     uncovered_subagents: list[UncoveredSubagentOut] = Field(default_factory=list)

@@ -1,5 +1,6 @@
 """Policy coverage: which tools and sub-agents in each agent's manifest no rule
-names. A call to such a tool falls to the policy's default; reach to such a
+names. A call to such a tool falls to its role's default (the report gives
+the most permissive one any role applies); reach to such a
 sub-agent is closed-world, so it is denied where the policy gates reach and not
 checked at all where it doesn't.
 
@@ -11,8 +12,10 @@ reaches it. This reports facts, not problems; the lints stay with
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import yaml
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -29,62 +32,121 @@ if TYPE_CHECKING:  # the SDK is imported lazily at run time
     from hexgate.security.policy_set import PolicySet
 
 
-class NotModularError(Exception):
-    """The project has no entry file and no role binding, so each agent
-    enforces its own ``policy_yaml`` and there is no project policy to cover."""
+class PolicyLoadError(Exception):
+    """An agent's stored ``policy_yaml`` does not load (a classic project)."""
+
+    def __init__(self, agent: str) -> None:
+        super().__init__(agent)
+        self.agent = agent
+
+
+@dataclass(frozen=True)
+class _Enforced:
+    """The policy set an agent enforces, the tool keys it has a rule for, and
+    whether it is the agent's own (its section of the project policy, or its
+    own stored ``policy_yaml``)."""
+
+    policy_set: PolicySet
+    named: set[str]
+    has_policy: bool
+
+    @classmethod
+    def of(cls, policy_set: PolicySet, *, has_policy: bool) -> _Enforced:
+        return cls(policy_set, _named_keys(policy_set), has_policy)
 
 
 async def project_coverage(
     session: AsyncSession, project_id: str
 ) -> list[AgentCoverageOut]:
-    """Coverage for every registered agent, by name. Raises
-    :class:`NotModularError`, or the SDK's compose errors
-    (:func:`service.compose_error_types`) when the project doesn't resolve."""
+    """Coverage for every registered agent, by name, against the policy it
+    enforces: the project policy when the project has one (``is_modular``),
+    else its own ``policy_yaml``. Raises the SDK's compose errors
+    (:func:`service.compose_error_types`) when the project policy doesn't
+    resolve, and :class:`PolicyLoadError` when an agent's own doesn't load."""
     from hexgate_api.features.agents.service import latest_manifests
 
-    if not await service.is_modular(session, project_id):
-        raise NotModularError
-    resolved = await service.resolve_every_agent(session, project_id)
-    # Every agent without a section shares the "*" resolution: name its keys once.
-    named = {agent: _named_keys(r.policy_set) for agent, r in resolved.items()}
-    names = (
+    agents = (
         await session.exec(
-            select(Agent.name)
+            select(Agent.name, Agent.policy_yaml)
             .where(Agent.project_id == project_id)
             .order_by(Agent.name)  # type: ignore[arg-type]
         )
     ).all()
+    if await service.is_modular(session, project_id):
+        enforced = await _project_policies(session, project_id, [a for a, _ in agents])
+    else:
+        enforced = {agent: _own_policy(agent, text) for agent, text in agents}
     manifests = await latest_manifests(session, project_id)
     return [
-        _agent_coverage(name, resolved, named, manifests.get(name)) for name in names
+        _agent_coverage(agent, enforced[agent], manifests.get(agent))
+        for agent, _ in agents
     ]
+
+
+async def _project_policies(
+    session: AsyncSession, project_id: str, agents: list[str]
+) -> dict[str, _Enforced]:
+    """Each agent's section of the project policy, or the ``"*"`` view when
+    the policy has none for it."""
+    resolved = await service.resolve_every_agent(session, project_id)
+    generic = _Enforced.of(resolved[service.DEFAULT_AGENT].policy_set, has_policy=False)
+    return {
+        agent: _Enforced.of(resolved[agent].policy_set, has_policy=True)
+        if agent in resolved
+        else generic
+        for agent in agents
+    }
+
+
+def _own_policy(agent: str, policy_yaml: str) -> _Enforced:
+    """An agent's own stored policy. An empty one loads as the platform
+    default (deny everything), which is what the agent then enforces."""
+    from hexgate.security import load_policy_set_from_dict
+
+    try:
+        document = yaml.safe_load(policy_yaml) or {}
+        if not isinstance(document, dict):  # a row saved before saves validated
+            raise PolicyLoadError(agent)
+        policy_set = load_policy_set_from_dict(document)
+    except service.compose_error_types() as exc:
+        raise PolicyLoadError(agent) from exc
+    return _Enforced.of(policy_set, has_policy=bool(policy_yaml.strip()))
 
 
 def _agent_coverage(
     agent: str,
-    resolved: dict,
-    named: dict[str, set[str]],
+    enforced: _Enforced,
     manifest: AgentManifest | None,
 ) -> AgentCoverageOut:
-    has_policy = agent in resolved
-    column = agent if has_policy else service.DEFAULT_AGENT
-    policy_set: PolicySet = resolved[column].policy_set
+    policy_set, keys = enforced.policy_set, enforced.named
     tools: list[UncoveredToolOut] = []
     subagents: list[UncoveredSubagentOut] = []
     if manifest is not None:
-        tools = _uncovered_tools(manifest, named[column])
+        tools = _uncovered_tools(manifest, keys)
         subagents = _uncovered_subagents(
-            manifest, named[column], tool_reach=policy_set.declares_tool_reach()
+            manifest, keys, tool_reach=policy_set.declares_tool_reach()
         )
     return AgentCoverageOut(
         agent=agent,
-        has_policy=has_policy,
+        has_policy=enforced.has_policy,
         has_manifest=manifest is not None,
-        default_policy=policy_set.policy_for(None).default_policy.mode,
+        default_policy=_most_permissive_default(policy_set),
         reach_gated=policy_set.declares_reach(),
         uncovered_tools=tools,
         uncovered_subagents=subagents,
     )
+
+
+def _most_permissive_default(policy_set: PolicySet) -> str:
+    """The most permissive default any role applies to an uncovered tool: the
+    worst case a gap can reach. Roles of an agent's own policy may differ. A
+    mode the SDK's ranking lacks counts as the loosest, never as a deny."""
+    from hexgate.security.analyzer import MODE_STRICTNESS
+
+    modes = {
+        policy_set.policy_for(role).default_policy.mode for role in policy_set.roles
+    }
+    return min(modes, key=lambda mode: MODE_STRICTNESS.get(mode, -1))
 
 
 def _named_keys(policy_set: PolicySet) -> set[str]:

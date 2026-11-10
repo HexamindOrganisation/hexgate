@@ -579,19 +579,18 @@ async def api_policy_coverage(
     session: AsyncSession = Depends(get_session),
 ) -> PolicyCoverageResponse:
     """Per registered agent, the manifest tools and sub-agents no rule in any
-    role names, what decides them instead (``default_policy`` for a tool; for a
-    sub-agent, a deny when ``reach_gated``, else nothing), and whether the
-    policy has a section for the agent at all. 409 when the project has no policy store
-    (each agent enforces its own policy); 422 if it can't be composed."""
+    role names, what decides them instead (for a tool ``default_policy``, the
+    most permissive default any role applies to an uncovered tool; for a
+    sub-agent, a deny when ``reach_gated``, else nothing), and whether the agent
+    has a policy of its own. Judged against the project policy when the project
+    has one, else against each agent's own policy. 422 if the project policy
+    can't be composed, or an agent's own policy doesn't load."""
     try:
         agents = await coverage.project_coverage(session, project_id)
-    except coverage.NotModularError as exc:
+    except coverage.PolicyLoadError as exc:
         raise HTTPException(
-            status_code=409,
-            detail=(
-                f"the project has no {service.ENTRY_FILE!r} and no role bindings, "
-                "so each agent enforces its own policy"
-            ),
+            status_code=422,
+            detail=f"the stored policy of agent {exc.agent!r} does not load",
         ) from exc
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

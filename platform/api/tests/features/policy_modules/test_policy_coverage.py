@@ -189,13 +189,123 @@ async def test_when_tier_store_then_named_column_has_policy(client, register):
     assert [t["tool"] for t in agents["triage_bot"]["uncovered_tools"]] == ["refund"]
 
 
-def test_when_project_has_no_policy_store_then_409(client):
+@pytest.fixture
+def set_own_policy(session_factory):
+    """Overwrite an agent's own stored ``policy_yaml``, as the dashboard editor does."""
+
+    async def set_policy(pid: str, name: str, policy_yaml: str) -> None:
+        async with session_factory() as session:
+            agent = await agents_service.get_agent(session, pid, name)
+            assert agent is not None
+            agent.policy_yaml = policy_yaml
+            await session.commit()
+
+    return set_policy
+
+
+async def test_when_project_has_no_policy_store_then_agents_own_policy_is_judged(
+    client, register
+):
     pid = _project(client)
+    # The first registration seeds the agent's policy from its tools; a tool the
+    # code gains later is in the next manifest only.
+    await register(pid, "bot", ["read_ticket"])
+    await register(pid, "bot", ["read_ticket", "drop_table"])
+
+    agents = _coverage(client, pid)
+
+    assert agents["bot"]["has_policy"] is True
+    assert [t["tool"] for t in agents["bot"]["uncovered_tools"]] == ["drop_table"]
+
+
+async def test_when_own_policy_allows_by_default_then_default_policy_says_so(
+    client, register, set_own_policy
+):
+    pid = _project(client)
+    await register(pid, "bot", ["read_ticket", "drop_table"])
+    await set_own_policy(
+        pid,
+        "bot",
+        "default_policy: { mode: allow }\ntools: { read_ticket: { mode: allow } }\n",
+    )
+
+    agents = _coverage(client, pid)
+
+    assert agents["bot"]["default_policy"] == "allow"
+    assert [t["tool"] for t in agents["bot"]["uncovered_tools"]] == ["drop_table"]
+
+
+async def test_when_one_role_defaults_to_allow_then_default_policy_is_allow(
+    client, register, set_own_policy
+):
+    pid = _project(client)
+    await register(pid, "bot", ["drop_table"])
+    await set_own_policy(
+        pid,
+        "bot",
+        "roles:\n"
+        "  default: { default_policy: { mode: deny } }\n"
+        "  support: { default_policy: { mode: approval_required } }\n"
+        "  admin: { default_policy: { mode: allow } }\n",
+    )
+
+    agents = _coverage(client, pid)
+
+    assert agents["bot"]["default_policy"] == "allow"
+
+
+def test_when_sdk_policy_modes_change_then_the_ranking_covers_them_all():
+    from typing import get_args
+
+    from hexgate.security.analyzer import MODE_STRICTNESS
+    from hexgate.security.models import PolicyMode
+
+    assert set(MODE_STRICTNESS) == set(get_args(PolicyMode))
+
+
+async def test_when_own_policy_is_empty_then_has_policy_is_false(
+    client, register, set_own_policy
+):
+    pid = _project(client)
+    await register(pid, "bot", ["read_ticket"])
+    await set_own_policy(pid, "bot", "")
+
+    agents = _coverage(client, pid)
+
+    assert agents["bot"]["has_policy"] is False
+    assert agents["bot"]["default_policy"] == "deny"
+    assert [t["tool"] for t in agents["bot"]["uncovered_tools"]] == ["read_ticket"]
+
+
+async def test_when_classic_agent_has_no_manifest_then_has_manifest_is_false(
+    client, add_bare_agent
+):
+    pid = _project(client)
+    await add_bare_agent(pid, "draft_bot")
+
+    agents = _coverage(client, pid)
+
+    assert agents["draft_bot"]["has_manifest"] is False
+    assert agents["draft_bot"]["uncovered_tools"] == []
+
+
+@pytest.mark.parametrize(
+    "stored",
+    ["tools: { read_ticket: { mode: maybe_secret } }\n", "- maybe_secret\n"],
+    ids=["invalid-mode", "not-a-mapping"],
+)
+async def test_when_own_policy_does_not_load_then_422_names_the_agent(
+    client, register, set_own_policy, stored
+):
+    pid = _project(client)
+    await register(pid, "bot", ["read_ticket"])
+    await set_own_policy(pid, "bot", stored)
 
     r = client.get(f"/v1/projects/{pid}/policy/coverage")
 
-    assert r.status_code == 409
-    assert "own policy" in r.json()["detail"]
+    assert r.status_code == 422
+    assert "'bot'" in r.json()["detail"]
+    assert "maybe_secret" not in r.json()["detail"]
 
 
 def test_when_project_does_not_compose_then_422(client, monkeypatch):
