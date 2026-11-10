@@ -35,12 +35,12 @@ import { PolicyFlow } from "@/components/policy_files/PolicyGraphDialog";
 import { ResolvedGrid } from "@/components/policy_files/InspectorTabs";
 import { DetailDrawer } from "@/components/audit/drawer";
 import { EventsTable } from "@/components/audit/pieces";
+import { ManifestView } from "@/components/agents/ManifestView";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { cn } from "@/lib/utils";
-import { ManifestView } from "./Agents";
 
 /** `/agents/:name`: everything about one agent on its own page. The header
  * stays above the tabs; each tab renders in the `Outlet` from `HubContext`. */
@@ -85,7 +85,8 @@ export function AgentHub() {
   // classic project's comes from its tier store): a 422 means the modules
   // don't compose, a 404 that the project isn't visible to the user.
   const graphQuery = usePolicyGraph(scope.projectId, undefined, !!agent);
-  const graph = graphQuery.data;
+  // Not a prior project's graph, kept while this one loads.
+  const graph = graphQuery.isPlaceholderData ? undefined : graphQuery.data;
   const status =
     graphQuery.error instanceof ApiError ? graphQuery.error.status : null;
   const graphError: GraphError | null = !graphQuery.isError

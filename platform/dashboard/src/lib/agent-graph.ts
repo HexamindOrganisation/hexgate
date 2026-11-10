@@ -99,31 +99,61 @@ export function agentReachCounts(sub: PolicyGraph) {
   };
 }
 
-/** One agent's delegation neighbours in the project graph: the agents it
- * reaches (agent-as-tool, outbound) and the agents that reach it (inbound,
- * i.e. it is their sub-agent). Returns deduped labels in graph order; empty
- * when the agent isn't in the graph. Edges are classed by endpoint kind, not
- * edge kind, so an agent-as-tool reach lowered to a call still counts. */
-export function agentReach(
+export type AgentReach = { reaches: string[]; calledBy: string[] };
+
+/** The delegation neighbours of every agent the graph names, plus `names`
+ * (e.g. registered agents it doesn't), resolved as the hub does: an agent's
+ * own edges when the policy declares it, else the generic `*` agent's. Only
+ * a permitted reach delegates (a call edge never targets an agent), and a
+ * reach to itself is none. A reach to `*` reads "any agent" and makes it a
+ * caller of every other agent. Labels are deduped, in graph order. */
+export function agentReachMap(
   graph: PolicyGraph,
-  agentName: string,
-): { reaches: string[]; calledBy: string[] } {
-  const self = graph.nodes.find(
-    (n) => n.kind === "agent" && n.label === agentName,
-  );
-  if (!self) return { reaches: [], calledBy: [] };
-  const agentLabel = new Map(
+  names: string[] = [],
+): Map<string, AgentReach> {
+  const STAR = "agent:*";
+  const label = new Map(
     graph.nodes.filter((n) => n.kind === "agent").map((n) => [n.id, n.label]),
   );
-  const reaches = new Set<string>();
-  const calledBy = new Set<string>();
+  const all = new Set([
+    ...[...label].filter(([id]) => id !== STAR).map(([, l]) => l),
+    ...names,
+  ]);
+  // Declared, by resolveAgent's rule: edges out, or roles that admit it.
+  const declared = new Set<string>();
+  const out = new Map<string, PolicyGraph["edges"]>();
   for (const e of graph.edges) {
-    if (e.source === self.id && agentLabel.has(e.target)) {
-      reaches.add(agentLabel.get(e.target)!);
-    }
-    if (e.target === self.id && agentLabel.has(e.source)) {
-      calledBy.add(agentLabel.get(e.source)!);
+    declared.add(e.source);
+    if (e.kind === "admission") declared.add(e.target);
+    if (delegates(e)) push(out, e.source, e);
+  }
+  const hasStar = label.has(STAR);
+  const reaches = new Map<string, Set<string>>();
+  const calledBy = new Map<string, Set<string>>();
+  const add = (m: Map<string, Set<string>>, k: string, v: string) =>
+    (m.get(k) ?? m.set(k, new Set()).get(k)!).add(v);
+  for (const name of all) {
+    const own = `agent:${name}`;
+    const source =
+      declared.has(own) || !hasStar ? (label.has(own) ? own : null) : STAR;
+    for (const e of (source && out.get(source)) || []) {
+      const to = label.get(e.target);
+      if (to === undefined || to === name) continue;
+      if (e.target === STAR) {
+        add(reaches, name, "any agent");
+        for (const other of all) if (other !== name) add(calledBy, other, name);
+        continue;
+      }
+      add(reaches, name, to);
+      add(calledBy, to, name);
     }
   }
-  return { reaches: [...reaches], calledBy: [...calledBy] };
+  const m = new Map<string, AgentReach>();
+  for (const name of new Set([...reaches.keys(), ...calledBy.keys()])) {
+    m.set(name, {
+      reaches: [...(reaches.get(name) ?? [])],
+      calledBy: [...(calledBy.get(name) ?? [])],
+    });
+  }
+  return m;
 }

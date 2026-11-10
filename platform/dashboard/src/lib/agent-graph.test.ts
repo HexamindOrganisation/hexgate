@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PolicyGraph } from "@/lib/api";
-import { agentReach, agentReachCounts, agentSubgraph } from "./agent-graph";
+import { agentReachCounts, agentReachMap, agentSubgraph } from "./agent-graph";
 
 const edge = (
   source: string,
@@ -178,7 +178,30 @@ describe("agentSubgraph", () => {
   });
 });
 
-describe("agentReach", () => {
+const NONE = { reaches: [], calledBy: [] };
+const namesOf = (g: PolicyGraph) =>
+  g.nodes
+    .filter((n) => n.kind === "agent" && n.label !== "*")
+    .map((n) => n.label);
+const agentReach = (g: PolicyGraph, name: string) =>
+  agentReachMap(g, namesOf(g)).get(name) ?? NONE;
+
+const agent = (n: string) => ({
+  id: `agent:${n}`,
+  kind: "agent" as const,
+  label: n,
+});
+const reach = (s: string, t: string, verdict: "allow" | "deny" = "allow") => ({
+  source: `agent:${s}`,
+  target: `agent:${t}`,
+  kind: "reach" as const,
+  via: "tool" as const,
+  verdict,
+  constraints: [],
+  roles: [],
+});
+
+describe("agentReachMap", () => {
   it("separates outbound reach from inbound callers", () => {
     // a reaches b and is reached by s.
     expect(agentReach(G, "a")).toEqual({ reaches: ["b"], calledBy: ["s"] });
@@ -188,10 +211,63 @@ describe("agentReach", () => {
 
   it("ignores tool edges — only agent↔agent counts as delegation", () => {
     // x only calls a tool; it neither reaches nor is reached by an agent.
-    expect(agentReach(G, "x")).toEqual({ reaches: [], calledBy: [] });
+    expect(agentReach(G, "x")).toEqual(NONE);
   });
 
   it("is empty for an agent not in the graph", () => {
-    expect(agentReach(G, "ghost")).toEqual({ reaches: [], calledBy: [] });
+    expect(agentReach(G, "ghost")).toEqual(NONE);
+  });
+
+  it("drops a denied reach and a reach to itself", () => {
+    const g: PolicyGraph = {
+      roles: [],
+      nodes: [agent("support"), agent("admin"), agent("ops")],
+      edges: [reach("support", "admin", "deny"), reach("ops", "ops")],
+    };
+    expect(agentReachMap(g, namesOf(g)).size).toBe(0);
+  });
+
+  it("gives an agent the policy doesn't declare the generic * agent's reach", () => {
+    const g: PolicyGraph = {
+      roles: [],
+      nodes: [agent("support"), agent("ops"), agent("*")],
+      edges: [reach("*", "ops")],
+    };
+    expect(agentReach(g, "support")).toEqual({
+      reaches: ["ops"],
+      calledBy: [],
+    });
+    // ops resolves through * too, but reaching itself is no delegation.
+    expect(agentReach(g, "ops")).toEqual({
+      reaches: [],
+      calledBy: ["support"],
+    });
+    // * itself is no one.
+    expect(agentReachMap(g, namesOf(g)).has("*")).toBe(false);
+  });
+
+  it("reads a reach to * as any agent, a caller of every other", () => {
+    const g: PolicyGraph = {
+      roles: [],
+      nodes: [agent("support"), agent("admin"), agent("*")],
+      edges: [reach("support", "*"), reach("admin", "admin", "deny")],
+    };
+    expect(agentReach(g, "support")).toEqual({
+      reaches: ["any agent"],
+      calledBy: [],
+    });
+    expect(agentReach(g, "admin")).toEqual({
+      reaches: [],
+      calledBy: ["support"],
+    });
+  });
+
+  it("doesn't count a call edge as delegation", () => {
+    const g: PolicyGraph = {
+      roles: [],
+      nodes: [agent("a"), agent("b")],
+      edges: [{ ...reach("a", "b"), kind: "call" as const, via: null }],
+    };
+    expect(agentReachMap(g, namesOf(g)).size).toBe(0);
   });
 });
