@@ -718,13 +718,14 @@ drop its `platform: linux/amd64` pins.
   `main`. The workflow reads that file from its own commit, not from the tag,
   so it also unblocks a tag that already exists.
 - **By hand:** dispatch the workflow from `main` with a tag to (re)publish it,
-  or with `dry-run` (and no tag) to scan `main` without publishing. Tags cut
-  before image publishing existed (v0.3.4 and earlier) are refused: their
-  Dockerfiles are amd64-only and trust every proxy.
+  without a tag to publish `main`'s commit as `sha-<commit>` only (no version
+  tag, still scanned, approved and signed), or with `dry-run` to scan without
+  publishing. Tags cut before image publishing existed (v0.3.4 and earlier)
+  are refused: their Dockerfiles are amd64-only and trust every proxy.
 
-Tags are the version (`0.4.0`, or `0.4.0rc1` for a pre-release) and the commit
-(`sha-<commit>`); there is no `latest`. Pull by digest, after checking the
-signature:
+Tags are the version (`0.4.0`, or `0.4.0rc1` for a pre-release; only for a
+release tag) and the commit (`sha-<commit>`); there is no `latest`. Pull by
+digest, after checking the signature:
 
 ```bash
 # or docker.io/hexgate/hexgate-api@sha256:<digest>, same identity
