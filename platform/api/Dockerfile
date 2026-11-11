@@ -118,7 +118,10 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 # --no-sync: use the venv built above, no runtime re-resolution.
 # --proxy-headers: trust X-Forwarded-Proto/For from the box's reverse proxy
 # (TLS terminates upstream), so request.url is https for OAuth callbacks + link
-# generation. The proxy MUST set X-Forwarded-Proto: https.
+# generation. The proxy MUST set X-Forwarded-Proto: https. Trusted only from
+# the addresses in FORWARDED_ALLOW_IPS (uvicorn reads it; loopback when unset):
+# the published image may run with no proxy in front, where trusting everyone
+# would let any client forge its scheme and address.
 CMD ["uv", "run", "--no-sync", "uvicorn", "hexgate_api.main:app", \
      "--host", "0.0.0.0", "--port", "8000", "--workers", "1", \
-     "--proxy-headers", "--forwarded-allow-ips", "*"]
+     "--proxy-headers"]

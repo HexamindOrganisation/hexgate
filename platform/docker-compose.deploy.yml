@@ -102,6 +102,11 @@ services:
       HEXGATE_POSTGRES_PORT: "5432"
       # Persistent keystore — losing it invalidates every token/session/bundle.
       HEXGATE_KEYSTORE_PATH: /keys
+      # The box's nginx reaches the container through the bridge gateway, not
+      # loopback, so the image's loopback default would ignore its
+      # X-Forwarded-Proto. Trusting every peer is safe only because the port
+      # is published on 127.0.0.1: nothing but the box's proxy can connect.
+      FORWARDED_ALLOW_IPS: "*"
       # The OAuth token `iss` and audiences, shared with the mcp service.
       <<: *oauth-urls
     volumes:
@@ -368,6 +373,8 @@ services:
     environment:
       # API calls and the JWKS fetch stay on the compose network.
       HEXGATE_MCP_API_URL: http://api:8000
+      # Same reasoning as the api service: loopback-published, proxy-only.
+      FORWARDED_ALLOW_IPS: "*"
       <<: *oauth-urls
     # No hexgate-keys volume: tokens are checked against the api's public key,
     # fetched from /.well-known/jwks.json.

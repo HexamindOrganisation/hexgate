@@ -203,7 +203,10 @@ the running config is still the old one.
 Each hostname is one nginx `server` block proxying to its loopback ports.
 Forward `X-Forwarded-Proto: https` — the API trusts it, via uvicorn
 `--proxy-headers`, for correct https OAuth callbacks — and set
-`proxy_set_header Host $host`. `/v1` includes WebSocket endpoints, so the
+`proxy_set_header Host $host`. The images trust those headers only from
+the peers in `FORWARDED_ALLOW_IPS` (loopback by default); the deploy compose
+sets it to `*` on the api and mcp services, which is safe only because their
+ports are published on `127.0.0.1`. `/v1` includes WebSocket endpoints, so the
 server block also needs the `Upgrade`/`Connection` headers set.
 
 **The MCP routes and rate limits** are in the same files. `/mcp` (a `^~`
