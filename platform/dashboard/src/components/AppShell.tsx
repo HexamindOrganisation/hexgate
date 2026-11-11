@@ -56,6 +56,7 @@ import { usePresentMode } from "@/lib/present";
 import { AccentSwatch } from "@/components/ui/accent-swatch";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { EmailAvatar } from "@/components/ui/email-avatar";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 /**
@@ -481,7 +482,6 @@ function AccountChip({ collapsed }: { collapsed: boolean }) {
   if (!user) return null;
 
   const username = user.email.split("@")[0] || user.email;
-  const initial = (user.email.slice(0, 1) || "?").toUpperCase();
 
   return (
     <div className="p-2">
@@ -496,9 +496,7 @@ function AccountChip({ collapsed }: { collapsed: boolean }) {
               collapsed && "justify-center",
             )}
           >
-            <span className="grid size-7 shrink-0 place-items-center rounded-full bg-primary/20 text-xs font-medium text-primary">
-              {initial}
-            </span>
+            <EmailAvatar email={user.email} />
             {!collapsed && (
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium">

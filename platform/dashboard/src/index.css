@@ -88,7 +88,8 @@
   --muted-foreground: 217 12% 42%;
   --accent: 220 18% 94%;
   --accent-foreground: 223 36% 11%;
-  --destructive: 14 84% 43%;
+  /* One red: destructive actions use the deny colour. */
+  --destructive: var(--semantic-deny);
   --destructive-foreground: 0 0% 100%;
   --border: 218 17% 91%;
   --input: 218 17% 91%;
@@ -163,7 +164,7 @@
   --muted-foreground: 218 15% 66%;
   --accent: 224 30% 15%;
   --accent-foreground: 218 33% 93%;
-  --destructive: 14 76% 53%;
+  --destructive: var(--semantic-deny);
   --destructive-foreground: 220 29% 6%;
   --border: 220 23% 18%;
   --input: 220 23% 18%;
