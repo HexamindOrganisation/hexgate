@@ -1,20 +1,13 @@
 import { useMemo } from "react";
-import {
-  Link,
-  useNavigate,
-  useOutletContext,
-  useSearchParams,
-} from "react-router-dom";
+import { Link, useNavigate, useOutletContext } from "react-router-dom";
 
 import { useProjectScoped } from "@/lib/active";
 import {
   type AuditFilters,
   auditUrl,
   EMPTY_AUDIT_FILTERS,
-  fromAuditSearch,
-  withAuditFilters,
 } from "@/lib/audit-filters";
-import type { RangePickerFilters } from "@/lib/date-range";
+import { rangeScope, useRangeParams } from "@/lib/range-params";
 import {
   useAuditStatsQueries,
   useOutcomeStats,
@@ -26,9 +19,6 @@ import { Card } from "@/components/ui/card";
 import { DashboardRangePicker } from "@/components/ui/dashboard-range-picker";
 import type { HubContext } from "./AgentHub";
 
-// 24h by default, matching the Overview's KPIs (/audit itself opens on 30d).
-const DEFAULT_FILTERS: AuditFilters = { ...EMPTY_AUDIT_FILTERS, range: "24h" };
-
 /** The Stats tab — the Audit page's stat strip, chart and breakdown, scoped
  * to this agent. The range lives in the URL (same keys as /audit), so a
  * reload or a shared link keeps it. Drilling in (a tile or a breakdown row)
@@ -38,21 +28,10 @@ export function AgentStatsTab() {
   const agent = ctx.agent.name;
   const { projectId } = useProjectScoped();
   const navigate = useNavigate();
-  const [params, setParams] = useSearchParams();
-  const f: RangePickerFilters = useMemo(() => {
-    const { range, customMode, start_date, end_date } =
-      fromAuditSearch(params) ?? DEFAULT_FILTERS;
-    return { range, customMode, start_date, end_date };
-  }, [params]);
-  const setF = (update: (prev: RangePickerFilters) => RangePickerFilters) =>
-    setParams((prev) => withAuditFilters(prev, update(f)), { replace: true });
+  // 24h by default, matching the Overview's KPIs (/audit opens on 30d).
+  const [f, setF] = useRangeParams("24h");
 
-  const scope = {
-    window: f.range,
-    agent,
-    start_date: f.start_date ? f.start_date.toISOString() : undefined,
-    end_date: f.end_date ? f.end_date.toISOString() : undefined,
-  };
+  const scope = { ...rangeScope(f), agent };
   const { summaryQ, tsQ } = useAuditStatsQueries(scope, projectId);
   // Placeholder data is the previous range's: show it as loading rather than
   // under the new range's labels and averages.

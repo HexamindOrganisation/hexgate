@@ -9,6 +9,7 @@ import { Route, Routes, useLocation } from "react-router-dom";
 
 import { useActive } from "@/lib/active";
 import { agentHubRoute } from "@/routes/agent-hub-routes";
+import { fromUsageSearch } from "@/lib/usage-filters";
 import { makeQueryClient, renderWithProviders } from "@/test/render";
 
 // Stub the heavy graph (ReactFlow) — the hub only needs it to mount with the
@@ -118,6 +119,7 @@ function stubFetch(
   graph: "default" | "subAgent" | "none" = "default",
   subAgent: false | "tool" | "handoff" = graph === "subAgent" && "tool",
   tsError = false,
+  usageError = false,
 ) {
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -273,6 +275,22 @@ function stubFetch(
             by_tool: [],
             by_user: [],
           });
+        case `/v1/projects/${PROJECT}/llm/summary`: {
+          if (usageError) return new Response("boom", { status: 500 });
+          const row = (key: string, calls: number, tokens: number) => ({
+            key,
+            calls,
+            input_tokens: tokens * 0.75,
+            output_tokens: tokens * 0.25,
+            total_tokens: tokens,
+          });
+          return json({
+            totals: row("", 12, 48_000),
+            by_model: [row("gpt-4o-mini", 9, 30_000), row("gpt-4o", 3, 18_000)],
+            by_agent: [row("support_bot", 12, 48_000)],
+            by_user: [row("u-1", 12, 48_000)],
+          });
+        }
         case `/v1/projects/${PROJECT}/audit/timeseries`:
           if (tsError) return new Response("boom", { status: 500 });
           return json([
@@ -307,6 +325,7 @@ function renderHub(
     graph = "default",
     subAgent = graph === "subAgent" && "tool",
     tsError = false,
+    usageError = false,
     tab = "",
   }: {
     role?: string;
@@ -318,10 +337,12 @@ function renderHub(
     /** The manifest records billing_bot, reached this way. */
     subAgent?: false | "tool" | "handoff";
     tsError?: boolean;
+    usageError?: boolean;
     tab?:
       | ""
       | "/stats"
       | "/stats?range=7d"
+      | "/usage"
       | "/resources"
       | "/policies"
       | "/playground"
@@ -337,11 +358,13 @@ function renderHub(
     graph,
     subAgent,
     tsError,
+    usageError,
   );
   return renderWithProviders(
     <Routes>
       {agentHubRoute()}
       <Route path="/audit" element={<AuditProbe />} />
+      <Route path="/usage" element={<UsageProbe />} />
     </Routes>,
     { initialRoute: `/agents/${name}${tab}` },
   );
@@ -373,6 +396,14 @@ const graphEdge = (
 /** Stands in for /audit: shows the filters a drill-down navigated with. */
 function AuditProbe() {
   return <div data-testid="audit-url">{useLocation().search}</div>;
+}
+
+/** Stands in for /usage: shows the filters a drill-down linked with. */
+function UsageProbe() {
+  const f = fromUsageSearch(new URLSearchParams(useLocation().search));
+  return (
+    <div data-testid="usage-filters">{`${f?.agent}|${f?.model}|${f?.range}`}</div>
+  );
 }
 
 describe("AgentHub", () => {
@@ -642,6 +673,44 @@ describe("AgentHub", () => {
     renderHub("support_bot", { tab: "/stats", summaryError: true });
     expect(
       await screen.findByText(/Couldn't load this agent's stats/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the agent's LLM usage, scoped to it, on the Usage tab", async () => {
+    renderHub("support_bot", { tab: "/usage" });
+    expect(await screen.findByText("Model calls")).toBeInTheDocument();
+    expect(screen.getByText("0.5/hr avg")).toBeInTheDocument();
+    const hit = fetched.find((u) => u.pathname.endsWith("llm/summary"));
+    expect(hit?.searchParams.get("agent")).toBe("support_bot");
+    expect(hit?.searchParams.get("window")).toBe("24h");
+  });
+
+  it("drills a Usage row into /usage filtered to the agent and model", async () => {
+    renderHub("support_bot", { tab: "/usage" });
+    await userEvent.click(await screen.findByText("gpt-4o-mini"));
+    expect(await screen.findByTestId("usage-filters")).toHaveTextContent(
+      "support_bot|gpt-4o-mini|24h",
+    );
+  });
+
+  it("keeps the range when switching between Stats and Usage", async () => {
+    renderHub("support_bot", { tab: "/stats?range=7d" });
+    await screen.findByText("26.7% deny rate");
+    await userEvent.click(screen.getByRole("link", { name: "Usage" }));
+    await screen.findByText("Model calls");
+    expect(
+      fetched.some(
+        (u) =>
+          u.pathname.endsWith("llm/summary") &&
+          u.searchParams.get("window") === "7d",
+      ),
+    ).toBe(true);
+  });
+
+  it("says so when the Usage tab can't load", async () => {
+    renderHub("support_bot", { tab: "/usage", usageError: true });
+    expect(
+      await screen.findByText(/Couldn't load this agent's usage/),
     ).toBeInTheDocument();
   });
 

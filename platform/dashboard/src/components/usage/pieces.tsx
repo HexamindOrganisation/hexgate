@@ -1,5 +1,8 @@
 import { useMemo, useState } from "react";
-import type { LlmInvocationBreakdownRow } from "@/lib/api";
+import type {
+  LlmInvocationBreakdownRow,
+  LlmInvocationSummary,
+} from "@/lib/api";
 import type {
   SetUsageFilters as SetFilters,
   UsageFilters as Filters,
@@ -7,6 +10,10 @@ import type {
 import { ActiveFilterChips } from "@/components/ui/active-filter-chips";
 import { BarRow, BreakdownCardShell } from "@/components/ui/breakdown-card";
 import { FilterSelect } from "@/components/ui/filter-select";
+import { StatStrip } from "@/components/ui/stat-strip";
+import { type Range, rangeDays } from "@/lib/date-range";
+import { fmtTokens } from "@/lib/format";
+import { pickDims } from "@/lib/breakdown-dims";
 
 // ————————————————————————————————————————————— Filter bar
 export function UsageFilterBar({
@@ -125,21 +132,27 @@ const DIMS = [
   { id: "agent" as const, label: "Agents" },
   { id: "user" as const, label: "Users" },
 ];
+type UsageDim = (typeof DIMS)[number]["id"];
 
 export function UsageBreakdownCard({
-  byModel,
-  byAgent,
-  byUser,
+  byModel = [],
+  byAgent = [],
+  byUser = [],
   f,
   setF,
+  dims,
 }: {
-  byModel: LlmInvocationBreakdownRow[];
-  byAgent: LlmInvocationBreakdownRow[];
-  byUser: LlmInvocationBreakdownRow[];
+  byModel?: LlmInvocationBreakdownRow[];
+  byAgent?: LlmInvocationBreakdownRow[];
+  byUser?: LlmInvocationBreakdownRow[];
   f: Filters;
   setF: SetFilters;
+  /** The dimensions to offer, in this order (default: all); the first is
+   * selected. */
+  dims?: [UsageDim, ...UsageDim[]];
 }) {
-  const [dim, setDim] = useState<"model" | "agent" | "user">("model");
+  const shownDims = pickDims(DIMS, dims);
+  const [dim, setDim] = useState<UsageDim>(shownDims[0].id);
   const [metric, setMetric] = useState<"total_tokens" | "calls">(
     "total_tokens",
   );
@@ -153,7 +166,7 @@ export function UsageBreakdownCard({
 
   return (
     <BreakdownCardShell
-      dims={DIMS}
+      dims={shownDims}
       dim={dim}
       onDimChange={setDim}
       metric={metric}
@@ -181,6 +194,86 @@ export function UsageBreakdownCard({
           onClick={onClick}
         />
       )}
+    />
+  );
+}
+
+// ————————————————————————————————————————————— Stat strip
+/** Input and output token colours, shared by the tiles and the split bar. */
+const INPUT_SWATCH = "bg-primary/40";
+const OUTPUT_SWATCH = "bg-primary";
+
+/** Model calls, input / output / total tokens, with per-hour or per-day
+ * averages. Shared by the Usage page and the agent hub's Usage tab. */
+export function UsageStatStrip({
+  totals,
+  range,
+  start_date,
+  end_date,
+}: {
+  totals: LlmInvocationSummary["totals"];
+  range: Range;
+  start_date: Date | null;
+  end_date: Date | null;
+}) {
+  const nDays = rangeDays(range, start_date, end_date);
+  const hourly = !start_date && range === "24h";
+  // `fmt` overrides the plain count (e.g. compact tokens). en-US, like
+  // fmtTokens beside it, so one strip never mixes decimal marks.
+  const avgLabel = (
+    count: number,
+    fmt = (n: number) =>
+      n.toLocaleString("en-US", { maximumFractionDigits: hourly ? 1 : 0 }),
+  ) =>
+    `${fmt(hourly ? count / 24 : count / nDays)}/${hourly ? "hr" : "day"} avg`;
+  const inputPct = totals.total_tokens
+    ? Math.round((totals.input_tokens / totals.total_tokens) * 100)
+    : 0;
+  const outputPct = totals.total_tokens
+    ? Math.round((totals.output_tokens / totals.total_tokens) * 100)
+    : 0;
+  return (
+    <StatStrip
+      stats={[
+        {
+          key: "calls",
+          label: "Model calls",
+          value: totals.calls.toLocaleString(),
+          sub: avgLabel(totals.calls),
+        },
+        {
+          key: "input",
+          label: "Input tokens",
+          swatchClass: INPUT_SWATCH,
+          value: fmtTokens(totals.input_tokens),
+          sub: `${inputPct}% of total`,
+        },
+        {
+          key: "output",
+          label: "Output tokens",
+          swatchClass: OUTPUT_SWATCH,
+          value: fmtTokens(totals.output_tokens),
+          sub: `${outputPct}% of total`,
+        },
+        {
+          key: "total",
+          label: "Total tokens",
+          value: fmtTokens(totals.total_tokens),
+          sub: avgLabel(totals.total_tokens, (n) => fmtTokens(Math.round(n))),
+        },
+      ]}
+      split={[
+        {
+          key: "input",
+          value: totals.input_tokens,
+          className: INPUT_SWATCH,
+        },
+        {
+          key: "output",
+          value: totals.output_tokens,
+          className: OUTPUT_SWATCH,
+        },
+      ]}
     />
   );
 }

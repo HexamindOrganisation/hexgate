@@ -9,6 +9,7 @@ import {
   AgentResourcesTab,
 } from "./AgentHub";
 import { AgentStatsTab } from "./AgentStats";
+import { AgentUsageTab } from "./AgentUsage";
 
 /** The hub and its tabs, mounted by App and the hub tests alike. */
 export function agentHubRoute() {
@@ -16,6 +17,7 @@ export function agentHubRoute() {
     <Route path="agents/:name" element={<AgentHub />}>
       <Route index element={<AgentOverviewTab />} />
       <Route path="stats" element={<AgentStatsTab />} />
+      <Route path="usage" element={<AgentUsageTab />} />
       <Route path="resources" element={<AgentResourcesTab />} />
       <Route path="policies" element={<AgentPoliciesTab />} />
       <Route path="playground" element={<AgentPlaygroundTab />} />
