@@ -4,7 +4,7 @@ import { AppShell } from "@/components/AppShell";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AcceptInvitationPage } from "@/routes/AcceptInvitation";
 import { AgentsPage } from "@/routes/Agents";
-import { AgentHub } from "@/routes/AgentHub";
+import { agentHubRoute } from "@/routes/agent-hub-routes";
 import { AiActPage } from "@/routes/AiAct";
 import { AuditPage } from "@/routes/Audit";
 import { BansPage } from "@/routes/Bans";
@@ -75,7 +75,7 @@ export default function App() {
         >
           <Route index element={<HomePage />} />
           <Route path="agents" element={<AgentsPage />} />
-          <Route path="agents/:name" element={<AgentHub />} />
+          {agentHubRoute()}
           <Route path="policies" element={<PoliciesPage />} />
           <Route path="graph" element={<GraphPage />} />
           <Route path="playground" element={<PlaygroundPage />} />
