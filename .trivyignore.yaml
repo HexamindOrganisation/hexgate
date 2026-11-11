@@ -1,0 +1,19 @@
+# Findings the image scan in docker-publish.yml deliberately accepts.
+#
+# Read from the workflow's own commit (not the tag being published), so an
+# entry added on main also unblocks an existing tag. Each entry is scoped as
+# narrowly as Trivy allows (`paths`), says why it is safe, and expires: the
+# scan fails again on that date, so the decision gets made again rather than
+# forgotten.
+
+vulnerabilities:
+  - id: CVE-2026-78661
+    paths:
+      - "usr/local/bin/opa"
+    statement: >-
+      golang.org/x/net/html: DoS on crafted HTML input. OPA links x/net
+      v0.60.0 in every release up to v1.22.3 (2026-11-10), so no OPA version
+      fixes it yet. The api image only runs `opa build` and `opa version` on
+      Rego it generates itself and never hands OPA HTML. Remove this entry
+      once an OPA release with x/net >= v0.62.0 is pinned.
+    expired_at: 2027-02-11

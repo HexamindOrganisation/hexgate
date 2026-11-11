@@ -713,7 +713,8 @@ drop its `platform: linux/amd64` pins.
   (build and scan, no credentials, no push) before publishing anything, so a
   finding stops the release before PyPI. The publish job scans again, right
   before its push.
-- **Accepting a finding:** list it, with a reason, in `.trivyignore` on
+- **Accepting a finding:** list it, with a reason, a path scope and an expiry
+  date, in `.trivyignore.yaml` on
   `main`. The workflow reads that file from its own commit, not from the tag,
   so it also unblocks a tag that already exists.
 - **By hand:** dispatch the workflow from `main` with a tag to (re)publish it,
