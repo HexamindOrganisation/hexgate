@@ -42,9 +42,10 @@ bindings in the compose to publish on a shared Docker network or a
 non-loopback port instead (republishing only the api leaves every
 `/v1/traces` POST and every MCP call 502ing while `/v1/*` works).
 
-Images build **on the box** — no registry. amd64 throughout (the API bundles
-the amd64-only OPA binary; the image also runs a Node build stage to bundle the
-dashboard SPA).
+Images build **on the box** — the box pulls nothing from a registry. amd64
+throughout (the API bundles the amd64-only OPA binary; the image also runs a
+Node build stage to bundle the dashboard SPA). Releases also publish the same
+images to GHCR for self-hosters: see [Published images](#published-images).
 
 ## 1. DNS
 
@@ -688,6 +689,42 @@ healthcheck.
 **Schema changes** apply only on an empty volume; changing one after first boot
 goes through `platform/clickhouse/migrations/`, applied by `make platform-migrate`
 (§6).
+
+## Published images
+
+Each real release (`release.yml`, target `pypi`) also publishes `hexgate-api`,
+`hexgate-mcp` and `hexgate-collector` to
+`ghcr.io/hexamindorganisation/`, through `.github/workflows/docker-publish.yml`
+behind the `docker-release` environment's reviewers. To (re)publish an existing
+tag by hand, dispatch that workflow from `main` with the tag.
+
+Each image is built from the tag, scanned (the publish fails on a fixable
+HIGH/CRITICAL finding unless `.trivyignore` lists it), pushed with SBOM and
+provenance attestations, and signed with cosign. Tags are the version
+(`0.3.4`) and the commit (`sha-<commit>`); there is no `latest`. Pull by
+digest, after checking the signature:
+
+```bash
+cosign verify ghcr.io/hexamindorganisation/hexgate-api@sha256:<digest> \
+  --certificate-identity https://github.com/HexamindOrganisation/hexgate/.github/workflows/docker-publish.yml@refs/heads/main \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The deploy compose can run them instead of building:
+`REGISTRY=ghcr.io/hexamindorganisation TAG=<version>`, then
+`docker compose ... pull` and `up --no-build`.
+
+Running them anywhere else:
+
+- **`FORWARDED_ALLOW_IPS`** (api, mcp): the peers whose `X-Forwarded-*`
+  headers are trusted, loopback by default. Set it to your proxy's address,
+  never `*` on a port the internet can reach.
+- **Volumes** (api): `/keys` holds the signing keys and must persist; `/data`
+  holds the SQLite database, used only when no Postgres is configured.
+- **`HEXGATE_DEMO`** (api): leave it unset. It enables a passwordless admin
+  login for throwaway demo containers.
+- **Collector:** set `HEXGATE_COLLECTOR_POSTGRES_DSN`. The default in its
+  config is the local dev password, which it refuses on a non-local host.
 
 ## Consumer SDK
 

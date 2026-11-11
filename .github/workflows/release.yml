@@ -79,6 +79,8 @@ jobs:
     # the main-only branch restriction. Also what PyPI's trusted-publisher
     # entry pins against (we registered with Environment = pypi-release).
     environment: pypi-release
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
 
     steps:
       - name: Checkout
@@ -286,3 +288,17 @@ jobs:
           name: "v${{ steps.bump.outputs.version }}"
           # Auto-generate notes from commits since the previous tag.
           generate_release_notes: true
+
+  # The platform images for the same tag. Called, not triggered by the
+  # release: a release made with GITHUB_TOKEN starts no other workflow. Its
+  # own `docker-release` environment asks for a second approval.
+  images:
+    needs: release
+    if: ${{ !inputs.dry-run && inputs.target == 'pypi' }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/docker-publish.yml
+    with:
+      tag: v${{ needs.release.outputs.version }}
