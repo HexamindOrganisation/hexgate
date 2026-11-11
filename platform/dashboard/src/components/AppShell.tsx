@@ -243,8 +243,8 @@ function NavItem({
           "flex h-9 items-center rounded-lg text-sm transition-colors",
           collapsed ? "justify-center px-0" : "justify-between px-2.5",
           isActive
-            ? "bg-card font-semibold text-foreground shadow-xs ring-1 ring-border"
-            : "font-medium text-muted-foreground hover:bg-accent hover:text-foreground",
+            ? "bg-accent font-semibold text-foreground"
+            : "font-medium text-muted-foreground hover:bg-accent/60 hover:text-foreground",
         )
       }
     >
@@ -257,7 +257,7 @@ function NavItem({
             {!collapsed && label}
             {/* Collapsed: a dot on the icon keeps the signal visible. */}
             {collapsed && badge && (
-              <span className="absolute -top-0.5 left-3 size-2 rounded-full bg-deny ring-2 ring-background" />
+              <span className="absolute -top-0.5 left-3 size-2 rounded-full bg-deny ring-2 ring-card" />
             )}
           </span>
           {/* The link's aria-label already reads the count. */}
@@ -359,11 +359,11 @@ export function AppShell() {
     <div className="flex h-screen bg-background text-foreground">
       <aside
         className={cn(
-          // Same ground as the page plus a hairline, so the active item can
-          // sit on it as a raised card. The whole shell lives in the sidebar
-          // (switcher on top, account on the bottom), so the content column
-          // reclaims the old header's height.
-          "flex flex-col border-r border-border bg-background transition-[width] duration-200",
+          // A lighter surface than the page (card over the gray content area),
+          // set off by a hairline, so the sidebar reads as its own panel. The
+          // whole shell lives here (switcher on top, account on the bottom),
+          // so the content column reclaims the old header's height.
+          "flex flex-col border-r border-border bg-card transition-[width] duration-200",
           sidebarCollapsed ? "w-14" : "w-[240px]",
         )}
       >
@@ -381,7 +381,7 @@ export function AppShell() {
                 <button
                   type="button"
                   onClick={() => navigate("/")}
-                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <ArrowLeft className="size-4" />
                   Back to workspace
@@ -397,7 +397,7 @@ export function AppShell() {
           <Button
             variant="ghost"
             size="icon"
-            className="size-8 shrink-0 text-muted-foreground"
+            className="size-8 shrink-0 text-muted-foreground hover:bg-accent/60"
             title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             aria-label={
               sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"
@@ -489,7 +489,7 @@ function AccountChip({ collapsed }: { collapsed: boolean }) {
             type="button"
             title={collapsed ? user.email : undefined}
             className={cn(
-              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent",
+              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent/60",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               collapsed && "justify-center",
             )}
