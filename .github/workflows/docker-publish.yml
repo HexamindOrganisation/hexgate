@@ -1,6 +1,7 @@
 name: docker-publish
 
-# Publish the platform images (api, mcp, collector) to GHCR for a release tag.
+# Publish the platform images (api, mcp, collector) to GHCR and Docker Hub for
+# a release tag: one build, so both registries serve the same digest.
 # Called by release.yml once a real release is tagged, or dispatched by hand
 # from main with an existing tag to (re)publish it. Not on `release:
 # published`: release.yml creates the release with GITHUB_TOKEN, and events
@@ -16,6 +17,11 @@ name: docker-publish
 #   Settings → Environments → New environment → "docker-release"
 #     - Required reviewers: at least one maintainer
 #     - Deployment branches: main only
+#     - Environment secrets (only this gated job can read them):
+#         DOCKERHUB_USERNAME  the Docker Hub account that owns the token
+#         DOCKERHUB_TOKEN     a Docker Hub access token, Read & Write,
+#                             with push rights on the `hexgate` namespace
+# GHCR needs no secret: the job's GITHUB_TOKEN pushes there.
 # ----------------------------------------------------------------------
 
 on:
@@ -81,6 +87,7 @@ jobs:
             echo "tag=$TAG"
             echo "version=${TAG#v}"
             echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/$IMAGE"
+            echo "hub=docker.io/hexgate/$IMAGE"
           } >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -129,6 +136,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       # Immutable tags only: the version and the commit. No `latest`, so a
       # tag never changes meaning; consumers should still pull by digest.
       - name: Push
@@ -144,6 +157,8 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.image }}:sha-${{ steps.rev.outputs.sha }}
+            ${{ steps.meta.outputs.hub }}:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.hub }}:sha-${{ steps.rev.outputs.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.rev.outputs.sha }}
@@ -155,16 +170,24 @@ jobs:
           cosign-release: v3.0.6
 
       # Keyless: the signature binds the digest to this workflow's identity,
-      # which `cosign verify` checks (DEPLOY.md).
+      # which `cosign verify` checks (DEPLOY.md). Signatures live beside the
+      # image in each registry, so sign it in both.
       - name: Sign
         env:
           IMAGE: ${{ steps.meta.outputs.image }}
+          HUB: ${{ steps.meta.outputs.hub }}
           DIGEST: ${{ steps.push.outputs.digest }}
-        run: cosign sign --yes "$IMAGE@$DIGEST"
+        run: cosign sign --yes "$IMAGE@$DIGEST" "$HUB@$DIGEST"
 
       - name: Summary
         env:
           IMAGE: ${{ steps.meta.outputs.image }}
+          HUB: ${{ steps.meta.outputs.hub }}
           DIGEST: ${{ steps.push.outputs.digest }}
           VERSION: ${{ steps.meta.outputs.version }}
-        run: echo "Published \`$IMAGE:$VERSION\` as \`$IMAGE@$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          {
+            echo "Published \`$VERSION\` as digest \`$DIGEST\`:"
+            echo "- \`$IMAGE@$DIGEST\`"
+            echo "- \`$HUB@$DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"

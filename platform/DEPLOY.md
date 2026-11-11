@@ -693,9 +693,11 @@ goes through `platform/clickhouse/migrations/`, applied by `make platform-migrat
 ## Published images
 
 Each real release (`release.yml`, target `pypi`) also publishes `hexgate-api`,
-`hexgate-mcp` and `hexgate-collector` to
-`ghcr.io/hexamindorganisation/`, through `.github/workflows/docker-publish.yml`
-behind the `docker-release` environment's reviewers. To (re)publish an existing
+`hexgate-mcp` and `hexgate-collector` to both `ghcr.io/hexamindorganisation/`
+and Docker Hub's `docker.io/hexgate/` (one build, so the digest is the same in
+both), through `.github/workflows/docker-publish.yml` behind the
+`docker-release` environment's reviewers. Docker Hub needs that environment's
+`DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets; GHCR needs none. To (re)publish an existing
 tag by hand, dispatch that workflow from `main` with the tag.
 
 Each image is built from the tag, scanned (the publish fails on a fixable
@@ -705,13 +707,15 @@ provenance attestations, and signed with cosign. Tags are the version
 digest, after checking the signature:
 
 ```bash
+# or docker.io/hexgate/hexgate-api@sha256:<digest>, same identity
 cosign verify ghcr.io/hexamindorganisation/hexgate-api@sha256:<digest> \
   --certificate-identity https://github.com/HexamindOrganisation/hexgate/.github/workflows/docker-publish.yml@refs/heads/main \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
 The deploy compose can run them instead of building:
-`REGISTRY=ghcr.io/hexamindorganisation TAG=<version>`, then
+`REGISTRY=ghcr.io/hexamindorganisation` (or `REGISTRY=hexgate` for Docker Hub)
+and `TAG=<version>`, then
 `docker compose ... pull` and `up --no-build`.
 
 Running them anywhere else:
