@@ -11,6 +11,12 @@ permissions:
 
 jobs:
   dry-run:
+    # The ceiling must cover every job in docker-publish.yml, even the
+    # publish job a dry run skips; the scan job itself only gets contents: read.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     uses: ./.github/workflows/docker-publish.yml
     with:
       dry-run: true
