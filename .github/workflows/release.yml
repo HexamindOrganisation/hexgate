@@ -80,8 +80,13 @@ jobs:
   # runs skip it.
   image-scan:
     if: ${{ !inputs.dry-run && inputs.target == 'pypi' }}
+    # A ceiling, not a grant: it must cover every job in docker-publish.yml,
+    # the skipped publish job included, or the whole release fails to start.
+    # The scan job itself runs with contents: read.
     permissions:
       contents: read
+      packages: write
+      id-token: write
     uses: ./.github/workflows/docker-publish.yml
     with:
       dry-run: true
