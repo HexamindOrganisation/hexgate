@@ -8,6 +8,7 @@ own ``consume`` mapping.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -95,6 +96,52 @@ def test_tool_end_infers_failed_from_ok_false() -> None:
     assert end.state == ToolCallState.FAILED
     assert end.output_summary == "nope"
     assert end.tool_name == "refund"
+
+
+def test_tool_end_marks_a_stopped_call_from_any_adapter_shape() -> None:
+    from hexgate.security.decision import Decision, DecisionOutcome
+
+    acc = _Acc("q")
+    denied = Decision(
+        outcome=DecisionOutcome.DENY,
+        tool_name="refund",
+        agent_name="bot",
+        error_type="policy_denied",
+        reason="x" * 300,
+    )
+    held = Decision(
+        outcome=DecisionOutcome.NEEDS_APPROVAL,
+        tool_name="refund",
+        agent_name="bot",
+        error_type="approval_required",
+    )
+    for output, verdict in [
+        # OpenAI/ADK: the message, even past the 200-char summary cut.
+        (denied.as_error_message(), "denied"),
+        (held.as_error_message(), "held"),
+        # A held call whose marker falls back to the outcome.
+        (dataclasses.replace(held, error_type=None).as_error_message(), "held"),
+        # ADK wraps the string; a reach and a skill word it differently.
+        ({"result": denied.as_error_message()}, "denied"),
+        (
+            "[policy_denied] reach to agent 'billing' is not permitted by this agent's policy. The sub-agent was not invoked.",
+            "denied",
+        ),
+        (
+            "[approval_required] skill 'pdf' requires human approval before it loads. Do not attempt this task without it.",
+            "held",
+        ),
+        # LangChain: the error payload.
+        ({"ok": False, "error": denied.as_error_payload()}, "denied"),
+        # A tool that ran, whatever its text says, isn't one.
+        ("[ok] Refund queued; over $500 requires human approval from finance", None),
+        # A tool's own failure and a normal result aren't policy verdicts.
+        ({"ok": False, "error": {"message": "nope"}}, None),
+        ("fine", None),
+    ]:
+        acc.emit_tool_start("c1", "refund", {})
+        [end] = acc.emit_tool_end("c1", output)
+        assert end.verdict == verdict, output
 
 
 def test_tool_end_state_override_wins() -> None:

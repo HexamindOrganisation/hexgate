@@ -1,37 +1,36 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Streamdown } from "streamdown";
 import {
   ArrowUp,
   Bot,
   Check,
-  CircleDashed,
+  ChevronDown,
+  ChevronUp,
+  Hexagon,
   RadioReceiver,
-  RefreshCcw,
-  Settings2,
   ShieldAlert,
+  SlidersHorizontal,
+  SquarePen,
   Wrench,
   X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
+  callerName,
   usePlayground,
   type ApprovalRequestEvent,
   type ChatMessage,
   type ToolCall,
 } from "@/lib/playground";
+import { BAR_BTN } from "@/components/playground/bar-btn";
 import {
-  AccentStyle,
-  PresentationControls,
-  ROUND_BTN,
+  AccentPicker,
+  FullScreenToggle,
+  ThemeToggle,
 } from "@/components/playground/PresentationControls";
+import { SessionSettings } from "@/components/playground/SessionSettings";
 import { usePresentMode } from "@/lib/present";
 import { DocsLink } from "@/components/DocsLink";
 import { DOC_PATHS } from "@/lib/docs";
@@ -40,7 +39,13 @@ import { useProjectScoped } from "@/lib/active";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { parseRolesFromPolicy } from "@/lib/policy";
 import { useResolvedPolicy } from "@/lib/policy_files";
-import { usePlaygroundPrefs } from "@/lib/playground_prefs";
+import {
+  usePlaygroundAccent,
+  usePlaygroundPrefs,
+} from "@/lib/playground_prefs";
+import { auditUrl } from "@/lib/audit-filters";
+import { argsPreview } from "@/components/audit/fmt";
+import { pluralise } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export function PlaygroundPage() {
@@ -65,41 +70,52 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   const { state, sendChat, reset, respondToApproval } = usePlayground({
     projectId,
   });
-  const [composer, setComposer] = useState("");
-  const [agent, setAgent] = useState<AgentRead | null>(null);
-  // A set, not a scalar: the enforcer evaluates every role the caller carries,
-  // so the playground has to be able to reproduce a multi-role caller.
-  const [activeRoles, setActiveRoles] = useState<string[]>([]);
-  // Full-screen presentation mode (own tab, no app sidebar — see AppShell). The
-  // playground drops its breakout margins and swaps "open in tab" for a close.
-  // The accent + acting-name prefs are subscribed inside the controls that edit
-  // them (AccentStyle/AccentPicker, IdentityChip) rather than here, so dragging
-  // the colour picker or typing a name doesn't re-render the whole transcript.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Bumped on each opening, so the settings draft starts from what's applied.
+  const [settingsSession, setSettingsSession] = useState(0);
+  const openSettings = () => {
+    setSettingsSession((n) => n + 1);
+    setSettingsOpen(true);
+  };
+  // Tagged with the project and name it was fetched for, so a switch never
+  // reads the previous agent's roles while the new one loads.
+  const [fetched, setFetched] = useState<{
+    key: string;
+    agent: AgentRead | null;
+  } | null>(null);
+  const agentKey = `${projectId}\u0000${state.agentName ?? ""}`;
+  const agent = fetched?.key === agentKey ? fetched.agent : null;
+  // The roles the user applied in this project, saved with the acting name:
+  // unset until they choose (the agent's first role then), [] for "no role".
+  // A set, not a scalar: the enforcer evaluates every role the caller carries.
+  const saved = usePlaygroundPrefs((s) => s.roles[projectId]);
+  const setRoles = usePlaygroundPrefs((s) => s.setRoles);
+  // Full-screen presentation mode (own tab, no app sidebar — see AppShell): no
+  // breakout margins, "Exit full screen", and a theme toggle for New chat. The
+  // acting name is subscribed inside the chip and the settings form rather
+  // than here, so editing it doesn't re-render the whole transcript.
   const present = usePresentMode();
   const transcriptRef = useRef<HTMLDivElement>(null);
 
   // Fetch the serving agent so we know which roles are available. Roles are a
   // per-agent concept today (M1); a later global role registry moves this hook.
   useEffect(() => {
-    if (!state.agentName) {
-      setAgent(null);
-      return;
-    }
+    if (!state.agentName) return;
     let cancelled = false;
     api
       .getAgent(state.agentName, projectId)
       .then((a) => {
-        if (!cancelled) setAgent(a);
+        if (!cancelled) setFetched({ key: agentKey, agent: a });
       })
       .catch(() => {
-        if (!cancelled) setAgent(null);
+        if (!cancelled) setFetched({ key: agentKey, agent: null });
       });
     return () => {
       cancelled = true;
     };
-  }, [state.agentName, projectId]);
+  }, [state.agentName, projectId, agentKey]);
 
-  // Roles for the "Acting as" picker. A compose (modular) project has no
+  // Roles for the session settings. A compose (modular) project has no
   // per-agent role registry in the classic policy_yaml — its roles come from
   // resolving the agent's compose policy — so prefer those, and fall back to the
   // classic policy_yaml for a non-modular agent. (A classic project 422s on
@@ -115,18 +131,29 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
     return agent ? parseRolesFromPolicy(agent.policy_yaml) : [];
   }, [resolved.data, agent]);
 
-  // On an agent switch, keep whichever roles the new one still defines, else
-  // fall back to its first role.
-  useEffect(() => {
-    if (roleOptions.length === 0) {
-      setActiveRoles([]);
-      return;
-    }
-    setActiveRoles((prev) => {
-      const kept = prev.filter((r) => roleOptions.includes(r));
-      return kept.length ? kept : [roleOptions[0]];
-    });
-  }, [roleOptions]);
+  // The roles this turn carries, derived (not synced) so a choice outlives an
+  // agent that briefly has no roles: the chosen roles the agent still
+  // defines, else its first role, unless "no role". While serve is down a
+  // queued turn keeps the choice; an online agent with no roles gets none.
+  // A choice applies to the agent it was made for, not whatever serves next;
+  // while none is serving (a restart clears the name) it still applies.
+  const choice =
+    saved && (!state.agentName || saved.agent === state.agentName)
+      ? saved.roles
+      : undefined;
+  const agentOnline = state.agentOnline;
+  const activeRoles = useMemo(() => {
+    if (roleOptions.length === 0) return agentOnline ? [] : (choice ?? []);
+    if (choice?.length === 0) return [];
+    const kept = (choice ?? []).filter((r) => roleOptions.includes(r));
+    return kept.length ? kept : [roleOptions[0]];
+  }, [choice, roleOptions, agentOnline]);
+  // null: the roles weren't touched in the dialog, so the choice stands.
+  const applyRoles = (roles: string[] | null) => {
+    // With no agent serving (a restart), keep the choice's agent.
+    const agent = state.agentName ?? saved?.agent;
+    if (roles !== null && agent) setRoles(projectId, agent, roles);
+  };
 
   // Whether the user was pinned to the bottom BEFORE the latest update — read
   // from the scroll handler, not measured post-render (a tall append or a
@@ -152,9 +179,7 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
     }
   }, [present, state.connected, reset]);
 
-  function submit() {
-    const text = composer.trim();
-    if (!text) return;
+  function submit(text: string) {
     // Re-pin to the bottom so the sent turn and its streamed reply are visible
     // even if the user had scrolled up to re-read an earlier turn.
     atBottomRef.current = true;
@@ -162,46 +187,65 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
     // re-renders the transcript; sendChat trims it and omits an empty identity.
     const name = usePlaygroundPrefs.getState().names[projectId] ?? "";
     sendChat(text, { roles: activeRoles, name });
-    setComposer("");
   }
 
   const empty = state.messages.length === 0;
+  // Calls held at the approval prompt (tool + arguments): their cards say
+  // so, not "Running".
+  const awaiting = useMemo(
+    () =>
+      new Set(
+        state.pendingApprovals.map((a) => callKey(a.tool_name, a.arguments)),
+      ),
+    [state.pendingApprovals],
+  );
 
   return (
-    <div
+    <AccentScope
       className={cn(
         "relative flex h-screen flex-col overflow-hidden bg-background",
         !present && "-mx-8 -my-6",
       )}
     >
       <GooFilter />
-      <AccentStyle />
 
-      {/* Status + controls, mixed into the top corners over the chat. */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-3 px-4 py-3">
-        {/* Top-left: the served agent. The acting role is edited from the
-            bottom-left identity chip (which also carries the acting name). */}
-        <div className="pointer-events-auto flex items-center gap-2">
+      <header className="flex items-center justify-between gap-3 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          {present && (
+            <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-action text-action-foreground">
+              <Hexagon className="size-4" />
+            </span>
+          )}
           <AgentStatus
             agentName={state.agentName}
             online={state.agentOnline}
             relayConnected={state.connected}
+            present={present}
           />
         </div>
-        {/* Top-right: presentation controls — open in a tab, theme, accent, reset. */}
-        <div className="pointer-events-auto flex items-center gap-2">
-          <PresentationControls />
-          <button
-            type="button"
-            onClick={reset}
-            disabled={empty}
-            title="Reset session"
-            className={cn(ROUND_BTN, "disabled:opacity-40")}
-          >
-            <RefreshCcw className="size-3.5" />
+        <div className="flex items-center gap-1">
+          <DecisionSummary decisions={state.decisions} />
+          <button type="button" onClick={openSettings} className={BAR_BTN}>
+            <SlidersHorizontal className="size-4" />
+            Settings
           </button>
+          <AccentPicker />
+          {present && <ThemeToggle />}
+          <FullScreenToggle />
+          {!present && (
+            <button
+              type="button"
+              onClick={reset}
+              disabled={empty}
+              title="New chat"
+              aria-label="New chat"
+              className={BAR_BTN}
+            >
+              <SquarePen className="size-4" />
+            </button>
+          )}
         </div>
-      </div>
+      </header>
 
       {/* Transcript */}
       <div
@@ -213,13 +257,19 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
         }}
         className="scrollbar-thin flex-1 overflow-y-auto"
       >
-        <div className="mx-auto w-full max-w-2xl px-4 pb-6 pt-20">
+        <div className="mx-auto w-full max-w-3xl px-4 pb-6 pt-4">
           {empty ? (
             <EmptyState online={state.agentOnline} />
           ) : (
             <div className="space-y-6">
               {state.messages.map((m) => (
-                <MessageView key={m.id} message={m} />
+                <MessageView
+                  key={m.id}
+                  message={m}
+                  agentName={state.agentName}
+                  present={present}
+                  awaiting={awaiting}
+                />
               ))}
             </div>
           )}
@@ -227,8 +277,8 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
       </div>
 
       {/* Composer + inline approvals, centred like the transcript. */}
-      <div className="relative z-10 border-t border-border/60 bg-background/80 backdrop-blur">
-        <div className="mx-auto w-full max-w-2xl px-4 py-4">
+      <div className="relative z-10 bg-background">
+        <div className="mx-auto w-full max-w-3xl px-4 pb-3">
           {/* Persist the "how to bring an agent back" hint mid-session, not just
               on the empty state — else a mid-session disconnect looks silent. */}
           {!state.agentOnline && !empty && (
@@ -245,51 +295,75 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
               onDecide={respondToApproval}
             />
           )}
-          <Composer value={composer} onChange={setComposer} onSubmit={submit} />
+          <Composer
+            onSubmit={submit}
+            agentName={state.agentName}
+            identity={
+              <IdentityChip
+                projectId={projectId}
+                activeRoles={activeRoles}
+                onClick={openSettings}
+              />
+            }
+          />
+          <div className="mt-2 flex items-center justify-center gap-3 text-xs text-muted-foreground">
+            <span>
+              Every tool call is checked against your policy and recorded in
+              Audit.
+            </span>
+            <DocsLink path={DOC_PATHS.playground} label="Docs" compact />
+          </div>
         </div>
       </div>
 
-      {/* Streamed decisions as a floating deck — muted (non-interactive, hidden)
-          while an approval is pending (so its pile can't overlap the Approve/Deny
-          buttons) or while the composer has text (so it can't overlap Send on a
-          narrower window), but kept mounted so its pinned/scroll state survives. */}
-      <DecisionDeck
-        decisions={state.decisions}
-        muted={state.pendingApprovals.length > 0 || composer.trim().length > 0}
-      />
-
-      {/* Bottom-left: who you're acting as (name + role), with a gear that opens
-          an editor for both — the name rides into the agent's HexgateContext. */}
-      <IdentityChip
+      <SessionSettings
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        session={settingsSession}
+        agentName={state.agentName}
         projectId={projectId}
         roleOptions={roleOptions}
         activeRoles={activeRoles}
-        setActiveRoles={setActiveRoles}
+        onApply={applyRoles}
+        onReset={reset}
+        canReset={!empty}
       />
+    </AccentScope>
+  );
+}
 
-      {/* Persistent docs affordance — a subtle icon+label pill kept in the
-          bottom-right corner so docs stay one click away throughout, not just on
-          the empty state. The decision deck stacks just above it (see below). */}
-      <div className="absolute bottom-24 right-4 z-20 rounded-full border border-border/60 bg-card/70 px-3 py-1.5 backdrop-blur transition-colors hover:bg-accent sm:bottom-6 sm:right-6">
-        <DocsLink path={DOC_PATHS.playground} label="Docs" compact />
-      </div>
+/** Owns the accent subscription so changing it repaints this wrapper, not the
+ * transcript; its children are elements made by the parent. */
+function AccentScope({
+  className,
+  children,
+}: {
+  className: string;
+  children: React.ReactNode;
+}) {
+  const accent = usePlaygroundAccent();
+  return (
+    <div className={className} style={accent}>
+      {children}
     </div>
   );
 }
 
-// ── Top-corner status ───────────────────────────────────────────────────────
+// ── Agent status ────────────────────────────────────────────────────────────
 
 function AgentStatus({
   agentName,
   online,
   relayConnected,
+  present,
 }: {
   agentName: string | null;
   online: boolean;
   relayConnected: boolean;
+  present: boolean;
 }) {
   const pill =
-    "pointer-events-auto flex items-center gap-2 rounded-full border border-border/60 bg-card/70 px-3 py-1.5 text-xs backdrop-blur";
+    "flex items-center gap-2 rounded-full border border-border px-3 py-1.5 text-xs";
   if (!agentName) {
     return (
       <div className={cn(pill, "text-muted-foreground")}>
@@ -304,6 +378,7 @@ function AgentStatus({
   return (
     <Link
       to="/agents"
+      {...newTabWhen(present)}
       className={cn(pill, "transition-colors hover:bg-accent")}
     >
       <Bot className="size-3.5 text-primary" />
@@ -339,132 +414,76 @@ function roleLabel(activeRoles: string[]): string {
   return `${activeRoles[0]} +${activeRoles.length - 1}`;
 }
 
-/** The role multi-select + explainer, shared by the top-left "acting as"
- * dropdown and the bottom-left identity editor. */
-function RoleCheckboxList({
-  roleOptions,
+/** "{name} · {role}" in the composer; opens the session settings. Subscribes
+ * to the acting name itself so typing it never re-renders the transcript. */
+function IdentityChip({
+  projectId,
   activeRoles,
-  setActiveRoles,
+  onClick,
 }: {
-  roleOptions: string[];
+  projectId: string;
   activeRoles: string[];
-  setActiveRoles: React.Dispatch<React.SetStateAction<string[]>>;
+  onClick: () => void;
 }) {
+  const name = usePlaygroundPrefs((s) => s.names[projectId] ?? "");
+  const caller = callerName(name, activeRoles) ?? "default caller";
   return (
-    <>
-      <div className="flex flex-col gap-0.5">
-        {roleOptions.map((role) => (
-          <label
-            key={role}
-            className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 font-mono text-sm hover:bg-accent"
-          >
-            <input
-              type="checkbox"
-              checked={activeRoles.includes(role)}
-              onChange={(e) =>
-                setActiveRoles((prev) =>
-                  e.target.checked
-                    ? // Re-derive so the emitted order is the policy's, not
-                      // the click order.
-                      roleOptions.filter((r) => r === role || prev.includes(r))
-                    : prev.filter((r) => r !== role),
-                )
-              }
-              className="size-3.5 accent-primary"
-            />
-            {role}
-          </label>
-        ))}
-      </div>
-      <p className="mt-2 border-t border-border/60 px-1 pt-2 text-[11px] leading-snug text-muted-foreground">
-        {activeRoles.length ? (
-          <>
-            Each turn attenuates the token with{" "}
-            <span className="font-mono">
-              {activeRoles.map((r) => `role("${r}")`).join(", ")}
-            </span>
-            .{" "}
-            {activeRoles.length > 1
-              ? "The most permissive outcome across roles wins."
-              : "That role's bundle decides which tools fire."}
-          </>
-        ) : (
-          <>
-            No role — the turn runs unroled and the{" "}
-            <span className="font-mono">default</span> policy decides.
-          </>
-        )}
-      </p>
-    </>
+    <button
+      type="button"
+      onClick={onClick}
+      title="Acting as — session settings"
+      className="flex max-w-[60%] items-center gap-2 rounded-full border border-border px-2 py-1 text-xs transition-colors hover:bg-accent"
+    >
+      <span className="grid size-5 shrink-0 place-items-center rounded-full bg-primary/15 text-[10px] font-semibold uppercase text-primary">
+        {caller[0]}
+      </span>
+      <span className="truncate">{caller}</span>
+      {activeRoles.length > 0 && (
+        <>
+          <span className="text-muted-foreground">·</span>
+          <span className="truncate font-mono">{roleLabel(activeRoles)}</span>
+        </>
+      )}
+      <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+    </button>
   );
 }
 
-/** Bottom-left identity: shows "{name} · {role}" with a gear that opens an editor
- * for the acting name (→ HexgateContext) and the role(s). Subscribes to the
- * acting name itself (keyed per project) so typing it re-renders only this chip,
- * not the transcript. */
-function IdentityChip({
-  projectId,
-  roleOptions,
-  activeRoles,
-  setActiveRoles,
+/** "N decisions · M denied · K not approved · J failed" for the session, red
+ * when any call was stopped or failed. Memoised: the page re-renders per
+ * streamed token. */
+const DecisionSummary = memo(function DecisionSummary({
+  decisions,
 }: {
-  projectId: string;
-  roleOptions: string[];
-  activeRoles: string[];
-  setActiveRoles: React.Dispatch<React.SetStateAction<string[]>>;
+  decisions: ToolCall[];
 }) {
-  const name = usePlaygroundPrefs((s) => s.names[projectId] ?? "");
-  const setName = usePlaygroundPrefs((s) => s.setName);
+  if (decisions.length === 0) return null;
+  const verdicts = decisions.map((d) => verdictOf(d, false));
+  const count = (v: Verdict) => verdicts.filter((x) => x === v).length;
+  const [denied, held, failed] = [
+    count("denied"),
+    count("held"),
+    count("failed"),
+  ];
   return (
-    <div className="pointer-events-auto absolute bottom-24 left-4 z-20 sm:bottom-6 sm:left-6">
-      <Popover>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            title="Edit acting name & role"
-            className="flex max-w-[70vw] items-center gap-2 rounded-full border border-border/60 bg-card/70 px-3 py-1.5 text-xs backdrop-blur transition-colors hover:bg-accent"
-          >
-            <Settings2 className="size-3.5 shrink-0 text-primary" />
-            <span className="truncate font-mono font-medium">
-              {name.trim() || "anonymous"}
-            </span>
-            <span className="text-muted-foreground">·</span>
-            <span className="truncate font-mono text-muted-foreground">
-              {roleLabel(activeRoles)}
-            </span>
-          </button>
-        </PopoverTrigger>
-        <PopoverContent align="start" side="top" className="w-64 p-2">
-          <div className="mb-1 px-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            Acting as
-          </div>
-          <Input
-            value={name}
-            onChange={(e) => setName(projectId, e.target.value)}
-            placeholder="name (optional)"
-            className="h-8 font-mono text-sm"
-          />
-          <p className="mb-2 mt-1 px-1 text-[11px] leading-snug text-muted-foreground">
-            Rides into the agent's{" "}
-            <span className="font-mono">HexgateContext</span> as the caller id.
-          </p>
-          {roleOptions.length > 0 ? (
-            <RoleCheckboxList
-              roleOptions={roleOptions}
-              activeRoles={activeRoles}
-              setActiveRoles={setActiveRoles}
-            />
-          ) : (
-            <p className="px-1 text-[11px] text-muted-foreground">
-              No roles on the served agent yet.
-            </p>
-          )}
-        </PopoverContent>
-      </Popover>
-    </div>
+    <span className="mr-2 hidden items-center gap-2 text-sm text-muted-foreground sm:flex">
+      <span
+        className={cn(
+          "size-2 rounded-sm",
+          denied || failed
+            ? "bg-deny"
+            : held
+              ? "bg-approval"
+              : "bg-muted-foreground",
+        )}
+      />
+      {pluralise(decisions.length, "decision")}
+      {denied > 0 && ` · ${denied} denied`}
+      {held > 0 && ` · ${held} not approved`}
+      {failed > 0 && ` · ${failed} failed`}
+    </span>
   );
-}
+});
 
 function EmptyState({ online }: { online: boolean }) {
   return (
@@ -493,50 +512,83 @@ function EmptyState({ online }: { online: boolean }) {
 
 // ── Composer ────────────────────────────────────────────────────────────────
 
+/** Holds its own text, so a keystroke re-renders the box, not the transcript. */
 function Composer({
-  value,
-  onChange,
   onSubmit,
+  agentName,
+  identity,
 }: {
-  value: string;
-  onChange: (v: string) => void;
-  onSubmit: () => void;
+  onSubmit: (text: string) => void;
+  agentName: string | null;
+  identity: React.ReactNode;
 }) {
+  const [value, setValue] = useState("");
+  const send = () => {
+    const text = value.trim();
+    if (!text) return;
+    onSubmit(text);
+    setValue("");
+  };
   return (
-    <div className="relative flex items-center">
-      <input
+    <div className="rounded-2xl border border-border bg-card p-3 shadow-sm transition-colors focus-within:border-primary/60">
+      <textarea
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
+          // Enter confirming an IME candidate isn't a send (Safari reports
+          // it as keyCode 229 rather than isComposing).
+          const composing =
+            e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229;
+          if (e.key === "Enter" && !e.shiftKey && !composing) {
             e.preventDefault();
-            onSubmit();
+            send();
           }
         }}
-        placeholder="Ask the agent to do something…"
+        rows={1}
+        placeholder={`Message ${agentName ?? "the agent"}…`}
         aria-label="Message the agent"
-        className="h-12 w-full rounded-full border border-border bg-card pl-5 pr-14 text-sm shadow-sm transition-colors focus:outline-none focus-visible:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary/20"
+        className="block min-h-12 max-h-48 w-full resize-none bg-transparent px-1 text-sm focus:outline-none [field-sizing:content]"
       />
-      <button
-        type="button"
-        onClick={onSubmit}
-        disabled={!value.trim()}
-        aria-label="Send"
-        className="absolute right-2 grid size-9 place-items-center rounded-full bg-primary text-primary-foreground transition-all hover:bg-primary/90 disabled:scale-90 disabled:bg-muted disabled:text-muted-foreground"
-      >
-        <ArrowUp className="size-4" />
-      </button>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        {identity}
+        <button
+          type="button"
+          onClick={send}
+          disabled={!value.trim()}
+          aria-label="Send"
+          className="grid size-9 place-items-center rounded-full bg-action text-action-foreground transition-all hover:bg-action/85 disabled:scale-90 disabled:bg-muted disabled:text-muted-foreground"
+        >
+          <ArrowUp className="size-4" />
+        </button>
+      </div>
     </div>
   );
 }
 
 // ── Transcript ──────────────────────────────────────────────────────────────
 
-function MessageView({ message }: { message: ChatMessage }) {
+/** One message. Memoised: a streamed token re-renders only the turn it
+ * lands in, since untouched messages keep their identity. */
+const MessageView = memo(function MessageView({
+  message,
+  agentName,
+  present,
+  awaiting,
+}: {
+  message: ChatMessage;
+  agentName: string | null;
+  present: boolean;
+  awaiting: ReadonlySet<string>;
+}) {
   if (message.role === "user") {
     return (
       <div className="pg-enter flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm text-primary-foreground">
+        <div
+          className={cn(
+            "max-w-[85%] rounded-2xl px-4 py-2.5 text-sm",
+            present ? "bg-primary/15" : "bg-muted",
+          )}
+        >
           <div className="whitespace-pre-wrap">{message.content}</div>
         </div>
       </div>
@@ -544,24 +596,34 @@ function MessageView({ message }: { message: ChatMessage }) {
   }
 
   const turn = message.turn;
-  const hasSteps = !!turn && (turn.reasoning !== "" || turn.tools.length > 0);
+  const steps = turn && (turn.reasoning || turn.tools.length) ? turn : null;
   return (
     <div className="pg-enter flex items-start gap-3">
-      <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-primary/10">
-        <Bot className="size-3.5 text-primary" />
+      <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg bg-action text-action-foreground">
+        <Hexagon className="size-3.5" />
       </span>
       <div className="min-w-0 flex-1 space-y-3 pt-0.5">
         {/* Intermediate steps: the agent's reasoning + each tool call, shown as
             a compact timeline before the final answer. */}
-        {hasSteps && (
+        {steps && (
           <div className="space-y-2">
-            {turn!.reasoning !== "" && (
+            {steps.reasoning !== "" && (
               <div className="border-l-2 border-border pl-3 text-xs italic text-muted-foreground">
-                {turn!.reasoning}
+                {steps.reasoning}
               </div>
             )}
-            {turn!.tools.map((t) => (
-              <ToolStep key={t.id} call={t} />
+            {steps.tools.map((t) => (
+              <DecisionCard
+                key={t.id}
+                call={t}
+                agentName={agentName}
+                // Only the turn that's running can be at the prompt.
+                awaiting={
+                  !!steps.streaming &&
+                  t.state === "started" &&
+                  awaiting.has(callKey(t.name, t.args))
+                }
+              />
             ))}
           </div>
         )}
@@ -578,7 +640,7 @@ function MessageView({ message }: { message: ChatMessage }) {
       </div>
     </div>
   );
-}
+});
 
 /** The hexkit "goo" loader: a shimmering label over three dots that fuse into a
  * liquid blob via the #pg-goo SVG filter. Shown while the turn is still
@@ -621,183 +683,161 @@ function GooFilter() {
   );
 }
 
-/** The verdict icon as an element (not a component variable — keeps the dynamic
- * pick out of render-time component identity). */
-function stateIcon(state: ToolCall["state"], className: string) {
-  if (state === "completed") return <Check className={className} />;
-  if (state === "failed") return <X className={className} />;
-  return <CircleDashed className={className} />;
+/** What a call's card reports. A policy that stops a call doesn't always
+ * fail it (the OpenAI and Google ADK adapters return the verdict as the
+ * tool's result), so `hexgate serve` marks it on the event; an older serve
+ * that doesn't is read from the message's opening instead. */
+type Verdict =
+  | "allowed"
+  | "denied"
+  | "held"
+  | "failed"
+  | "running"
+  | "awaiting";
+
+// "[<marker>] <body>", as the SDK's verdict reader matches it (tool, reach
+// or skill); the wording says held from denied.
+const STOPPED_TEXT =
+  /^\[[a-z0-9_-]+\] (?:Tool|reach to agent|skill) '[^']*' (requires human approval|is denied by the agent policy|is not permitted by this agent's policy)/;
+
+function verdictOf(call: ToolCall, awaiting: boolean): Verdict {
+  if (call.state === "started") return awaiting ? "awaiting" : "running";
+  if (call.verdict) return call.verdict;
+  // null: serve said the tool ran. Only an older serve, with no field, is
+  // read from the text.
+  if (call.verdict === null)
+    return call.state === "failed" ? "failed" : "allowed";
+  const phrase = STOPPED_TEXT.exec(call.outputSummary?.trim() ?? "")?.[1];
+  if (phrase) return phrase === "requires human approval" ? "held" : "denied";
+  return call.state === "failed" ? "failed" : "allowed";
 }
 
-function ToolStep({ call }: { call: ToolCall }) {
-  const variant: "success" | "deny" | "approval" =
-    call.state === "completed"
-      ? "success"
-      : call.state === "failed"
-        ? "deny"
-        : "approval";
-  return (
-    <div className="overflow-hidden rounded-lg border border-border bg-card/50">
-      <div className="flex items-center gap-2 px-3 py-2">
-        <Wrench className="size-3.5 text-muted-foreground" />
-        <span className="font-mono text-xs">{call.name}</span>
-        <Badge variant={variant} className="ml-auto">
-          {stateIcon(call.state, "size-3")}
-          {call.state}
-        </Badge>
-      </div>
-      {Object.keys(call.args).length > 0 && (
-        <pre className="whitespace-pre-wrap break-words border-t border-border px-3 py-2 font-mono text-[11px] text-muted-foreground">
-          {JSON.stringify(call.args, null, 2)}
-        </pre>
-      )}
-      {call.outputSummary && (
-        <div className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
-          → {call.outputSummary}
-        </div>
-      )}
-    </div>
-  );
-}
+/** The key a held call and its approval prompt share: tool and arguments. */
+const callKey = (name: string, args: unknown) =>
+  `${name}\u0000${JSON.stringify(args)}`;
 
-// ── Floating decision deck ──────────────────────────────────────────────────
-//
-// The streamed policy decisions collapse into a small pile at the bottom-right;
-// hovering (or focusing) the deck fans the full list up with per-decision
-// details, so the decisions never claim a permanent panel.
+const DECISION: Record<
+  Verdict,
+  { label: string; dot: string; text: string; border: string }
+> = {
+  allowed: {
+    label: "Allowed",
+    dot: "bg-muted-foreground",
+    text: "text-foreground",
+    border: "border-border",
+  },
+  denied: {
+    label: "Denied",
+    dot: "bg-deny",
+    text: "text-deny",
+    border: "border-deny/50",
+  },
+  held: {
+    label: "Not approved",
+    dot: "bg-approval",
+    text: "text-approval",
+    border: "border-approval/50",
+  },
+  awaiting: {
+    label: "Awaiting approval",
+    dot: "bg-approval",
+    text: "text-approval",
+    border: "border-approval/50",
+  },
+  failed: {
+    label: "Failed",
+    dot: "bg-deny",
+    text: "text-deny",
+    border: "border-deny/50",
+  },
+  running: {
+    label: "Running",
+    dot: "bg-approval",
+    text: "text-approval",
+    border: "border-approval/50",
+  },
+};
 
-function DecisionDeck({
-  decisions,
-  muted,
+/** One tool call inline in the turn, collapsible; a denied, held or failed
+ * call opens by default so the reason is in view. */
+const DecisionCard = memo(function DecisionCard({
+  call,
+  agentName,
+  awaiting,
 }: {
-  decisions: ToolCall[];
-  muted: boolean;
+  call: ToolCall;
+  agentName: string | null;
+  awaiting: boolean;
 }) {
-  // Visibility is JS-driven so it works past hover: the mouse opens it, a
-  // click/tap pins it open (touch), and the handle is keyboard-operable.
-  const [pinned, setPinned] = useState(false);
-  const [hover, setHover] = useState(false);
-  if (decisions.length === 0) return null;
-  const shown = !muted && (pinned || hover);
-  const pile = decisions.slice(-3); // top few, most recent last
+  const present = usePresentMode();
+  const [open, setOpen] = useState<boolean | null>(null);
+  const verdict = verdictOf(call, awaiting);
+  const shown =
+    open ??
+    (verdict === "denied" || verdict === "held" || verdict === "failed");
+  const d = DECISION[verdict];
   return (
-    <div
-      aria-hidden={muted}
-      className={cn(
-        // Stacked above the persistent Docs pill (which owns the very corner).
-        "absolute bottom-36 right-4 z-20 transition-opacity sm:bottom-[4.5rem] sm:right-6",
-        muted && "pointer-events-none opacity-0",
-      )}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-    >
-      {/* Expanded list — fans up when the deck is open. Focusable so keyboard
-          users can scroll the list once it's pinned open. */}
-      <div
-        tabIndex={shown ? 0 : -1}
-        className={cn(
-          "absolute bottom-full right-0 mb-2 max-h-[55vh] w-[320px] origin-bottom-right overflow-y-auto rounded-xl border border-border bg-card/95 p-2 shadow-xl backdrop-blur transition-all duration-200 scrollbar-thin",
-          shown
-            ? "pointer-events-auto scale-100 opacity-100"
-            : "pointer-events-none scale-95 opacity-0",
-        )}
-      >
-        <div className="mb-1 flex items-center gap-1.5 px-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-          <ShieldAlert className="size-3" />
-          Decisions
-        </div>
-        <div className="flex flex-col gap-1">
-          {decisions
-            .slice()
-            .reverse()
-            .map((d) => (
-              <DecisionCard key={d.id} call={d} />
-            ))}
-        </div>
-      </div>
-
-      {/* The collapsed pile — the open handle (hover or click/tap). */}
+    <div className={cn("rounded-xl border bg-card", d.border)}>
       <button
         type="button"
-        aria-label={`${decisions.length} policy decisions`}
+        onClick={() => setOpen(!shown)}
         aria-expanded={shown}
-        disabled={muted}
-        onClick={() => setPinned((p) => !p)}
-        className="relative block h-[52px] w-[216px]"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left"
       >
-        {pile.map((d, i) => {
-          const depth = pile.length - 1 - i; // 0 = top card
-          return (
-            <div
-              key={d.id}
-              className={cn(
-                "absolute inset-x-0 transition-transform duration-200",
-                shown && "translate-y-1",
-              )}
-              style={{
-                bottom: depth * 5,
-                transform: `scale(${1 - depth * 0.05})`,
-                zIndex: pile.length - depth,
-                opacity: 1 - depth * 0.18,
-              }}
-            >
-              <MiniDecision call={d} />
-            </div>
-          );
-        })}
-        <span className="absolute -top-2 right-1 z-10 rounded-full border border-border bg-background px-1.5 text-[10px] font-medium text-muted-foreground shadow-sm">
-          {decisions.length}
+        <span className={cn("size-2 shrink-0 rounded-sm", d.dot)} />
+        <span className={cn("text-xs font-medium", d.text)}>{d.label}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-xs">
+          {call.name}
+          <span className="text-muted-foreground">
+            {argsPreview(call.args) || "()"}
+          </span>
         </span>
-      </button>
-    </div>
-  );
-}
-
-function verdictColor(state: ToolCall["state"]) {
-  return state === "completed"
-    ? "text-success"
-    : state === "failed"
-      ? "text-deny"
-      : "text-approval";
-}
-
-function MiniDecision({ call }: { call: ToolCall }) {
-  return (
-    <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs shadow-sm">
-      {stateIcon(call.state, cn("size-3.5 shrink-0", verdictColor(call.state)))}
-      <span className="flex-1 truncate font-mono">{call.name}</span>
-    </div>
-  );
-}
-
-function DecisionCard({ call }: { call: ToolCall }) {
-  return (
-    <div className="rounded-lg border border-border bg-background/60 px-2.5 py-2 text-xs">
-      <div className="flex items-center gap-2">
-        {stateIcon(
-          call.state,
-          cn("size-3.5 shrink-0", verdictColor(call.state)),
+        {shown ? (
+          <ChevronUp className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
         )}
-        <span className="flex-1 truncate font-mono">{call.name}</span>
-        <span className={cn("font-medium", verdictColor(call.state))}>
-          {call.state}
-        </span>
-        <span className="tabular-nums text-[10px] text-muted-foreground">
-          {call.endedAt ? `${call.endedAt - call.startedAt}ms` : "…"}
-        </span>
-      </div>
-      {Object.keys(call.args).length > 0 && (
-        <pre className="mt-1.5 max-h-24 overflow-y-auto whitespace-pre-wrap break-words rounded bg-muted/60 p-1.5 font-mono text-[10px] leading-snug text-muted-foreground scrollbar-thin">
-          {JSON.stringify(call.args, null, 2)}
-        </pre>
-      )}
-      {call.outputSummary && (
-        <div className="mt-1 text-[10px] text-muted-foreground">
-          → {call.outputSummary}
+      </button>
+      {shown && (
+        <div className="space-y-2 px-3 pb-3 text-xs">
+          <p className="text-muted-foreground">
+            {call.outputSummary ??
+              (verdict === "awaiting"
+                ? "Waiting for approval: decide in the prompt above."
+                : call.state === "started"
+                  ? "Waiting for the tool to finish."
+                  : "No summary returned.")}
+            {call.endedAt != null && (
+              <span className="ml-1 font-mono">
+                · {Math.round(call.endedAt - call.startedAt)} ms
+              </span>
+            )}
+          </p>
+          {Object.keys(call.args).length > 0 && (
+            <pre className="whitespace-pre-wrap break-words rounded-md bg-muted px-2.5 py-2 font-mono text-[11px] text-muted-foreground">
+              {JSON.stringify(call.args, null, 2)}
+            </pre>
+          )}
+          {/* No audit row exists until the call ends. */}
+          {agentName && call.state !== "started" && (
+            <Link
+              to={auditUrl({ agent: agentName, tool: call.name, range: "24h" })}
+              {...newTabWhen(present)}
+              className="inline-block font-medium text-primary hover:underline"
+            >
+              Open in audit
+            </Link>
+          )}
         </div>
       )}
     </div>
   );
+});
+
+/** Link props that open a new tab in full screen: a demo tab mustn't
+ * navigate away. */
+function newTabWhen(present: boolean) {
+  return present ? { target: "_blank", rel: "noopener" } : {};
 }
 
 // ── Approval prompts ────────────────────────────────────────────────────────
@@ -932,7 +972,8 @@ function ApprovalPromptCard({
         </Button>
         <Button
           size="sm"
-          className="h-7 gap-1.5 text-xs"
+          // Neutral, never the Playground accent; green means "connected".
+          className="h-7 gap-1.5 bg-foreground text-xs text-background hover:bg-foreground/85"
           onClick={() => onDecide(request.decision_id, true)}
         >
           <Check className="size-3" />

@@ -41,6 +41,8 @@ export interface ToolEndEvent {
   tool_name: string;
   state: ToolCallState;
   output_summary?: string | null;
+  /** Set by `hexgate serve` when the policy stopped the call. */
+  verdict?: "denied" | "held" | null;
 }
 
 export interface RunEndEvent {
@@ -107,6 +109,9 @@ export interface ToolCall {
   args: Record<string, unknown>;
   state: ToolCallState;
   outputSummary?: string | null;
+  /** The policy stopped it (denied, or held for approval); null when serve
+   * says it ran; absent from an older serve. */
+  verdict?: "denied" | "held" | null;
   startedAt: number;
   endedAt?: number;
 }
@@ -145,6 +150,15 @@ interface Options {
   projectId: string;
 }
 
+/** The caller a turn runs as, or null when it carries no identity at all
+ * (no name and no role). */
+export function callerName(
+  name: string | undefined,
+  roles: string[],
+): string | null {
+  return name?.trim() || (roles.some(Boolean) ? "playground" : null);
+}
+
 /**
  * Build the `chat` frame for a turn, attaching a `user_attenuation` block only
  * when the caller narrows to one or more roles OR acts under a name.
@@ -164,10 +178,10 @@ export function buildChatFrame(
 ): Record<string, unknown> {
   const frame: Record<string, unknown> = { type: "chat", message };
   const roles = (opts?.roles ?? []).filter(Boolean);
-  const name = opts?.name?.trim();
-  if (roles.length || name) {
+  const user = callerName(opts?.name, roles);
+  if (user) {
     const attenuation: Record<string, unknown> = {
-      user: name || "playground",
+      user,
       ttl_seconds: 300,
     };
     if (roles.length) {
@@ -546,7 +560,8 @@ function applyEvent(
       // No-op if already in the terminal state from a prior pass.
       if (
         existing.state === event.state &&
-        existing.outputSummary === (event.output_summary ?? undefined)
+        existing.outputSummary === (event.output_summary ?? undefined) &&
+        existing.verdict === event.verdict
       ) {
         return state;
       }
@@ -554,6 +569,7 @@ function applyEvent(
         ...existing,
         state: event.state,
         outputSummary: event.output_summary ?? undefined,
+        verdict: event.verdict,
         endedAt: existing.endedAt ?? Date.now(),
       };
       const tools = turn.tools.slice();

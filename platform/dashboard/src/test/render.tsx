@@ -41,10 +41,13 @@ export function renderWithProviders(
   { initialRoute = "/", client, ...rest }: Options = {},
 ) {
   const qc = client ?? makeQueryClient();
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={[initialRoute]}>{ui}</MemoryRouter>
-    </QueryClientProvider>,
-    rest,
-  );
+  // A wrapper, not wrapped JSX, so the returned rerender keeps the providers.
+  return render(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={[initialRoute]}>{children}</MemoryRouter>
+      </QueryClientProvider>
+    ),
+    ...rest,
+  });
 }
