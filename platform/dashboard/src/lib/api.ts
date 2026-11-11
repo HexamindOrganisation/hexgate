@@ -365,7 +365,7 @@ export interface PolicyGraph {
   roles: string[];
 }
 
-/** The editor's unsaved edit of one file, overlaid before preview/test. */
+/** An unsaved edit of one file, applied over the stored files before preview/test. */
 export interface PolicyFileDraft {
   name: string;
   content: string;
@@ -407,7 +407,8 @@ export interface PolicyTestRequest {
   tool: string;
   args?: Record<string, unknown>;
   attributes?: Record<string, unknown> | null;
-  draft?: PolicyFileDraft | null;
+  /** Unsaved files; the editor sends its one open file. */
+  drafts?: PolicyFileDraft[];
 }
 
 export interface PolicyTestResponse {
@@ -1067,7 +1068,7 @@ export const api = {
   previewPolicy: (projectId: string, draft: PolicyFileDraft, agent?: string) =>
     request<PolicyPreviewResponse>(`/v1/projects/${projectId}/policy/preview`, {
       method: "POST",
-      body: JSON.stringify({ ...draft, agent: agent ?? "*" }),
+      body: JSON.stringify({ drafts: [draft], agent: agent ?? "*" }),
     }),
 
   testPolicy: (projectId: string, body: PolicyTestRequest) =>

@@ -112,7 +112,7 @@ export function TestPanel({
       tool: parsed.tool,
       args: (parsed.args as Record<string, unknown>) ?? {},
       attributes: (parsed.attributes as Record<string, unknown>) ?? null,
-      draft,
+      drafts: draft ? [draft] : [],
     });
   }
 

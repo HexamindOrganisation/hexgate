@@ -64,6 +64,17 @@ describe("TestPanel", () => {
     expect(sent).toMatchObject({ role: "support", tool: "refund_order" });
   });
 
+  it("sends the open draft as a one-element drafts list", async () => {
+    const spy = stubTest({ outcome: "allow", violations: [] });
+    const draft = { name: "policy.yaml", content: "tools: {}" };
+    renderPanel({ draft });
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(JSON.parse(spy.mock.calls[0][1].body).drafts).toEqual([draft]);
+  });
+
   it("renders a DENY verdict with its violations", async () => {
     stubTest({
       outcome: "deny",

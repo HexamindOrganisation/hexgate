@@ -4,6 +4,7 @@ from typing import Annotated, Any, Final, Literal, Optional
 from uuid import UUID
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     EmailStr,
@@ -567,13 +568,44 @@ class PolicyFileWrite(BaseModel):
     content: str
 
 
-class PolicyPreviewRequest(BaseModel):
-    """A draft file to resolve without saving — the editor's live preview. The
-    draft is overlaid on the project's stored files for ``name``."""
+class PolicyFileDraft(BaseModel):
+    """An unsaved policy file, applied over the stored file of the same name, or
+    beside the stored files when no file has that name yet."""
 
     name: str
     content: str
+
+
+def _unique_draft_names(drafts: list[PolicyFileDraft]) -> list[PolicyFileDraft]:
+    names = [d.name for d in drafts]
+    if len(set(names)) != len(names):
+        raise ValueError(f"each draft names a different file (got {names})")
+    return drafts
+
+
+# Several drafts at once, so a role change and the file it imports are checked
+# together. Two drafts of one file would leave which one applies to list order.
+PolicyFileDrafts = Annotated[list[PolicyFileDraft], AfterValidator(_unique_draft_names)]
+
+
+# The request models below refuse unknown keys: a client still sending the
+# old single-file body would otherwise have its draft dropped and be answered
+# for the saved policy.
+class PolicyPreviewRequest(BaseModel):
+    """Draft files to resolve without saving — the editor's live preview."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    drafts: PolicyFileDrafts = Field(default_factory=list)
     agent: str = "*"
+
+
+class PolicyCheckRequest(BaseModel):
+    """Draft files to lint as if they were saved."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    drafts: PolicyFileDrafts = Field(default_factory=list)
 
 
 class PolicyPreviewResponse(BaseModel):
@@ -615,15 +647,10 @@ class PolicyGraphResponse(BaseModel):
     roles: list[str] = Field(default_factory=list)
 
 
-class PolicyFileDraft(BaseModel):
-    """An unsaved compose file edit, overlaid before test (like the preview draft)."""
-
-    name: str
-    content: str
-
-
 class PolicyTestRequest(BaseModel):
     """A tool call to evaluate against the resolved policy for ``role`` + ``agent``."""
+
+    model_config = ConfigDict(extra="forbid")
 
     role: str
     # The executing agent, "*" (the generic column) by default — matches
@@ -632,7 +659,7 @@ class PolicyTestRequest(BaseModel):
     tool: str
     args: dict = Field(default_factory=dict)
     attributes: dict | None = None
-    draft: PolicyFileDraft | None = None  # reflect an unsaved edit, like preview
+    drafts: PolicyFileDrafts = Field(default_factory=list)  # unsaved edits
 
 
 class PolicyTestResponse(BaseModel):

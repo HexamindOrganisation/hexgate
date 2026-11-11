@@ -113,6 +113,10 @@ mcp-run: ## Run the MCP server on :8080 against the platform API on localhost:80
 mcp-test: ## Run the MCP server test suite
 	cd platform/mcp && uv run pytest tests/
 
+.PHONY: mcp-test-integration
+mcp-test-integration: ## Login-to-save end to end: the platform API as a subprocess on SQLite, no ClickHouse (needs uv and opa)
+	cd platform/mcp && uv run pytest -m integration
+
 .PHONY: mcp-check
 mcp-check: ## Lint + format check + test on the MCP server
 	cd platform/mcp && uv run ruff check .

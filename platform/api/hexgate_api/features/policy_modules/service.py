@@ -26,6 +26,8 @@ from hexgate_api.models import PolicyFile, PolicyModule, RoleBinding, utcnow
 if TYPE_CHECKING:  # the SDK is imported lazily at run time
     from hexgate.security import PolicyLint
 
+    from hexgate_api.schemas import PolicyFileDraft
+
 logger = logging.getLogger("hexgate.platform.policy_modules")
 
 VALID_TIERS = ("boundary", "capability")
@@ -41,6 +43,14 @@ class InvalidModuleError(Exception):
 
     Routes translate this to HTTP 422. Raised before the row is written so a
     malformed module never lands in the store.
+    """
+
+
+class DraftWithoutEntryError(Exception):
+    """Draft files for a project that would still have no entry file.
+
+    Such a project enforces from the module store or from each agent's own
+    policy, and neither reads policy files, so the drafts would change nothing.
     """
 
 
@@ -672,6 +682,30 @@ async def _files_map(session: AsyncSession, project_id: str) -> dict[str, str]:
     return {r.name: r.content for r in await list_files(session, project_id)}
 
 
+def overlay_drafts(
+    stored: dict[str, str], drafts: Iterable[PolicyFileDraft]
+) -> dict[str, str]:
+    """``stored`` (``{name: content}``) with ``drafts`` applied over it by name.
+    A draft may name a file not stored yet, so a proposal can add one. Raises
+    :class:`DraftWithoutEntryError` when drafts are given and neither ``stored``
+    nor the drafts hold the entry file."""
+    drafted = {d.name: d.content for d in drafts}
+    if drafted and ENTRY_FILE not in stored and ENTRY_FILE not in drafted:
+        raise DraftWithoutEntryError(
+            f"this project has no {ENTRY_FILE!r}, so a draft file cannot apply to "
+            f"it; saving a first {ENTRY_FILE!r} would switch every agent onto the "
+            "file store"
+        )
+    return stored | drafted
+
+
+async def files_with_drafts(
+    session: AsyncSession, project_id: str, drafts: Iterable[PolicyFileDraft]
+) -> dict[str, str]:
+    """The project's stored files with ``drafts`` applied (:func:`overlay_drafts`)."""
+    return overlay_drafts(await _files_map(session, project_id), drafts)
+
+
 def _db_loader(files: dict[str, str]):
     """A compose ``Loader`` over a ``{name: content}`` map — a missing file raises
     ``FileNotFoundError`` so the resolver reports a source-named ``cannot import``."""
@@ -824,12 +858,19 @@ async def resolve_auto(
     return await resolve(session, project_id, agent=agent)
 
 
-async def check_auto(session: AsyncSession, project_id: str) -> list[PolicyLint]:
+async def check_auto(
+    session: AsyncSession,
+    project_id: str,
+    drafts: Iterable[PolicyFileDraft] = (),
+) -> list[PolicyLint]:
     """Lints for the check endpoint — compose (a resolution error, else the SDK's
     ``analyze_policy`` findings) or tier (analyzer lints), from a single files
-    read. Both stores return SDK ``PolicyLint``s, so the router builds the
-    response the same way for each."""
-    files = await _files_map(session, project_id)
+    read, with ``drafts`` applied over the files. Both stores return SDK
+    ``PolicyLint``s, so the router builds the response the same way for each."""
+    try:
+        files = await files_with_drafts(session, project_id, drafts)
+    except DraftWithoutEntryError as exc:
+        return [_link_error(str(exc))]
     if ENTRY_FILE in files:
         try:
             _, lints = await _resolve_and_lint(session, project_id, files)
@@ -915,18 +956,20 @@ async def compose_preview(
     session: AsyncSession,
     project_id: str,
     *,
-    name: str,
-    content: str,
+    drafts: Iterable[PolicyFileDraft],
     agent: str = DEFAULT_AGENT,
 ) -> tuple[dict | None, dict | None, list[PolicyLint]]:
-    """Resolve the project with a draft ``name``=``content`` overlaid — the
+    """Resolve the project with ``drafts`` applied over its files — the
     editor's live preview. Returns ``(resolved, matrix, lints)``: the requested
     agent's effective policy and its roles x tools matrix (both ``None`` when it
     doesn't compose) and the lints. Validates *every* declared agent (like the save-time 409 check) so
     the preview and the save agree — a draft that breaks a different agent still
     previews as an error, not falsely clean. The lints are the same findings
     :func:`check_auto` returns for the saved project."""
-    files = {**await _files_map(session, project_id), name: content}
+    try:
+        files = await files_with_drafts(session, project_id, drafts)
+    except DraftWithoutEntryError as exc:
+        return None, None, [_link_error(str(exc))]
     if ENTRY_FILE not in files:
         return (
             None,
@@ -1108,21 +1151,17 @@ async def test_policy(
     agent: str = DEFAULT_AGENT,
     args: dict,
     attributes: dict | None = None,
-    draft: tuple[str, str] | None = None,
+    drafts: Iterable[PolicyFileDraft] = (),
 ):
     """Evaluate one tool call against the resolved policy for ``role`` + ``agent``,
     then run the SDK decision engine.
 
-    ``draft`` is an optional ``(name, content)`` compose overlay — the editor's
-    unsaved edit. It's applied to the file set, so it takes effect whenever the
-    project resolves via compose (has, or the draft introduces, an entry file); a
-    project with no entry file resolves from the tier store and a draft naming a
-    non-entry file has no tier meaning. Raises the SDK's compose errors if the
-    project doesn't resolve, and :class:`UnknownRoleError` (→ 404) for an unknown
-    role."""
-    files = await _files_map(session, project_id)
-    if draft is not None:
-        files = {**files, draft[0]: draft[1]}
+    ``drafts`` are unsaved files applied over the stored ones (see
+    :func:`files_with_drafts`, which raises :class:`DraftWithoutEntryError` for
+    a project that would still resolve from the tier store). Raises the SDK's
+    compose errors if the project doesn't resolve, and :class:`UnknownRoleError`
+    (→ 404) for an unknown role."""
+    files = await files_with_drafts(session, project_id, drafts)
     if ENTRY_FILE in files:
         result = _resolve_files(files, agent)
     else:

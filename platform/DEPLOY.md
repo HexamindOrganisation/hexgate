@@ -7,34 +7,40 @@ ClickHouse, Redpanda, keystore, and network. Each env's **api** serves both the
 JSON API (`/v1/*`) and that env's dashboard SPA same-origin, listening plain
 HTTP on a **loopback port** (prod `7000`, staging `7200`). Its **collector**
 (OTLP/HTTP receiver for the SDK's spans) listens on a second loopback port
-(prod `7001`, staging `7201`). There is no separate edge container — the SPA
+(prod `7001`, staging `7201`), and its **MCP server** (what Claude Code and
+other MCP clients connect to) on a third (prod `7002`, staging `7202`). There
+is no separate edge container — the SPA
 is baked into the API image and served by it.
 
 The box **already runs nginx** (host-installed, one `sites-available` file per
 hostname) that owns 80/443 and terminates TLS. Hexgate does not ship its own
-front proxy — you point the existing one at the two loopback ports by hostname.
+front proxy — you point the existing one at the three loopback ports by
+hostname and path.
 
 ```
                             one machine (one IP)
  Internet ──:443──▶  the box's existing reverse proxy — TLS
    app.hexgate.ai          │  Host: app.hexgate.ai          → 127.0.0.1:7000
                            │    path /v1/traces             → 127.0.0.1:7001
+                           │    path /mcp (+ its metadata)  → 127.0.0.1:7002
    app.staging.hexgate.ai  │  Host: app.staging.hexgate.ai  → 127.0.0.1:7200
                            │    path /v1/traces             → 127.0.0.1:7201
+                           │    path /mcp (+ its metadata)  → 127.0.0.1:7202
                   ┌───────┴───────────────┐    ┌───────────────────────┐
                   │ hexgate-prod          │    │ hexgate-staging       │
                   │  api→pg,ch            │    │  api→pg,ch            │
                   │  collector→redpanda   │    │  collector→redpanda   │
                   │  enricher: redpanda→ch│    │  enricher: redpanda→ch│
+                  │  mcp→api              │    │  mcp→api              │
                   └───────────────────────┘    └───────────────────────┘
 ```
 
 The reverse proxy must be able to reach the host loopback (it's host-installed
 or runs with host networking). A bridged proxy container can't see
-`127.0.0.1:7000` — in that case change BOTH the `api` and `collector` port
+`127.0.0.1:7000` — in that case change the `api`, `collector` AND `mcp` port
 bindings in the compose to publish on a shared Docker network or a
 non-loopback port instead (republishing only the api leaves every
-`/v1/traces` POST 502ing while `/v1/*` works).
+`/v1/traces` POST and every MCP call 502ing while `/v1/*` works).
 
 Images build **on the box** — no registry. amd64 throughout (the API bundles
 the amd64-only OPA binary; the image also runs a Node build stage to bundle the
@@ -50,8 +56,8 @@ app.hexgate.ai          A   <box-IP>
 app.staging.hexgate.ai  A   <box-IP>
 ```
 
-**80 and 443** are owned by the box's reverse proxy. The 7000/7200 (api) and
-7001/7201 (collector) ports stay loopback — never exposed.
+**80 and 443** are owned by the box's reverse proxy. The 7000/7200 (api),
+7001/7201 (collector) and 7002/7202 (mcp) ports stay loopback — never exposed.
 
 ## 2. Layout (two checkouts)
 
@@ -88,8 +94,8 @@ Then add two routes to the box's reverse proxy (one-time), so each hostname
 terminates TLS and proxies to its loopback port:
 
 ```
-app.hexgate.ai          → 127.0.0.1:7000   (except path /v1/traces → 127.0.0.1:7001)
-app.staging.hexgate.ai  → 127.0.0.1:7200   (except path /v1/traces → 127.0.0.1:7201)
+app.hexgate.ai          → 127.0.0.1:7000   (except path /v1/traces → 127.0.0.1:7001, and the MCP paths → 127.0.0.1:7002)
+app.staging.hexgate.ai  → 127.0.0.1:7200   (except path /v1/traces → 127.0.0.1:7201, and the MCP paths → 127.0.0.1:7202)
 ```
 
 The `/v1/traces` path routes to the stage's `HEXGATE_OTLP_PORT` — the
@@ -132,10 +138,14 @@ The value was 8 MiB before message logging, which is why it had to be raised.
 **The nginx includes.** Every Hexgate route on the box except the hostname's
 catch-all is in `platform/nginx/hexgate-<stage>.conf`, and each stage's server
 block includes its own file from its own checkout. A route change then ships
-when that checkout moves to it and nginx reloads (section 6), and `make nginx-check` (also a CI job) runs
-`nginx -t` on both files inside a stub server block and fails if staging's
-file differs from prod's beyond its ports. The server block keeps its listen,
-TLS, forwarded headers and `location /` to the api.
+when that checkout moves to it and nginx reloads (section 6), and `make
+nginx-check` (also a CI job) runs `nginx -t` on each stage's files inside a
+stub shaped like its server block, and once on both stages together as the box
+includes them, and fails if staging's files differ from prod's beyond their
+ports and zone names, if a location proxies to a port its route table does not
+name, or if the `/v1/traces` body cap no longer equals the collector's. The
+server block keeps its listen, TLS, forwarded headers and `location /` to the
+api.
 
 Install once per stage. In `sites-available/app.hexgate.ai`, inside the 443
 `server` block, replace the hand-written `location = /v1/traces { … }` (on a
@@ -151,8 +161,24 @@ and in `sites-available/app.staging.hexgate.ai` with
 include /srv/hexgate-staging/platform/nginx/hexgate-staging*.conf;
 ```
 
+and, once per box (not per stage: it holds both stages' lines, and a line
+included twice declares its zones twice, which fails `nginx -t`), create
+`/etc/nginx/conf.d/hexgate.conf` at `http` level with each stage's rate-limit
+zones (see *The MCP routes and rate limits* below):
+
+```nginx
+include /srv/hexgate-prod/platform/nginx/hexgate-zones-prod*.conf;
+include /srv/hexgate-staging/platform/nginx/hexgate-zones-staging*.conf;
+```
+
 Remove the old block in the same edit: the include defines `location =
-/v1/traces` too, and two of them fail `nginx -t`. Then `sudo nginx -t && sudo
+/v1/traces` too, and two of them fail `nginx -t`. Also remove any MCP or OAuth
+`location` blocks, `limit_req_status` line or `conf.d/hexgate-ratelimit.conf`
+hand-written from an earlier version of this page: the include and
+`hexgate.conf` now provide them (the duplicate locations and `limit_req_status`
+fail `nginx -t`). `hexgate-ratelimit.conf` is shared by both stages, so delete
+it only once neither server block has a `limit_req` naming `hexgate_mcp` or
+`hexgate_oauth`; until then it does no harm. Then `sudo nginx -t && sudo
 systemctl reload nginx`; a graceful reload keeps existing connections, and a
 failed test changes nothing. The include names a file in that stage's checkout,
 so install it only once the checkout has `platform/nginx/`: for prod, after
@@ -176,9 +202,48 @@ the running config is still the old one.
 
 Each hostname is one nginx `server` block proxying to its loopback ports.
 Forward `X-Forwarded-Proto: https` — the API trusts it, via uvicorn
-`--proxy-headers`, for correct https OAuth callbacks. `/v1` includes WebSocket
-endpoints, so the server block also needs the `Upgrade`/`Connection` headers
-set.
+`--proxy-headers`, for correct https OAuth callbacks — and set
+`proxy_set_header Host $host`. `/v1` includes WebSocket endpoints, so the
+server block also needs the `Upgrade`/`Connection` headers set.
+
+**The MCP routes and rate limits** are in the same files. `/mcp` (a `^~`
+prefix: the MCP server redirects `/mcp/` to `/mcp`) and its protected-resource
+metadata, `/.well-known/oauth-protected-resource/mcp`, go to the stage's
+`HEXGATE_MCP_PORT`; the api's two discovery documents
+(`/.well-known/oauth-authorization-server`, `/.well-known/jwks.json`, exact
+matches so an ACME or `security.txt` location is never shadowed) and
+`/v1/oauth/` go to the api. All five are limited per client IP, because they
+answer callers with no credentials by design and `/v1/oauth/authorize` and
+`/token` make the api fetch a client metadata document from whatever host the
+caller names. The comments in `hexgate-<stage>.conf` give each block's reason.
+The MCP server fetches the JWKS from `http://api:8000` on the compose network,
+never through the proxy. `HEXGATE_PUBLIC_URL` (section 6) must name this same
+hostname: the compose derives the MCP resource URL from it as
+`HEXGATE_PUBLIC_URL` + `/mcp`, and a client that connects to
+`https://app.hexgate.ai/mcp` is only given a token for the resource URL the MCP
+server advertises.
+
+The limits' zones are per stage, in
+`platform/nginx/hexgate-zones-<stage>.conf`, at `http` level, included from
+`conf.d/hexgate.conf` (the install above).
+
+Each checkout then brings its zones and the `limit_req` lines that name them
+together, or neither. One shared zones file could only come from one checkout,
+and a stage ahead of it would name a zone nginx does not know, which fails
+every reload on the box. The file name is deliberately outside the server
+include's `hexgate-<stage>*.conf`, since a zone directive at `server` level is
+an error. Put every `proxy_set_header` at `server` level and none inside a
+`location`, this server's `location /` included: a `location` that sets any
+header of its own inherits none of the `server`'s. That covers
+`X-Forwarded-Proto`, `Host $host` and the WebSocket `Upgrade`/`Connection` pair
+(above). For `/mcp`, `Host $host` matters: the MCP server's `/mcp/` → `/mcp`
+redirect is built from the Host it receives (uvicorn's proxy headers correct
+the scheme, not the host), so without it the redirect points at
+`127.0.0.1:7002`.
+
+`$binary_remote_addr`, the limits' key, is the client's address only because
+nothing sits in front of this proxy; put a CDN or load balancer in front of it
+and the key becomes that hop's address, throttling every user as one.
 
 ## 4. Launch — env stacks, then wire up the proxy
 
@@ -187,7 +252,7 @@ set.
 make platform-up STAGE=prod
 # /srv/hexgate-staging
 make platform-up STAGE=staging
-# then reload the box's reverse proxy so it routes to 7000/7200 (+ /v1/traces → 7001/7201)
+# then reload the box's reverse proxy so it routes to 7000/7200 (+ /v1/traces → 7001/7201, MCP paths → 7002/7202)
 ```
 
 Bring the env stacks up before the proxy routes them, so TLS issuance doesn't
@@ -209,6 +274,15 @@ curl -sf https://app.staging.hexgate.ai/v1/health
 # unauthenticated POST); a 405 means the api's GET-only SPA catch-all did,
 # i.e. the stage's include is missing or matched nothing.
 curl -s -o /dev/null -w '%{http_code}\n' -X POST https://app.hexgate.ai/v1/traces   # → 401
+# The MCP routes: /mcp answers 401 (no token) from the MCP server, and its
+# metadata is JSON naming this hostname. A 502 means the mcp container is not
+# up (docker compose ps / logs); a 404 or 405 means the api answered, i.e. the
+# location is missing or mistyped. Run the same three against
+# app.staging.hexgate.ai: metadata naming the prod hostname there means the
+# staging server block points at prod's ports.
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://app.hexgate.ai/mcp        # → 401
+curl -s https://app.hexgate.ai/.well-known/oauth-protected-resource/mcp           # → {"resource":"https://app.hexgate.ai/mcp",…}
+curl -s https://app.hexgate.ai/.well-known/oauth-authorization-server             # → {"issuer":"https://app.hexgate.ai",…}
 ```
 
 Then prove the pipeline behind the front door. From a laptop with the repo
@@ -315,13 +389,13 @@ a long index build.
 Promote a release: tag it, `git checkout` it in the prod checkout, then the
 same `platform-stop-writers` → `platform-migrate` → `platform-up` sequence,
 plus any per-release step the migration table below names (e.g.
-`platform-backfill` for `clickhouse/0005` and `clickhouse/0006`), and the
-nginx reload at the end of the recipe. The first release that contains
-`platform/nginx/` also needs the one-time section 3 include install on that
-stage; until then its server block keeps the hand-written block, and routes
-added to `platform/nginx/` later never reach it. Rolling
-*back* past a release
-that added columns has its own step — see below.
+`platform-backfill` for `clickhouse/0005` and `clickhouse/0006`), and the nginx
+reload at the end of the recipe. The first release that contains
+`platform/nginx/` also needs the one-time section 3 install on that stage (the
+server include and the `conf.d/hexgate.conf` zones lines); until then its
+server block keeps the hand-written block, and routes added to
+`platform/nginx/` later never reach it. Rolling *back* past a release that
+added columns has its own step — see below.
 
 Upgrades reuse the env already on the box: the deploy targets only pull a
 MISSING `.env.<stage>`, never refresh an existing one. If the secret changed,
@@ -341,6 +415,20 @@ far that did this:
 | Release | Key | Value |
 |---|---|---|
 | OTLP pipeline (collector/redpanda/enricher) | `HEXGATE_OTLP_PORT` | `7001` prod, `7201` staging |
+| MCP server | `HEXGATE_MCP_PORT` | `7002` prod, `7202` staging |
+| MCP server | `HEXGATE_PUBLIC_URL` | `https://app.hexgate.ai` prod, `https://app.staging.hexgate.ai` staging — no trailing slash (the api and mcp refuse to boot with one) |
+
+The MCP server release adds its routes to `platform/nginx/` and a zones file
+per stage, which nginx needs at `http` level first. In the same upgrade, before
+the recipe's `git pull`, create `conf.d/hexgate.conf` from section 3 if the box
+does not have it (each line matches nothing until its checkout has the file),
+so no reload in between sees a `limit_req` naming a zone that is not declared;
+`nginx -t` reports one as `zero size shared memory zone "hexgate_mcp_<stage>"`.
+If that stage does not have the server include yet, install it after the pull,
+as section 3 says. If it has hand-written MCP or OAuth blocks from an earlier
+version of this page, remove them before the pull (section 3 lists them): the
+include now defines them, and duplicates fail `nginx -t`. After the reload, run
+section 4's MCP checks against both hostnames.
 
 **When a release adds a Postgres column** — `init_db()` is `create_all`, which
 creates missing tables but never adds columns to an existing one, so the schema
