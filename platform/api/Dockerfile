@@ -2,9 +2,9 @@
 # an in-repo path dep on the hexgate SDK), amd64-only (deploy arch):
 #   docker build --platform linux/amd64 -f platform/api/Dockerfile -t hexgate-api .
 # Serves the dashboard SPA same-origin (no separate edge container) — the build
-# stage below bakes platform/dashboard/dist into the image. The repo-root
-# .dockerignore excludes the dashboard source, so platform/api/Dockerfile.dockerignore
-# overrides it to keep that source in the build context.
+# stage below bakes platform/dashboard/dist into the image. The build context is
+# the allowlist in platform/api/Dockerfile.dockerignore, which BuildKit uses
+# instead of the repo-root .dockerignore.
 
 # ---- build the dashboard SPA ---------------------------------------------
 # node 20 + pnpm 9 match CI. The bundle uses relative /v1 + location.host, so
@@ -81,8 +81,9 @@ RUN INSTALLED="$(uv run --no-sync python -c 'import hexgate, os; print(os.path.d
          exit 1; fi \
     && echo 'SDK wheel matches the source in this image'
 
-# API source last so edits don't bust the deps layer.
-COPY platform/api ./
+# API source last so edits don't bust the deps layer. The package only, not
+# platform/api/: nothing else in that directory belongs in the image.
+COPY platform/api/hexgate_api ./hexgate_api
 
 # Built dashboard, served same-origin by the API (spa.mount_spa reads this path
 # via HEXGATE_DASHBOARD_DIST). Under /app so the chown below covers it.

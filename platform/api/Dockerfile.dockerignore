@@ -1,47 +1,37 @@
 # Build context is the repo ROOT. BuildKit uses this file INSTEAD of the
-# repo-root .dockerignore. It mirrors that file, with ONE difference: it does
-# NOT exclude platform/dashboard/ — the API image now builds the dashboard SPA
-# into itself (see the `dashboard` build stage). Only the dashboard's build
-# artifacts are dropped (rebuilt in-image).
+# repo-root .dockerignore. An allowlist of what the Dockerfile COPYs, so
+# nothing else in the repo — a stray .env.prod, a keystore, a local database —
+# is ever sent to the builder, let alone baked into a published image.
+*
 
-# Virtualenvs — never copy a host venv over the container's (wrong arch).
-**/.venv
+# SDK source (the hexgate wheel is built from it).
+!pyproject.toml
+!README.md
+!LICENSE
+!hexgate
 
-# Python caches + build artifacts
+# API source.
+!platform/api/pyproject.toml
+!platform/api/uv.lock
+!platform/api/hexgate_api
+
+# Dashboard build inputs (the `dashboard` stage builds the SPA in-image).
+!platform/dashboard/package.json
+!platform/dashboard/pnpm-lock.yaml
+!platform/dashboard/index.html
+!platform/dashboard/components.json
+!platform/dashboard/tsconfig*.json
+!platform/dashboard/vite.config.ts
+!platform/dashboard/public
+!platform/dashboard/src
+
+# Backstop, after the re-includes so it wins: never secrets or state, even
+# under a re-included directory. Vite inlines VITE_* from .env* files into
+# the public bundle, so a dashboard .env.local would ship to every visitor.
+**/.env*
+**/*.priv
+**/*.pem
+**/*.private
+**/*.db*
 **/__pycache__
 **/*.py[cod]
-**/*.egg-info
-**/.pytest_cache
-**/.ruff_cache
-build/
-dist/
-
-# Local databases + keystore — state/secrets, must not be baked into the image
-**/*.db*
-platform/api/data/
-
-# Env files — config is provided at runtime, not via the image
-**/.env
-
-# VCS / CI / tooling
-.git
-.github
-.gitignore
-.DS_Store
-.vscode
-.idea
-
-# Not part of the API image
-**/node_modules
-platform/clickhouse/
-docs/
-notebooks/
-_design/
-examples/
-assets/
-tests/
-platform/api/tests/
-
-# Dashboard SOURCE is kept (the API image builds it); only its artifacts go.
-platform/dashboard/dist
-platform/dashboard/.vite
