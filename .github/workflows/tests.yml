@@ -22,10 +22,10 @@ jobs:
     name: SDK (hexgate package)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           # Cache the project's deps + uv's own download cache, keyed by
           # uv.lock so a lockfile change invalidates cleanly.
@@ -74,7 +74,7 @@ jobs:
         run: uv run pytest --cov --cov-report=xml --cov-report=term tests/
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
           files: ./coverage.xml
           flags: sdk
@@ -88,10 +88,10 @@ jobs:
     name: Platform API
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           enable-cache: true
           cache-dependency-glob: "platform/api/uv.lock"
@@ -148,7 +148,7 @@ jobs:
         run: cd platform/api && uv run pytest --cov --cov-report=xml --cov-report=term tests/
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
           files: ./platform/api/coverage.xml
           flags: platform-api
@@ -159,10 +159,10 @@ jobs:
     name: MCP server
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           enable-cache: true
           cache-dependency-glob: "platform/mcp/uv.lock"
@@ -180,11 +180,26 @@ jobs:
       - name: Build the image
         run: docker build -f platform/mcp/Dockerfile .
 
+  images:
+    name: Platform images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # Same reason as the MCP image above: the publish workflow builds these
+      # on release, so a broken Dockerfile, dockerignore allowlist or base
+      # image pin has to fail the PR, not the release.
+      - name: Build the api image
+        run: docker build --platform linux/amd64 -f platform/api/Dockerfile .
+
+      - name: Build the collector image
+        run: docker build --platform linux/amd64 platform/collector
+
   nginx:
     name: nginx includes
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # The box applies these files on reload; a typo or a clashing location
       # fails here instead.
@@ -250,10 +265,10 @@ jobs:
       HEXGATE_CLICKHOUSE_USER: hexgate
       HEXGATE_CLICKHOUSE_PASSWORD: ci
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           enable-cache: true
           cache-dependency-glob: "platform/api/uv.lock"
@@ -286,16 +301,16 @@ jobs:
       run:
         working-directory: platform/dashboard
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           # The exact version package.json's packageManager pins.
           package_json_file: platform/dashboard/package.json
 
       - name: Set up Node 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -320,7 +335,7 @@ jobs:
         run: pnpm test:coverage
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
           files: ./platform/dashboard/coverage/lcov.info
           flags: dashboard
