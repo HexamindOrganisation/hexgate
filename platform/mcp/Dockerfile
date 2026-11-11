@@ -2,8 +2,23 @@
 # context (platform/mcp/Dockerfile.dockerignore keeps it), for linux/amd64 (the
 # box) and linux/arm64 (published images):
 #   docker build --platform linux/amd64 -f platform/mcp/Dockerfile -t hexgate-mcp .
-# Pinned by digest (tag kept for readability); Dependabot proposes the bumps.
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim@sha256:531f855bda2c73cd6ef67d56b733b357cea384185b3022bd09f05e002cd144ca
+# Images pinned by digest (tag kept for readability); Dependabot proposes the
+# bumps.
+
+# The uv binary only, for the image below.
+FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
+
+# The official Python image, not uv's python image: it is rebuilt with each
+# Debian point release, where uv's lagged and shipped fixable openssl/gnutls
+# CVEs. Same base as platform/api/Dockerfile.
+FROM python:3.13-slim-bookworm@sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72
+
+COPY --from=uv /uv /usr/local/bin/uv
+# uv runs on this interpreter and never downloads its own. pip and setuptools
+# come with the image but nothing here uses them (uv installs everything), and
+# their vendored copies carry their own CVEs: removed.
+ENV UV_PYTHON_DOWNLOADS=never
+RUN python -m pip uninstall -y -q pip setuptools wheel
 
 WORKDIR /app
 

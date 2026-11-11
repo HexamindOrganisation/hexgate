@@ -19,8 +19,8 @@ name: docker-publish
 # PyPI instead of after.
 #
 # Two checkouts per job: the workflow's own commit (ci/), for the build-and-
-# scan action and .trivyignore, and the source being built (src/). So a
-# finding can be accepted in .trivyignore on main for a tag that already
+# scan action and .trivyignore.yaml, and the source being built (src/). So a
+# finding can be accepted in .trivyignore.yaml on main for a tag that already
 # exists.
 #
 # ----------------------------------------------------------------------
@@ -154,7 +154,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           dockerfile: ${{ matrix.dockerfile }}
-          ignorefile: ci/.trivyignore
+          ignorefile: ci/.trivyignore.yaml
 
   publish:
     name: ${{ matrix.image }}

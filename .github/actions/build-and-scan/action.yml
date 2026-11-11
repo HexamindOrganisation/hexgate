@@ -54,7 +54,8 @@ runs:
     # Trivy from its image pinned by digest, not trivy-action, whose tags were
     # hijacked in 2026. It reads the saved tar: no Docker socket is mounted
     # into it. Fails on HIGH/CRITICAL findings that have a fix; accept one
-    # deliberately by listing it in .trivyignore with a reason.
+    # deliberately by listing it in .trivyignore.yaml with a reason, a path
+    # scope and an expiry.
     - name: Scan
       shell: bash
       env:
@@ -63,8 +64,10 @@ runs:
         mounts=()
         flags=()
         if [ -n "$IGNOREFILE" ] && [ -f "$IGNOREFILE" ]; then
-          mounts+=(-v "$(realpath "$IGNOREFILE"):/trivyignore:ro")
-          flags+=(--ignorefile /trivyignore)
+          # Same file name inside: Trivy reads the format from the extension.
+          name=$(basename "$IGNOREFILE")
+          mounts+=(-v "$(realpath "$IGNOREFILE"):/ignore/$name:ro")
+          flags+=(--ignorefile "/ignore/$name")
         fi
         for arch in amd64 arm64; do
           echo "::group::linux/$arch"
