@@ -7,6 +7,7 @@ import { formatAbsolute, formatRelative } from "@/components/bans/format";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
 import { ApiError, oauthGrantsApi, type OAuthGrant } from "@/lib/api";
 
 const GRANTS_KEY = ["oauth-grants"] as const;
@@ -68,61 +69,70 @@ function GrantRow({
   onRevoke: () => void;
 }) {
   return (
-    <li className="space-y-3 px-5 py-4">
-      <div className="flex items-start justify-between gap-4">
-        {/* The client writes its own name: however long, it wraps rather
-            than push Revoke out of the card. */}
-        <div className="min-w-0 break-words">
-          <div className="text-sm font-medium">{grant.client_name}</div>
-          <div className="font-mono text-xs text-muted-foreground">
-            {clientHost(grant.client_id)}
+    <li className="flex items-start gap-3 px-4 py-4">
+      <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary/15 text-xs font-semibold uppercase text-primary">
+        {/* Its own name, untrusted: first real character, not code unit. */}
+        {Array.from(grant.client_name.trim())[0] ?? "·"}
+      </span>
+      <div className="min-w-0 flex-1 space-y-2.5">
+        <div className="flex items-start justify-between gap-4">
+          {/* The client writes its own name: however long, it wraps rather
+              than push Revoke out of the card. */}
+          <div className="min-w-0 break-words">
+            <div className="text-sm font-medium">{grant.client_name}</div>
+            <div className="font-mono text-xs text-muted-foreground">
+              {clientHost(grant.client_id)}
+            </div>
           </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="shrink-0 gap-1.5 text-xs text-deny hover:bg-deny/10 hover:text-deny"
+            onClick={onRevoke}
+          >
+            <Trash2 className="size-3.5" />
+            Revoke
+          </Button>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="shrink-0 gap-1.5 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
-          onClick={onRevoke}
-        >
-          <Trash2 className="size-3.5" />
-          Revoke
-        </Button>
-      </div>
-
-      <ul className="list-disc space-y-0.5 pl-5 text-sm text-muted-foreground">
-        {grant.scopes.map((s) => (
-          <li key={s.name} title={s.name}>
-            {s.description}
-          </li>
-        ))}
-      </ul>
-
-      <div className="flex flex-wrap items-center gap-1.5">
-        <FolderGit2 className="size-3.5 text-muted-foreground" />
-        {grant.projects.length === 0 ? (
-          <span className="text-xs text-muted-foreground">
-            No projects left: every project it covered was deleted.
+        <ul className="space-y-0.5 text-sm text-muted-foreground">
+          {grant.scopes.map((s) => (
+            <li key={s.name} title={s.name} className="flex items-start gap-2">
+              <span className="mt-2 size-1 shrink-0 rounded-full bg-muted-foreground/50" />
+              {s.description}
+            </li>
+          ))}
+        </ul>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <FolderGit2 className="size-3.5 text-muted-foreground" />
+          {grant.projects.length === 0 ? (
+            <span className="text-xs text-muted-foreground">
+              No projects left: every project it covered was deleted.
+            </span>
+          ) : (
+            grant.projects.map((p) => (
+              <Badge
+                key={p.id}
+                variant="outline"
+                className="font-mono text-[11px] font-normal"
+                title={p.id}
+              >
+                {p.org_name} / {p.name}
+              </Badge>
+            ))
+          )}
+        </div>
+        <div className="text-meta text-muted-foreground">
+          <span title={formatAbsolute(grant.created_at)}>
+            Connected {formatRelative(grant.created_at)}
           </span>
-        ) : (
-          grant.projects.map((p) => (
-            <Badge key={p.id} title={p.id}>
-              {p.org_name} / {p.name}
-            </Badge>
-          ))
-        )}
-      </div>
-
-      <div className="text-xs text-muted-foreground">
-        <span title={formatAbsolute(grant.created_at)}>
-          Connected {formatRelative(grant.created_at)}
-        </span>
-        {/* Set when the client renews its access, not on every call it
-            makes, so nothing is claimed about use before the first one. */}
-        {grant.last_used_at && (
-          <span title={formatAbsolute(grant.last_used_at)}>
-            {" · "}Access last renewed {formatRelative(grant.last_used_at)}
-          </span>
-        )}
+          {/* Set when the client renews its access, not on every call it
+              makes, so nothing is claimed about use before the first one. */}
+          {grant.last_used_at && (
+            <span title={formatAbsolute(grant.last_used_at)}>
+              {" · "}Access last renewed {formatRelative(grant.last_used_at)}
+            </span>
+          )}
+        </div>
       </div>
     </li>
   );
@@ -163,21 +173,21 @@ export function ConnectedAppsPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-5">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Connected apps
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          AI clients you have let act for you, and the projects each one can
-          reach. Revoke one to log it out.
-        </p>
-      </header>
+      <PageHeader
+        title="Connected apps"
+        description="AI clients you have let act for you, and the projects each one can reach. Revoke one to log it out."
+      />
 
-      <div className="overflow-hidden rounded-lg border border-border bg-card">
+      <section className="overflow-hidden rounded-xl border border-border bg-card">
+        <div className="border-b border-border px-4 py-3">
+          <h2 className="text-sm font-semibold">
+            Apps{grantsQuery.data ? ` (${grants.length})` : ""}
+          </h2>
+        </div>
         {/* A refetch failed after a list loaded: keep that list, which is
             still what the user acts on, and say it may be stale. */}
         {grantsQuery.isRefetchError && (
-          <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-2.5 text-xs text-destructive">
+          <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5 text-xs text-deny">
             Could not refresh; showing the last loaded list.
             <Button
               variant="outline"
@@ -194,9 +204,7 @@ export function ConnectedAppsPage() {
           </div>
         ) : grantsQuery.isLoadingError ? (
           <div className="flex flex-col items-center gap-3 p-12 text-center text-sm">
-            <div className="text-destructive">
-              Could not load your connected apps.
-            </div>
+            <div className="text-deny">Could not load your connected apps.</div>
             <Button variant="outline" onClick={() => grantsQuery.refetch()}>
               Try again
             </Button>
@@ -221,7 +229,7 @@ export function ConnectedAppsPage() {
             ))}
           </ul>
         )}
-      </div>
+      </section>
 
       <ConfirmDialog
         open={!!confirmRevoke}

@@ -6,17 +6,10 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
-import { ShieldCheck } from "lucide-react";
+import { Check } from "lucide-react";
 
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { AuthShell } from "@/components/auth/AuthShell";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { oauthApi, UnauthenticatedError, type ConsentInfo } from "@/lib/api";
 import { USER_QUERY_KEY } from "@/lib/auth";
 import {
@@ -26,7 +19,6 @@ import {
   leaveFor,
   redirectUri,
 } from "@/lib/oauth_consent";
-import { AuthCardLayout } from "@/routes/SignIn";
 
 /**
  * Where an MCP client's login lands: the user sees which app asks for which
@@ -45,34 +37,22 @@ export function OAuthConsentPage() {
   useSignInAgainOn(info.error);
   const problem = blockingProblem(info, search);
 
+  if (problem) {
+    return (
+      <AuthShell
+        tone="error"
+        title="Can't authorize this request"
+        description={<span role="alert">{problem}</span>}
+      />
+    );
+  }
+  if (!info.isSuccess) {
+    return <AuthShell tone="muted" title="Checking this request…" />;
+  }
   return (
-    <AuthCardLayout>
-      <Card className="w-full max-w-lg">
-        <CardHeader className="space-y-1">
-          <div className="mb-2 flex justify-center">
-            <ShieldCheck className="h-8 w-8 text-primary" />
-          </div>
-          <CardTitle className="text-center">
-            Authorize access to Hexgate
-          </CardTitle>
-        </CardHeader>
-        {info.isPending && (
-          <CardContent className="text-sm text-muted-foreground">
-            Loading…
-          </CardContent>
-        )}
-        {problem && (
-          <CardContent>
-            <Alert variant="destructive">
-              <AlertDescription>{problem}</AlertDescription>
-            </Alert>
-          </CardContent>
-        )}
-        {info.isSuccess && !problem && (
-          <ConsentForm info={info.data} search={search} />
-        )}
-      </Card>
-    </AuthCardLayout>
+    <AuthShell wide title="Authorize access to Hexgate">
+      <ConsentForm info={info.data} search={search} />
+    </AuthShell>
   );
 }
 
@@ -127,58 +107,71 @@ function ConsentForm({ info, search }: { info: ConsentInfo; search: string }) {
   }
 
   return (
-    <>
-      <CardContent className="space-y-5">
-        <ClientIdentity info={info} />
-        <section className="space-y-2">
-          <h2 className="text-sm font-medium">It asks to</h2>
-          <ul className="space-y-1 text-sm">
-            {info.scopes.map((scope) => (
-              <li key={scope.name}>
+    <div className="space-y-5">
+      <ClientIdentity info={info} />
+      <section className="space-y-2">
+        <h2 className="text-meta font-medium uppercase tracking-wider text-muted-foreground">
+          It asks to
+        </h2>
+        <ul className="space-y-1.5 text-sm">
+          {info.scopes.map((scope) => (
+            <li key={scope.name} className="flex items-start gap-2">
+              <Check
+                aria-hidden
+                className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+              />
+              <span>
                 {scope.description}{" "}
-                <code className="text-xs text-muted-foreground">
+                <code className="rounded bg-muted px-1 font-mono text-[11px] text-muted-foreground">
                   {scope.name}
                 </code>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </section>
+      <section className="space-y-2">
+        <h2 className="text-meta font-medium uppercase tracking-wider text-muted-foreground">
+          On these projects only
+        </h2>
+        {info.projects.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            You have no projects yet, so there is nothing to give access to.
+            Create one in the dashboard, then start the login again from the
+            application.
+          </p>
+        ) : (
+          <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border">
+            {info.projects.map((project) => (
+              <li key={project.id}>
+                <label className="flex cursor-pointer items-center gap-2.5 px-3 py-2 text-sm hover:bg-accent/50">
+                  <input
+                    type="checkbox"
+                    className="size-4 shrink-0 accent-action"
+                    checked={ticked.has(project.id)}
+                    onChange={() => toggle(project.id)}
+                  />
+                  <span className="min-w-0 break-words">
+                    <span className="text-muted-foreground">
+                      {project.org_name} /
+                    </span>{" "}
+                    <span className="font-medium">{project.name}</span>
+                  </span>
+                </label>
               </li>
             ))}
           </ul>
-        </section>
-        <section className="space-y-2">
-          <h2 className="text-sm font-medium">On these projects only</h2>
-          {info.projects.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              You have no projects yet, so there is nothing to give access to.
-              Create one in the dashboard, then start the login again from the
-              application.
-            </p>
-          ) : (
-            <ul className="space-y-1 text-sm">
-              {info.projects.map((project) => (
-                <li key={project.id}>
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={ticked.has(project.id)}
-                      onChange={() => toggle(project.id)}
-                    />
-                    <span className="text-muted-foreground">
-                      {project.org_name} /
-                    </span>
-                    {project.name}
-                  </label>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-        {approve.isError &&
-          !(approve.error instanceof UnauthenticatedError) && (
-            <Alert variant="destructive">
-              <AlertDescription>{approve.error.message}</AlertDescription>
-            </Alert>
-          )}
-      </CardContent>
-      <CardFooter className="justify-end gap-2">
+        )}
+      </section>
+      {approve.isError && !(approve.error instanceof UnauthenticatedError) && (
+        <p
+          role="alert"
+          className="rounded-lg border border-deny/30 bg-deny/10 px-3 py-2 text-sm text-deny"
+        >
+          {approve.error.message}
+        </p>
+      )}
+      <div className="grid grid-cols-2 gap-2">
         <Button
           variant="outline"
           disabled={approve.isPending || approve.isSuccess}
@@ -192,8 +185,8 @@ function ConsentForm({ info, search }: { info: ConsentInfo; search: string }) {
         >
           Approve
         </Button>
-      </CardFooter>
-    </>
+      </div>
+    </div>
   );
 }
 
@@ -201,7 +194,7 @@ function ConsentForm({ info, search }: { info: ConsentInfo; search: string }) {
  * server derived from its URLs are shown beside it, as the facts. */
 function ClientIdentity({ info }: { info: ConsentInfo }) {
   return (
-    <div className="space-y-2 text-sm text-muted-foreground">
+    <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
       <p>
         An application calling itself{" "}
         <strong className="text-foreground">
@@ -211,11 +204,11 @@ function ClientIdentity({ info }: { info: ConsentInfo }) {
       </p>
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
         <dt>Published by</dt>
-        <dd className="font-mono font-semibold text-foreground">
+        <dd className="min-w-0 break-all font-mono font-semibold text-foreground">
           {info.client_host}
         </dd>
         <dt>Sends you back to</dt>
-        <dd className="font-mono font-semibold text-foreground">
+        <dd className="min-w-0 break-all font-mono font-semibold text-foreground">
           {info.redirect_host}
         </dd>
       </dl>

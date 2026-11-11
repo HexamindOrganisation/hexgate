@@ -39,6 +39,7 @@ export function AuthShell({
   children,
   footer,
   card = true,
+  wide = false,
 }: {
   tone?: Tone;
   /** Override the tone's default glyph (e.g. a mail icon on success). */
@@ -50,12 +51,14 @@ export function AuthShell({
   footer?: React.ReactNode;
   /** Wrap `children` in the card (default). Off for a bare CTA. */
   card?: boolean;
+  /** A wider column, for a denser card (the OAuth consent). */
+  wide?: boolean;
 }) {
   const mark = MARK[tone];
   const Icon = icon ?? mark.icon;
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
-      <div className="w-full max-w-sm">
+      <div className={cn("w-full", wide ? "max-w-md" : "max-w-sm")}>
         <div className="mb-6 flex flex-col items-center gap-4 text-center">
           <span className={cn("grid size-11 place-items-center", mark.box)}>
             <Icon

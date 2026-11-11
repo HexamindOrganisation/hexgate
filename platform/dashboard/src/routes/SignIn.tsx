@@ -130,13 +130,3 @@ export function SignInPage() {
     </AuthShell>
   );
 }
-
-/** The pre-redesign centred layout, kept for the OAuth consent page until it
- * moves onto AuthShell. */
-export function AuthCardLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
-      {children}
-    </div>
-  );
-}
