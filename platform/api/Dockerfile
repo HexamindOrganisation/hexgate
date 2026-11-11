@@ -91,19 +91,27 @@ RUN INSTALLED="$(uv run --no-sync python -c 'import hexgate, os; print(os.path.d
 COPY platform/api/hexgate_api ./hexgate_api
 
 # Built dashboard, served same-origin by the API (spa.mount_spa reads this path
-# via HEXGATE_DASHBOARD_DIST). Under /app so the chown below covers it.
+# via HEXGATE_DASHBOARD_DIST).
 COPY --from=dashboard /app/dist /app/static
 ENV HEXGATE_DASHBOARD_DIST=/app/static
 
 # Drop root: a compromised API process must not run as uid 0 with write access
-# to the /keys signing-key volume. The named hexgate-keys volume inherits the
-# ownership of /keys from the image on first mount, so create it pre-owned by
-# the unprivileged user. HOME=/app (owned below) keeps uv's cache writable.
-ENV HOME=/app
+# to the /keys signing-key volume. Everything under /app (source, venv, SPA)
+# stays root-owned, so it cannot rewrite the code it runs either. It writes
+# only to:
+#   /keys  the keystore. The named hexgate-keys volume inherits the ownership
+#          of /keys from the image on first mount, so create it pre-owned.
+#   /data  the SQLite fallback, used only when no Postgres is configured.
+#   HOME   uv's and fontconfig's caches.
 RUN groupadd --gid 10001 hexgate \
-    && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /app hexgate \
-    && mkdir -p /keys \
-    && chown -R hexgate:hexgate /app /keys
+    && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/hexgate hexgate \
+    && mkdir -p /keys /data \
+    && chown hexgate:hexgate /keys /data
+# HOME only now: set before the RUN above, root steps could leave root-owned
+# dirs in it (Docker Desktop's amd64 emulation writes ~/.cache/rosetta).
+ENV HOME=/home/hexgate \
+    HEXGATE_KEYSTORE_PATH=/keys \
+    HEXGATE_SQLITE_PATH=/data/hexgate.db
 USER hexgate
 
 EXPOSE 8000

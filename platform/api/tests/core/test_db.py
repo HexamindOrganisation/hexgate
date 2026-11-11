@@ -19,6 +19,7 @@ _PG_VARS = (
     "HEXGATE_POSTGRES_HOST",
     "HEXGATE_POSTGRES_PORT",
     "HEXGATE_POSTGRES_DB",
+    "HEXGATE_SQLITE_PATH",
 )
 
 
@@ -29,7 +30,22 @@ def _clear(monkeypatch) -> None:
 
 def test_falls_back_to_sqlite_when_nothing_set(monkeypatch) -> None:
     _clear(monkeypatch)
-    assert db._database_url().startswith("sqlite+aiosqlite:///")
+    assert db._database_url() == f"sqlite+aiosqlite:///{db.DB_PATH}"
+
+
+def test_sqlite_path_env_moves_the_fallback(monkeypatch) -> None:
+    _clear(monkeypatch)
+    monkeypatch.setenv("HEXGATE_SQLITE_PATH", "/data/hexgate.db")
+    assert db._database_url() == "sqlite+aiosqlite:////data/hexgate.db"
+
+
+def test_sqlite_path_env_never_overrides_postgres(monkeypatch) -> None:
+    # The image sets HEXGATE_SQLITE_PATH unconditionally; a deploy that
+    # supplies Postgres must still get Postgres.
+    _clear(monkeypatch)
+    monkeypatch.setenv("HEXGATE_SQLITE_PATH", "/data/hexgate.db")
+    monkeypatch.setenv("HEXGATE_POSTGRES_PASSWORD", "plainpw")
+    assert db._database_url().startswith("postgresql+asyncpg://")
 
 
 def test_explicit_database_url_rewrites_to_asyncpg(monkeypatch) -> None:

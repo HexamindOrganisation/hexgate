@@ -20,11 +20,12 @@ COPY platform/mcp/hexgate_mcp ./hexgate_mcp
 COPY docs/policy/ ./docs/policy/
 RUN ls docs/policy/*.mdx > /dev/null
 
-# Drop root. HOME=/app (owned below) keeps uv's cache writable.
-ENV HOME=/app
+# Drop root. /app stays root-owned, so a compromised process cannot rewrite the
+# code it runs; its own HOME keeps uv's cache writable. HOME is set after the
+# RUN, so no root step can leave a root-owned dir in it.
 RUN groupadd --gid 10001 hexgate \
-    && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /app hexgate \
-    && chown -R hexgate:hexgate /app
+    && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/hexgate hexgate
+ENV HOME=/home/hexgate
 USER hexgate
 
 EXPOSE 8080
