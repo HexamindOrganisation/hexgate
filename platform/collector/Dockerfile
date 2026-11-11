@@ -8,7 +8,7 @@
 # (tag kept for readability); Dependabot proposes the bumps.
 # Runs on the BUILD platform and cross-compiles for the target (Go needs no
 # emulation for that), so a multi-arch build compiles natively.
-FROM --platform=$BUILDPLATFORM golang:1.25-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-bookworm@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0 AS build
 ARG TARGETOS TARGETARCH
 
 WORKDIR /src
