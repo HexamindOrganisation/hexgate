@@ -99,18 +99,36 @@ jobs:
         id: rev
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # Emulation for the arm64 half of the build. Only the final stages need
+      # it: the dashboard bundle and the Go compile run on the build platform
+      # (see the Dockerfiles). One job builds both architectures, so the push
+      # needs one approval and yields one multi-arch digest.
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+        with:
+          platforms: arm64
+
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
+      # One single-platform archive per architecture: given a multi-arch
+      # image, Trivy scans only its first platform and ignores --platform.
       # No cache-from/cache-to: a cache shared with PR builds could be
-      # poisoned by a PR. The push build below reuses this one's layers from
-      # the job's own builder.
-      - name: Build for the scan
+      # poisoned by a PR. The push build below reuses these builds' layers
+      # from the job's own builder.
+      - name: Build amd64 for the scan
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
-          outputs: type=docker,dest=${{ runner.temp }}/image.tar
+          outputs: type=docker,dest=${{ runner.temp }}/image-amd64.tar
+
+      - name: Build arm64 for the scan
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/arm64
+          outputs: type=docker,dest=${{ runner.temp }}/image-arm64.tar
 
       # Trivy from its image pinned by digest, not trivy-action, whose tags
       # were hijacked in 2026. It reads the saved tar: no Docker socket is
@@ -118,17 +136,22 @@ jobs:
       # accept one deliberately by listing it in .trivyignore with a reason.
       - name: Scan
         run: |
-          mounts=(-v "$RUNNER_TEMP/image.tar:/image.tar:ro")
+          mounts=()
           flags=()
           if [ -f .trivyignore ]; then
             mounts+=(-v "$PWD/.trivyignore:/trivyignore:ro")
             flags+=(--ignorefile /trivyignore)
           fi
-          docker run --rm "${mounts[@]}" \
-            aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c \
-            image --input /image.tar --scanners vuln \
-            --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
-            "${flags[@]}"
+          for arch in amd64 arm64; do
+            echo "::group::linux/$arch"
+            docker run --rm "${mounts[@]}" \
+              -v "$RUNNER_TEMP/image-$arch.tar:/image.tar:ro" \
+              aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c \
+              image --input /image.tar --scanners vuln \
+              --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+              "${flags[@]}"
+            echo "::endgroup::"
+          done
 
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
@@ -150,7 +173,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: true
           provenance: mode=max
           sbom: true
@@ -171,13 +194,15 @@ jobs:
 
       # Keyless: the signature binds the digest to this workflow's identity,
       # which `cosign verify` checks (DEPLOY.md). Signatures live beside the
-      # image in each registry, so sign it in both.
+      # image in each registry, so sign it in both. The digest is the
+      # multi-arch index; --recursive also signs each platform's manifest,
+      # so a digest pinned to one architecture verifies too.
       - name: Sign
         env:
           IMAGE: ${{ steps.meta.outputs.image }}
           HUB: ${{ steps.meta.outputs.hub }}
           DIGEST: ${{ steps.push.outputs.digest }}
-        run: cosign sign --yes "$IMAGE@$DIGEST" "$HUB@$DIGEST"
+        run: cosign sign --yes --recursive "$IMAGE@$DIGEST" "$HUB@$DIGEST"
 
       - name: Summary
         env:

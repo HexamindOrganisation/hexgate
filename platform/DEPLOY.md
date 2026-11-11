@@ -42,10 +42,11 @@ bindings in the compose to publish on a shared Docker network or a
 non-loopback port instead (republishing only the api leaves every
 `/v1/traces` POST and every MCP call 502ing while `/v1/*` works).
 
-Images build **on the box** — the box pulls nothing from a registry. amd64
-throughout (the API bundles the amd64-only OPA binary; the image also runs a
+Images build **on the box** — the box pulls nothing from a registry. The box is
+amd64, and the compose pins `platform: linux/amd64` (the API image also runs a
 Node build stage to bundle the dashboard SPA). Releases also publish the same
-images to GHCR for self-hosters: see [Published images](#published-images).
+images, for amd64 and arm64, to GHCR and Docker Hub for self-hosters: see
+[Published images](#published-images).
 
 ## 1. DNS
 
@@ -700,9 +701,12 @@ both), through `.github/workflows/docker-publish.yml` behind the
 `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets; GHCR needs none. To (re)publish an existing
 tag by hand, dispatch that workflow from `main` with the tag.
 
-Each image is built from the tag, scanned (the publish fails on a fixable
-HIGH/CRITICAL finding unless `.trivyignore` lists it), pushed with SBOM and
-provenance attestations, and signed with cosign. Tags are the version
+Each image is built from the tag for `linux/amd64` and `linux/arm64`, each
+architecture scanned (the publish fails on a fixable HIGH/CRITICAL finding
+unless `.trivyignore` lists it), pushed as one multi-arch image with SBOM and
+provenance attestations, and signed with cosign (the multi-arch digest and each
+architecture's). Docker picks the host's architecture on pull. To run them with
+the deploy compose on an arm64 host, drop its `platform: linux/amd64` pins. Tags are the version
 (`0.3.4`) and the commit (`sha-<commit>`); there is no `latest`. Pull by
 digest, after checking the signature:
 

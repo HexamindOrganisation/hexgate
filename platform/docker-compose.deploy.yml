@@ -75,7 +75,8 @@ services:
         # --env-file the Makefile passes (.env.<env>), NOT the service env_file
         # below. Unset → empty → banner off.
         VITE_PREVIEW_BANNER: ${VITE_PREVIEW_BANNER:-}
-    # amd64: the API image bundles the amd64-only OPA binary.
+    # amd64: the box's architecture. The images also build for arm64 (the
+    # published ones are multi-arch); drop these pins to run on an arm64 host.
     platform: linux/amd64
     restart: unless-stopped
     ports:

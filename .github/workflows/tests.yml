@@ -175,25 +175,32 @@ jobs:
       - name: Lint, format check and tests
         run: make mcp-check
 
-      # Nothing else builds the image before the box does, so a broken
-      # Dockerfile or dockerignore (and its docs/policy check) fails here.
-      - name: Build the image
-        run: docker build -f platform/mcp/Dockerfile .
-
   images:
-    name: Platform images
-    runs-on: ubuntu-latest
+    name: Platform images (${{ matrix.arch }})
+    # Natively on each architecture the publish workflow ships: a broken
+    # Dockerfile, dockerignore allowlist, base image pin or per-arch OPA
+    # checksum (and the mcp image's docs/policy check) has to fail the PR,
+    # not the release.
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      # Same reason as the MCP image above: the publish workflow builds these
-      # on release, so a broken Dockerfile, dockerignore allowlist or base
-      # image pin has to fail the PR, not the release.
       - name: Build the api image
-        run: docker build --platform linux/amd64 -f platform/api/Dockerfile .
+        run: docker build --platform "linux/${{ matrix.arch }}" -f platform/api/Dockerfile .
+
+      - name: Build the mcp image
+        run: docker build --platform "linux/${{ matrix.arch }}" -f platform/mcp/Dockerfile .
 
       - name: Build the collector image
-        run: docker build --platform linux/amd64 platform/collector
+        run: docker build --platform "linux/${{ matrix.arch }}" platform/collector
 
   nginx:
     name: nginx includes

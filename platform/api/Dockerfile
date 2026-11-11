@@ -1,19 +1,23 @@
 # Hexgate control-plane API image. Build from the REPO ROOT (platform/api has
-# an in-repo path dep on the hexgate SDK), amd64-only (deploy arch):
+# an in-repo path dep on the hexgate SDK), for linux/amd64 (the box) and
+# linux/arm64 (published images):
 #   docker build --platform linux/amd64 -f platform/api/Dockerfile -t hexgate-api .
 # Serves the dashboard SPA same-origin (no separate edge container) — the build
 # stage below bakes platform/dashboard/dist into the image. The build context is
 # the allowlist in platform/api/Dockerfile.dockerignore, which BuildKit uses
 # instead of the repo-root .dockerignore.
+ARG TARGETARCH
 
 # ---- build the dashboard SPA ---------------------------------------------
 # node 22 matches CI; pnpm is the exact version package.json's packageManager
 # pins, hash included, so corepack refuses a tampered download. The bundle uses
 # relative /v1 + location.host, so one build is domain-agnostic and served
-# same-origin by the API below.
+# same-origin by the API below. It is static files, the same for every target
+# architecture, so it builds on the BUILD platform: a multi-arch build runs it
+# once, natively, instead of again under emulation.
 # Base images are pinned by digest (tag kept for readability), so a re-pushed
 # tag can't change what we publish; Dependabot proposes the bumps.
-FROM node:22-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS dashboard
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS dashboard
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 RUN corepack enable
@@ -31,15 +35,25 @@ ARG VITE_PREVIEW_BANNER=
 ENV VITE_PREVIEW_BANNER=$VITE_PREVIEW_BANNER
 RUN pnpm build
 
+# ---- OPA, one stage per architecture --------------------------------------
+# The control plane shells out to it to sign policy bundles. Match CI. Each
+# binary is pinned by the SHA256 OPA publishes beside it (e.g.
+# https://openpolicyagent.org/downloads/v1.21.4/opa_linux_arm64_static.sha256),
+# so a corrupted/tampered/MITM'd download fails the build: this binary signs
+# production policy bundles. Update both checksums with the version.
+FROM scratch AS opa-amd64
+ADD --checksum=sha256:2ab571f367f293bb19523b76f92f1945bbf245003392c7f392903f95c2b9b630 \
+    https://openpolicyagent.org/downloads/v1.21.4/opa_linux_amd64_static /opa
+FROM scratch AS opa-arm64
+ADD --checksum=sha256:810aa96e44f1f852d044888cf830324e44eafd0f510345339011347ab4deaab1 \
+    https://openpolicyagent.org/downloads/v1.21.4/opa_linux_arm64_static /opa
+FROM opa-${TARGETARCH} AS opa
+
 # ---- control-plane API ---------------------------------------------------
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim@sha256:531f855bda2c73cd6ef67d56b733b357cea384185b3022bd09f05e002cd144ca
 
-# OPA: the control plane shells out to it to sign policy bundles. Match CI.
-# Pin by SHA256 so a corrupted/tampered/MITM'd download fails the build (this
-# binary signs production policy bundles). Update the checksum with the version.
-ADD --checksum=sha256:2ab571f367f293bb19523b76f92f1945bbf245003392c7f392903f95c2b9b630 \
-    https://openpolicyagent.org/downloads/v1.21.4/opa_linux_amd64_static /usr/local/bin/opa
-RUN chmod +x /usr/local/bin/opa && opa version
+COPY --from=opa --chmod=755 /opa /usr/local/bin/opa
+RUN opa version
 
 # WeasyPrint's native stack: the AI Act evidence report renders through it.
 # Pango does the text layout, so it and its font machinery are runtime
