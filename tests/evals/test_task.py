@@ -465,10 +465,10 @@ def test_the_running_sandbox_reaches_only_anthropic_through_the_proxy() -> None:
 def test_sandbox_image_installs_opa_per_architecture_before_dropping_root() -> None:
     dockerfile = task.COMPOSE.with_name("Dockerfile").read_text()
     for arch, sha in [
-        ("amd64", "00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084"),
-        ("arm64", "48061407a2d7b0b59440fc3a257e7bb251e9ec62f6ce7b1e45c142263ae24413"),
+        ("amd64", "2ab571f367f293bb19523b76f92f1945bbf245003392c7f392903f95c2b9b630"),
+        ("arm64", "810aa96e44f1f852d044888cf830324e44eafd0f510345339011347ab4deaab1"),
     ]:
-        url = f"https://openpolicyagent.org/downloads/v0.70.0/opa_linux_{arch}_static"
+        url = f"https://openpolicyagent.org/downloads/v1.21.4/opa_linux_{arch}_static"
         assert f"--checksum=sha256:{sha} \\\n    {url} /opa" in dockerfile
     assert "FROM opa-${TARGETARCH}" in dockerfile
     assert dockerfile.index("/usr/local/bin/opa") < dockerfile.index("\nUSER ")
