@@ -2,7 +2,8 @@
 # context (platform/mcp/Dockerfile.dockerignore keeps it), amd64-only (deploy
 # arch):
 #   docker build --platform linux/amd64 -f platform/mcp/Dockerfile -t hexgate-mcp .
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+# Pinned by digest (tag kept for readability); Dependabot proposes the bumps.
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim@sha256:531f855bda2c73cd6ef67d56b733b357cea384185b3022bd09f05e002cd144ca
 
 WORKDIR /app
 

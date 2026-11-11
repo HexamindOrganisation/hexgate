@@ -4,8 +4,9 @@
 # output (`make collector-generate`), so this is a plain `go build` — no
 # builder tool at image-build time.
 
-# Match go.mod's directive; bump together.
-FROM golang:1.25-bookworm AS build
+# Match go.mod's directive; bump together. Base images are pinned by digest
+# (tag kept for readability); Dependabot proposes the bumps.
+FROM golang:1.25-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 AS build
 
 WORKDIR /src
 
@@ -39,7 +40,7 @@ RUN /out/hexgate-collector validate --config=config.yaml
 # Slim-not-distroless on purpose: the compose healthcheck is a bash /dev/tcp
 # probe (the ocb manifest builds no health extension into the collector, so
 # there is no HTTP endpoint to hit).
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 
 COPY --from=build /out/hexgate-collector /usr/local/bin/hexgate-collector
 # The image ships the same config.yaml dev runs; every deploy-varying value in

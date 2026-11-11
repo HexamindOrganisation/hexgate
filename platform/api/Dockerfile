@@ -7,15 +7,20 @@
 # instead of the repo-root .dockerignore.
 
 # ---- build the dashboard SPA ---------------------------------------------
-# node 20 + pnpm 9 match CI. The bundle uses relative /v1 + location.host, so
-# one build is domain-agnostic and served same-origin by the API below.
-FROM node:20-bookworm-slim AS dashboard
+# node 22 matches CI; pnpm is the exact version package.json's packageManager
+# pins, hash included, so corepack refuses a tampered download. The bundle uses
+# relative /v1 + location.host, so one build is domain-agnostic and served
+# same-origin by the API below.
+# Base images are pinned by digest (tag kept for readability), so a re-pushed
+# tag can't change what we publish; Dependabot proposes the bumps.
+FROM node:22-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS dashboard
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
-RUN corepack enable && corepack prepare pnpm@9 --activate
+RUN corepack enable
 WORKDIR /app
 # Manifest + lock first so the dep layer caches independently of source.
 COPY platform/dashboard/package.json platform/dashboard/pnpm-lock.yaml ./
+RUN corepack install
 RUN --mount=type=cache,target=/pnpm/store \
     pnpm install --frozen-lockfile
 COPY platform/dashboard/ ./
@@ -27,13 +32,13 @@ ENV VITE_PREVIEW_BANNER=$VITE_PREVIEW_BANNER
 RUN pnpm build
 
 # ---- control-plane API ---------------------------------------------------
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim@sha256:531f855bda2c73cd6ef67d56b733b357cea384185b3022bd09f05e002cd144ca
 
 # OPA: the control plane shells out to it to sign policy bundles. Match CI.
 # Pin by SHA256 so a corrupted/tampered/MITM'd download fails the build (this
 # binary signs production policy bundles). Update the checksum with the version.
-ADD --checksum=sha256:00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084 \
-    https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static /usr/local/bin/opa
+ADD --checksum=sha256:2ab571f367f293bb19523b76f92f1945bbf245003392c7f392903f95c2b9b630 \
+    https://openpolicyagent.org/downloads/v1.21.4/opa_linux_amd64_static /usr/local/bin/opa
 RUN chmod +x /usr/local/bin/opa && opa version
 
 # WeasyPrint's native stack: the AI Act evidence report renders through it.
