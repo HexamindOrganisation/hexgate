@@ -8,12 +8,15 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim@sha256:531f855bda2c73cd6ef67d
 WORKDIR /app
 
 # Deps in their own layer so they cache until the lock changes. package=false:
-# the server runs from source (copied below).
+# the server runs from source (copied below). Bytecode is compiled at build
+# time, for the venv and the source: the runtime user cannot write __pycache__
+# into the root-owned /app, so it would otherwise recompile on every start.
 COPY platform/mcp/pyproject.toml platform/mcp/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+    UV_COMPILE_BYTECODE=1 uv sync --frozen --no-dev
 
 COPY platform/mcp/hexgate_mcp ./hexgate_mcp
+RUN uv run --no-sync python -m compileall -q hexgate_mcp
 
 # The policy reference tool serves these, from the nearest docs/policy above
 # its module. Fail the build, not the first call, if the copy came up empty.
