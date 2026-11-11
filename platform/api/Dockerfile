@@ -51,8 +51,21 @@ ADD --checksum=sha256:810aa96e44f1f852d044888cf830324e44eafd0f510345339011347ab4
     https://openpolicyagent.org/downloads/v1.21.4/opa_linux_arm64_static /opa
 FROM opa-${TARGETARCH} AS opa
 
+# The uv binary only, for the runtime stage below.
+FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
+
 # ---- control-plane API ---------------------------------------------------
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim@sha256:531f855bda2c73cd6ef67d56b733b357cea384185b3022bd09f05e002cd144ca
+# The official Python image, not uv's python image: it is rebuilt with each
+# Debian point release, where uv's lagged and shipped fixable openssl/gnutls
+# CVEs. uv is copied in from its own pinned image.
+FROM python:3.13-slim-bookworm@sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72
+
+COPY --from=uv /uv /usr/local/bin/uv
+# uv runs on this interpreter and never downloads its own. pip and setuptools
+# come with the image but nothing here uses them (uv installs everything), and
+# their vendored copies carry their own CVEs: removed.
+ENV UV_PYTHON_DOWNLOADS=never
+RUN python -m pip uninstall -y -q pip setuptools wheel
 
 COPY --from=opa --chmod=755 /opa /usr/local/bin/opa
 RUN opa version
