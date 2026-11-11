@@ -8,7 +8,9 @@ description = "Hexgate control plane API — policy bundles, tokens, audit inges
 # when upstream ships 3.14.
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    "fastapi>=0.115",
+    # Capped: from 0.162 included routers are nested (`_IncludedRouter`) and
+    # drop out of `app.routes`, which the OAuth scope-mark tests enumerate.
+    "fastapi>=0.115,<0.137",
     "uvicorn[standard]>=0.32",
     "sqlmodel>=0.0.22",
     "pydantic>=2.9",

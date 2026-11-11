@@ -1007,7 +1007,7 @@ requires-dist = [
     { name = "biscuit-python", specifier = ">=0.4" },
     { name = "clickhouse-connect", specifier = ">=0.8" },
     { name = "cryptography", specifier = ">=42" },
-    { name = "fastapi", specifier = ">=0.115" },
+    { name = "fastapi", specifier = ">=0.115,<0.137" },
     { name = "fastapi-users", extras = ["sqlalchemy"], specifier = ">=14.0" },
     { name = "greenlet", specifier = ">=3.0" },
     { name = "hexgate", editable = "../../" },
