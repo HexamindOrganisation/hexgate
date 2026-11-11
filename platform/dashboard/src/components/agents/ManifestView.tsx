@@ -19,9 +19,12 @@ import { cn } from "@/lib/utils";
 export function ManifestView({
   agent,
   roleModes,
+  reaches,
 }: {
   agent: AgentManifestView;
   roleModes?: (tool: string) => RoleMode[];
+  /** The hub's sub-agents section, placed after Skills. */
+  reaches?: React.ReactNode;
 }) {
   return (
     <div className="space-y-4">
@@ -38,6 +41,7 @@ export function ManifestView({
         skills={agent.manifest?.skills ?? null}
         unregistered={agent.manifest === null}
       />
+      {reaches}
       <SystemPromptSection
         prompt={agent.manifest?.system_prompt ?? null}
         unregistered={agent.manifest === null}

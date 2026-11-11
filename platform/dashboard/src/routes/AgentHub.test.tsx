@@ -13,11 +13,17 @@ import { makeQueryClient, renderWithProviders } from "@/test/render";
 
 // Stub the heavy graph (ReactFlow) — the hub only needs it to mount with the
 // agent's subgraph; PolicyFlow itself is tested in PolicyGraphDialog.test.
-vi.mock("@/components/policy_files/PolicyGraphDialog", () => ({
-  PolicyFlow: ({ graph }: { graph: { nodes: unknown[] } }) => (
-    <div data-testid="agent-graph">{graph.nodes.length} nodes</div>
-  ),
-}));
+vi.mock(
+  "@/components/policy_files/PolicyGraphDialog",
+  async (importActual) => ({
+    ...(await importActual<
+      typeof import("@/components/policy_files/PolicyGraphDialog")
+    >()),
+    PolicyFlow: ({ graph }: { graph: { nodes: unknown[] } }) => (
+      <div data-testid="agent-graph">{graph.nodes.length} nodes</div>
+    ),
+  }),
+);
 
 // The Playground tab embeds the live chat (a WebSocket). Stub it — its own
 // behaviour is covered in Playground.test; here we only check the tab mounts
@@ -104,6 +110,8 @@ function stubFetch(
   summaryError = false,
   noAgentInGraph = false,
   matrixError = false,
+  graph: "default" | "subAgent" | "none" = "default",
+  subAgent: false | "tool" | "handoff" = graph === "subAgent" && "tool",
 ) {
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -125,9 +133,22 @@ function stubFetch(
         case "/v1/orgs/org-1/projects":
           return json([{ id: PROJECT, org_id: "org-1", name: "demo-project" }]);
         case `/v1/projects/${PROJECT}/agents/manifest`:
-          return manifestError
-            ? new Response("boom", { status: 500 })
-            : json([MANIFEST]);
+          if (manifestError) return new Response("boom", { status: 500 });
+          return json([
+            subAgent
+              ? {
+                  ...MANIFEST,
+                  manifest: {
+                    ...MANIFEST.manifest,
+                    subagents: [{ name: "billing_bot", via: subAgent }],
+                  },
+                }
+              : MANIFEST,
+            // billing_bot is registered when the graph knows it.
+            ...(graph === "subAgent"
+              ? [{ ...MANIFEST, name: "billing_bot", manifest: null }]
+              : []),
+          ]);
         case `/v1/projects/${PROJECT}/policy-files`:
           return json([
             {
@@ -156,6 +177,8 @@ function stubFetch(
             aliased_default: null,
           });
         case `/v1/projects/${PROJECT}/policy/graph`:
+          // A classic (non-compose) project has no graph.
+          if (graph === "none") return new Response("nope", { status: 404 });
           if (noAgentInGraph)
             return json({
               roles: [],
@@ -168,8 +191,30 @@ function stubFetch(
               { id: "agent:support_bot", kind: "agent", label: "support_bot" },
               { id: "tool:refund", kind: "tool", label: "refund" },
               { id: "role:support", kind: "role", label: "support" },
+              ...(graph === "subAgent"
+                ? [
+                    {
+                      id: "agent:billing_bot",
+                      kind: "agent",
+                      label: "billing_bot",
+                    },
+                  ]
+                : []),
             ],
             edges: [
+              ...(graph === "subAgent"
+                ? [
+                    {
+                      source: "agent:support_bot",
+                      target: "agent:billing_bot",
+                      kind: "reach",
+                      via: "tool",
+                      verdict: "allow",
+                      constraints: ["args.amount <= 200"],
+                      roles: ["support", "billing"],
+                    },
+                  ]
+                : []),
               {
                 source: "role:support",
                 target: "agent:support_bot",
@@ -209,6 +254,13 @@ function stubFetch(
                 deny: 4,
                 needs_approval: 1,
               },
+              {
+                key: "billing_bot",
+                all: 7,
+                allow: 7,
+                deny: 0,
+                needs_approval: 0,
+              },
             ],
             by_role: [],
             by_tool: [],
@@ -229,6 +281,8 @@ function renderHub(
     summaryError = false,
     noAgentInGraph = false,
     matrixError = false,
+    graph = "default",
+    subAgent = graph === "subAgent" && "tool",
     tab = "",
   }: {
     role?: string;
@@ -236,10 +290,21 @@ function renderHub(
     summaryError?: boolean;
     noAgentInGraph?: boolean;
     matrixError?: boolean;
+    graph?: "default" | "subAgent" | "none";
+    /** The manifest records billing_bot, reached this way. */
+    subAgent?: false | "tool" | "handoff";
     tab?: "" | "/resources" | "/policies" | "/playground" | "/decisions";
   } = {},
 ) {
-  stubFetch(role, manifestError, summaryError, noAgentInGraph, matrixError);
+  stubFetch(
+    role,
+    manifestError,
+    summaryError,
+    noAgentInGraph,
+    matrixError,
+    graph,
+    subAgent,
+  );
   return renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
     initialRoute: `/agents/${name}${tab}`,
   });
@@ -458,6 +523,67 @@ describe("AgentHub", () => {
     // The tool row and the guest chip render from the same matrix.
     expect(screen.getByText("refund")).toBeInTheDocument();
     expect(screen.getByText("guest")).toBeInTheDocument();
+  });
+
+  it("lists the manifest's sub-agents with their reach verdict", async () => {
+    renderHub("support_bot", { tab: "/resources", graph: "subAgent" });
+    const sub = await screen.findByRole("link", { name: "billing_bot" });
+    expect(sub).toHaveAttribute("href", "/agents/billing_bot");
+    expect(screen.getByText("agent-as-tool")).toBeInTheDocument();
+    expect(await screen.findByText(/7 calls · 24h/)).toBeInTheDocument();
+    // The verdict overlay comes from the graph's reach edge.
+    expect(await screen.findByText("support, billing")).toBeInTheDocument();
+    expect(screen.getByTitle("args.amount <= 200")).toHaveTextContent("allow");
+    // Counted once: billing_bot isn't already one of its tools (1 + 1).
+    expect(screen.getByRole("link", { name: /Resources/ })).toHaveTextContent(
+      "Resources2",
+    );
+  });
+
+  it("lists sub-agents without verdicts on a project with no graph", async () => {
+    renderHub("support_bot", {
+      tab: "/resources",
+      graph: "none",
+      subAgent: "tool",
+    });
+    expect(await screen.findByText("billing_bot")).toBeInTheDocument();
+    expect(screen.queryByText("Open graph →")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("args.amount <= 200")).not.toBeInTheDocument();
+  });
+
+  it("marks a sub-agent as not gated when its policy declares no reach", async () => {
+    // The manifest records billing_bot, but the graph has no reach edges.
+    renderHub("support_bot", { tab: "/resources", subAgent: "tool" });
+    expect(await screen.findByText("not gated")).toBeInTheDocument();
+    // Unregistered in the project, so no dead-end link to its hub.
+    expect(screen.queryByRole("link", { name: "billing_bot" })).toBeNull();
+  });
+
+  it("marks an unnamed sub-agent denied once the policy declares reach", async () => {
+    // The graph grants billing_bot as a tool; the manifest reaches it by
+    // handoff, which no rule names — closed-world, so denied.
+    renderHub("support_bot", {
+      tab: "/resources",
+      graph: "subAgent",
+      subAgent: "handoff",
+    });
+    expect(await screen.findByTitle(/closed-world/)).toHaveTextContent("deny");
+  });
+
+  it("says so when sub-agent call counts can't load", async () => {
+    renderHub("support_bot", {
+      tab: "/resources",
+      graph: "subAgent",
+      summaryError: true,
+    });
+    expect(await screen.findByText("calls unavailable")).toBeInTheDocument();
+  });
+
+  it("says when the manifest records no sub-agents", async () => {
+    renderHub("support_bot", { tab: "/resources" });
+    expect(
+      await screen.findByText("No sub-agents recorded on its manifest."),
+    ).toBeInTheDocument();
   });
 
   it("shows the resolved roles x tools grid on the Policies tab", async () => {

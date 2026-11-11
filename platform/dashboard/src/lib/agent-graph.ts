@@ -1,4 +1,4 @@
-import type { PolicyGraph } from "@/lib/api";
+import type { PolicyGraph, PolicyGraphEdge } from "@/lib/api";
 import { delegates, push } from "@/lib/graph-layout";
 
 /** The agent's node, and whose outbound edges stand for it: its own
@@ -156,4 +156,27 @@ export function agentReachMap(
     });
   }
   return m;
+}
+
+/** The agent's outbound reach edges, resolved as the hub does (its own, or
+ * the generic `*` agent's when the policy doesn't declare it), keyed
+ * `<target>:<via>` (the graph merges one edge per pair across roles). Edges
+ * with no via can't be matched, so are skipped. */
+export function agentReachEdges(
+  graph: PolicyGraph,
+  agentName: string,
+): Map<string, PolicyGraphEdge> {
+  const out = new Map<string, PolicyGraphEdge>();
+  const found = resolveAgent(graph, agentName);
+  if (!found) return out;
+  const label = new Map(
+    graph.nodes.filter((n) => n.kind === "agent").map((n) => [n.id, n.label]),
+  );
+  for (const e of graph.edges) {
+    const to = label.get(e.target);
+    if (e.source === found.sourceId && to !== undefined && e.via) {
+      out.set(`${to}:${e.via}`, e);
+    }
+  }
+  return out;
 }
