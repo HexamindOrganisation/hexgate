@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { useLocation, useNavigate, NavLink, Outlet } from "react-router-dom";
 import {
   ArrowLeft,
@@ -6,6 +6,7 @@ import {
   BarChart3,
   Building2,
   Bot,
+  ChevronRight,
   CircleUser,
   KeyRound,
   LogOut,
@@ -37,6 +38,9 @@ import { CreateOrgDialog } from "@/components/CreateOrgDialog";
 import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { PreviewBanner } from "@/components/PreviewBanner";
 import { VerifyEmailBanner } from "@/components/VerifyEmailBanner";
+import { useQuery } from "@tanstack/react-query";
+
+import { api } from "@/lib/api";
 import { useActive, useProjectScoped } from "@/lib/active";
 import { useActiveBanCount, useCanManageBans } from "@/lib/bans";
 import { useLogout, useUser } from "@/lib/auth";
@@ -274,6 +278,101 @@ function NavItem({
   );
 }
 
+/** The Agents nav row with an inline, expandable agent list. Hovering the icon
+ * reveals a chevron; clicking it toggles the list (the label still navigates to
+ * /agents). The list is fetched lazily, only once opened. */
+function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
+  const { projectId } = useProjectScoped();
+  const [open, setOpen] = useState(false);
+  const agents = useQuery({
+    queryKey: ["agent-manifests", projectId],
+    queryFn: () => api.listAgentManifests(projectId as string),
+    enabled: !!projectId && open && !collapsed,
+  });
+
+  // Collapsed rail: no room for an inline list — just the icon link.
+  if (collapsed) {
+    return <NavItem to="/agents" label="Agents" icon={Bot} collapsed />;
+  }
+
+  const toggle = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setOpen((v) => !v);
+  };
+
+  const rows = agents.data ?? [];
+  return (
+    <div className="group/agents relative flex flex-col gap-0.5">
+      <NavLink
+        to="/agents"
+        end
+        className={({ isActive }) =>
+          cn(
+            "flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition-colors",
+            isActive
+              ? "bg-accent font-semibold text-foreground"
+              : "font-medium text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+          )
+        }
+      >
+        <Bot
+          className={cn(
+            "size-4 shrink-0 transition-opacity",
+            open ? "opacity-0" : "group-hover/agents:opacity-0",
+          )}
+        />
+        Agents
+      </NavLink>
+      {/* Chevron overlaid on the icon — a sibling, never nested in the anchor. */}
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={open ? "Hide agent list" : "Show agent list"}
+        aria-expanded={open}
+        className={cn(
+          "absolute left-2.5 top-2.5 grid size-4 place-items-center rounded text-muted-foreground transition-opacity hover:text-foreground",
+          open ? "opacity-100" : "opacity-0 group-hover/agents:opacity-100",
+        )}
+      >
+        <ChevronRight
+          className={cn("size-4 transition-transform", open && "rotate-90")}
+        />
+      </button>
+      {open && (
+        <div className="ml-[22px] flex flex-col gap-0.5 border-l border-border pl-1.5">
+          {agents.isPending ? (
+            <span className="px-2 py-1 text-[11px] text-muted-foreground">
+              Loading…
+            </span>
+          ) : rows.length ? (
+            rows.map((a) => (
+              <NavLink
+                key={a.name}
+                to={`/agents/${encodeURIComponent(a.name)}`}
+                className={({ isActive }) =>
+                  cn(
+                    "truncate rounded-md px-2 py-1 font-mono text-[12px] transition-colors",
+                    isActive
+                      ? "bg-accent/70 text-foreground"
+                      : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                  )
+                }
+              >
+                {a.name}
+              </NavLink>
+            ))
+          ) : (
+            <span className="px-2 py-1 text-[11px] text-muted-foreground">
+              No agents yet
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AppShell() {
   // Pick a default active org + project on first load so the switcher
   // shows something usable instead of "Pick an organization" empty
@@ -428,14 +527,18 @@ export function AppShell() {
                     {g.label}
                   </div>
                 )}
-                {g.links.map((l) => (
-                  <NavItem
-                    key={l.to}
-                    {...l}
-                    badge={l.to === "/bans" ? bansBadge : undefined}
-                    collapsed={sidebarCollapsed}
-                  />
-                ))}
+                {g.links.map((l) =>
+                  l.to === "/agents" ? (
+                    <AgentsNavItem key={l.to} collapsed={sidebarCollapsed} />
+                  ) : (
+                    <NavItem
+                      key={l.to}
+                      {...l}
+                      badge={l.to === "/bans" ? bansBadge : undefined}
+                      collapsed={sidebarCollapsed}
+                    />
+                  ),
+                )}
               </div>
             ))}
           </div>
