@@ -44,11 +44,38 @@ const MANIFEST = {
   updated_at: "2026-06-01T10:00:00Z",
 };
 
+/** Per-test answers that win over stubFetch's, keyed by pathname. */
+const overrides = new Map<string, { body: unknown; status: number }>();
+const answer = (path: string, body: unknown, status = 200) =>
+  overrides.set(path, { body, status });
+
+const DECISION = {
+  event_id: "evt-1",
+  occurred_at: "2026-06-01T12:00:00Z",
+  received_at: "2026-06-01T12:00:01Z",
+  agent_name: "support_bot",
+  agent_version_id: "av-1",
+  session_id: "sess-1",
+  user_id: "u-1",
+  tool_name: "refund",
+  user_roles: ["guest"],
+  deciding_role: "",
+  outcome: "deny",
+  error_type: "",
+  reason: "Guests can't refund.",
+  violations: ["refund: role guest denied"],
+  hint: null,
+  arguments: null,
+  attributes: null,
+  run_id: null,
+};
+
 function stubFetch(
   role: string,
   manifestError = false,
   summaryError = false,
   noAgentInGraph = false,
+  matrixError = false,
 ) {
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -58,6 +85,12 @@ function stubFetch(
   vi.spyOn(window, "fetch").mockImplementation(
     async (input: RequestInfo | URL) => {
       const url = new URL(String(input), "http://localhost");
+      const o = overrides.get(url.pathname);
+      if (o)
+        return new Response(JSON.stringify(o.body), {
+          status: o.status,
+          headers: { "Content-Type": "application/json" },
+        });
       switch (url.pathname) {
         case "/v1/orgs":
           return json([{ id: "org-1", slug: "acme", name: "Acme Inc", role }]);
@@ -77,6 +110,8 @@ function stubFetch(
             },
           ]);
         case `/v1/projects/${PROJECT}/policy/matrix`:
+          // A 4xx, which usePolicyMatrix doesn't retry: no backoff in tests.
+          if (matrixError) return new Response("boom", { status: 400 });
           return json({
             roles: ["guest", "support"],
             tools: ["refund"],
@@ -127,6 +162,13 @@ function stubFetch(
               },
             ],
           });
+        case `/v1/projects/${PROJECT}/audit/decisions`:
+          return json({
+            rows: [DECISION],
+            total: 1,
+            limit: 50,
+            offset: 0,
+          });
         case `/v1/projects/${PROJECT}/audit/summary`:
           if (summaryError) return new Response("boom", { status: 500 });
           return json({
@@ -158,16 +200,18 @@ function renderHub(
     manifestError = false,
     summaryError = false,
     noAgentInGraph = false,
+    matrixError = false,
     tab = "",
   }: {
     role?: string;
     manifestError?: boolean;
     summaryError?: boolean;
     noAgentInGraph?: boolean;
-    tab?: "" | "/resources";
+    matrixError?: boolean;
+    tab?: "" | "/resources" | "/policies" | "/decisions";
   } = {},
 ) {
-  stubFetch(role, manifestError, summaryError, noAgentInGraph);
+  stubFetch(role, manifestError, summaryError, noAgentInGraph, matrixError);
   return renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
     initialRoute: `/agents/${name}${tab}`,
   });
@@ -176,17 +220,7 @@ function renderHub(
 /** The hub for support_bot, with `/policy/graph` answering `graph`. */
 function renderHubWithGraph(graph: unknown, status = 200) {
   stubFetch("admin");
-  const answer = vi.mocked(window.fetch).getMockImplementation()!;
-  vi.mocked(window.fetch).mockImplementation(async (input, init) =>
-    new URL(String(input), "http://localhost").pathname.endsWith(
-      "/policy/graph",
-    )
-      ? new Response(JSON.stringify(graph), {
-          status,
-          headers: { "Content-Type": "application/json" },
-        })
-      : answer(input, init),
-  );
+  answer(`/v1/projects/${PROJECT}/policy/graph`, graph, status);
   return renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
     initialRoute: "/agents/support_bot",
   });
@@ -212,7 +246,10 @@ describe("AgentHub", () => {
       useActive.setState({ activeOrgId: "org-1", activeProjectId: PROJECT });
     });
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    overrides.clear();
+  });
 
   it("renders the agent header, framework and 24h activity", async () => {
     renderHub("support_bot");
@@ -243,14 +280,7 @@ describe("AgentHub", () => {
       by_user: [],
     });
     // The next poll fails.
-    const answer = vi.mocked(window.fetch).getMockImplementation()!;
-    vi.mocked(window.fetch).mockImplementation(async (input, init) =>
-      new URL(String(input), "http://localhost").pathname.endsWith(
-        "/audit/summary",
-      )
-        ? new Response("boom", { status: 500 })
-        : answer(input, init),
-    );
+    answer(`/v1/projects/${PROJECT}/audit/summary`, "boom", 500);
     renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
       initialRoute: "/agents/support_bot",
       client,
@@ -287,24 +317,14 @@ describe("AgentHub", () => {
 
   it("shows no resource count for an agent that never registered", async () => {
     stubFetch("admin");
-    const answer = vi.mocked(window.fetch).getMockImplementation()!;
-    vi.mocked(window.fetch).mockImplementation(async (input, init) =>
-      new URL(String(input), "http://localhost").pathname.endsWith(
-        "/agents/manifest",
-      )
-        ? new Response(
-            JSON.stringify([
-              {
-                ...MANIFEST,
-                manifest: null,
-                version: null,
-                content_hash: null,
-              },
-            ]),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          )
-        : answer(input, init),
-    );
+    answer(`/v1/projects/${PROJECT}/agents/manifest`, [
+      {
+        ...MANIFEST,
+        manifest: null,
+        version: null,
+        content_hash: null,
+      },
+    ]);
     renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
       initialRoute: "/agents/support_bot",
     });
@@ -377,14 +397,7 @@ describe("AgentHub", () => {
       },
       { updatedAt: 0 },
     );
-    const answer = vi.mocked(window.fetch).getMockImplementation()!;
-    vi.mocked(window.fetch).mockImplementation(async (input, init) =>
-      new URL(String(input), "http://localhost").pathname.endsWith(
-        "/policy/graph",
-      )
-        ? new Response(JSON.stringify({ detail: "x" }), { status: 422 })
-        : answer(input, init),
-    );
+    answer(`/v1/projects/${PROJECT}/policy/graph`, { detail: "x" }, 422);
     renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
       initialRoute: "/agents/support_bot",
       client,
@@ -415,6 +428,131 @@ describe("AgentHub", () => {
     // The tool row and the guest chip render from the same matrix.
     expect(screen.getByText("refund")).toBeInTheDocument();
     expect(screen.getByText("guest")).toBeInTheDocument();
+  });
+
+  it("shows the resolved roles x tools grid on the Policies tab", async () => {
+    renderHub("support_bot", { tab: "/policies" });
+    expect(
+      await screen.findByText(/How each role may use/),
+    ).toBeInTheDocument();
+    // The engine grid cell carries the constraint as its title + an allow mode
+    // (awaited — the matrix loads after the static header).
+    expect(await screen.findByTitle("args.amount <= 50")).toHaveTextContent(
+      "allow",
+    );
+    // The project's files are listed.
+    expect(screen.getByText("policy.yaml")).toBeInTheDocument();
+  });
+
+  it("gives the agent's own tools a row even when the policy doesn't list them", async () => {
+    answer(`/v1/projects/${PROJECT}/agents/manifest`, [
+      {
+        ...MANIFEST,
+        manifest: {
+          ...MANIFEST.manifest,
+          tools: [
+            ...MANIFEST.manifest.tools,
+            { ...MANIFEST.manifest.tools[0], name: "invoice" },
+          ],
+        },
+      },
+    ]);
+    answer(`/v1/projects/${PROJECT}/policy/matrix`, {
+      roles: ["guest", "support"],
+      tools: ["refund"],
+      cells: {
+        refund: {
+          guest: { mode: "deny", constraint: null },
+          support: { mode: "allow", constraint: "args.amount <= 50" },
+        },
+        invoice: {
+          guest: { mode: "deny", constraint: null },
+          support: { mode: "deny", constraint: null },
+        },
+      },
+      defaults: {
+        guest: { mode: "deny", constraint: null },
+        support: { mode: "deny", constraint: null },
+      },
+      aliased_default: null,
+    });
+    renderHub("support_bot", { tab: "/policies" });
+    expect(await screen.findByText("invoice")).toBeInTheDocument();
+    expect(screen.getByText("refund")).toBeInTheDocument();
+    // Marked as the engine's fallback, not a rule of its own.
+    expect(screen.getAllByText("not in the policy")).toHaveLength(1);
+  });
+
+  it("says the policy files failed, not that the project is classic", async () => {
+    answer(`/v1/projects/${PROJECT}/policy-files`, "boom", 500);
+    renderHub("support_bot", { tab: "/policies" });
+    expect(
+      await screen.findByText(/Couldn't load this project's policy files/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Classic project/)).not.toBeInTheDocument();
+  });
+
+  it("shows a grid error, not an endless spinner, when the matrix fails", async () => {
+    renderHub("support_bot", { tab: "/policies", matrixError: true });
+    expect(
+      await screen.findByText(/Couldn't load the grid/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Loading grid/)).not.toBeInTheDocument();
+  });
+
+  it("says the decisions failed to load, not that there are none", async () => {
+    answer(`/v1/projects/${PROJECT}/audit/decisions`, "boom", 500);
+    renderHub("support_bot", { tab: "/decisions" });
+    expect(
+      await screen.findByText(/Couldn't load this agent's decisions/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No decisions/)).not.toBeInTheDocument();
+  });
+
+  it("says there were no decisions in the last 24h", async () => {
+    answer(`/v1/projects/${PROJECT}/audit/decisions`, { rows: [], total: 0 });
+    renderHub("support_bot", { tab: "/decisions" });
+    expect(
+      await screen.findByText("No decisions in the last 24h."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/match the current filters/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the loaded decisions when loading more fails", async () => {
+    const path = `/v1/projects/${PROJECT}/audit/decisions`;
+    answer(path, { rows: [DECISION], total: 100, limit: 40, offset: 0 });
+    renderHub("support_bot", { tab: "/decisions" });
+    expect(await screen.findByText("Guests can't refund.")).toBeInTheDocument();
+    answer(path, "boom", 500);
+    await userEvent.click(screen.getByRole("button", { name: /Load 40 more/ }));
+    expect(
+      await screen.findByText(/these are the last decisions loaded/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Guests can't refund.")).toBeInTheDocument();
+    // Trying again asks for the failed page, not the one after it.
+    const limits = () =>
+      vi
+        .mocked(window.fetch)
+        .mock.calls.map(([u]) => new URL(String(u), "http://localhost"))
+        .filter((u) => u.pathname === path)
+        .map((u) => u.searchParams.get("limit"));
+    expect(limits().at(-1)).toBe("80");
+    await userEvent.click(screen.getByRole("button", { name: /Load 40 more/ }));
+    await waitFor(() =>
+      expect(limits().filter((l) => l === "80")).toHaveLength(2),
+    );
+    expect(limits()).not.toContain("120");
+  });
+
+  it("lists the agent's decisions on the Decision log tab", async () => {
+    renderHub("support_bot", { tab: "/decisions" });
+    expect(await screen.findByText("Guests can't refund.")).toBeInTheDocument();
+    // Scoped, with a way out to the full audit log.
+    expect(
+      screen.getByRole("link", { name: /full audit log/i }),
+    ).toHaveAttribute("href", expect.stringContaining("agent=support_bot"));
   });
 
   it("links Ban agent to the prefilled /bans route for an admin", async () => {

@@ -104,7 +104,7 @@ describe("audit filters in the URL", () => {
 
 describe("paging", () => {
   it("belongs to one view; any other starts at the first page", () => {
-    useAuditFilters.getState().loadMore("range=7d");
+    useAuditFilters.getState().setPageLimit("range=7d", 80);
     const s = useAuditFilters.getState();
     expect(pageLimitFor(s, "range=7d")).toBe(80);
     expect(pageLimitFor(s, "range=24h")).toBe(40);

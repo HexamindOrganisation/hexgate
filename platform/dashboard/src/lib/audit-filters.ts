@@ -43,8 +43,13 @@ export const EMPTY_AUDIT_FILTERS: AuditFilters = {
   end_date: null,
 };
 
-const PAGE_SIZE = 40;
-const MAX_LIMIT = 200;
+/** Rows per "Load more" page, and the most a decision log loads. */
+export const PAGE_SIZE = 40;
+export const MAX_LIMIT = 200;
+
+/** The limit after one more "Load more", capped at MAX_LIMIT. */
+export const nextPageLimit = (limit: number) =>
+  Math.min(limit + PAGE_SIZE, MAX_LIMIT);
 
 interface AuditFilterState {
   /** Query string of the last Audit view per project; a bare /audit
@@ -57,7 +62,8 @@ interface AuditFilterState {
    * any other view, in this project or another, starts at one page. */
   pageKey: string;
   pageLimit: number;
-  loadMore: (key: string) => void;
+  /** The page limit for view `key`; every other view starts at one page. */
+  setPageLimit: (key: string, limit: number) => void;
 }
 
 export const useAuditFilters = create<AuditFilterState>()((set) => ({
@@ -74,14 +80,7 @@ export const useAuditFilters = create<AuditFilterState>()((set) => ({
     ),
   pageKey: "",
   pageLimit: PAGE_SIZE,
-  loadMore: (key) =>
-    set((s) => ({
-      pageKey: key,
-      pageLimit: Math.min(
-        (s.pageKey === key ? s.pageLimit : PAGE_SIZE) + PAGE_SIZE,
-        MAX_LIMIT,
-      ),
-    })),
+  setPageLimit: (key, limit) => set({ pageKey: key, pageLimit: limit }),
 }));
 
 /** Rows to show for view `key`. */

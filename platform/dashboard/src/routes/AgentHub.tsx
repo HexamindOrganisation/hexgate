@@ -1,8 +1,9 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   Link,
   NavLink,
   Outlet,
+  useNavigate,
   useOutletContext,
   useParams,
 } from "react-router-dom";
@@ -14,6 +15,7 @@ import {
   api,
   type AgentManifestView,
   type PolicyGraph,
+  type PolicyMatrix,
 } from "@/lib/api";
 import {
   usePolicyFiles,
@@ -25,10 +27,14 @@ import { roleModesOf, type RoleMode } from "@/lib/role-modes";
 import { useProjectScoped } from "@/lib/active";
 import { useCanManageBans } from "@/lib/bans";
 import { useAgentActivity24h } from "@/lib/audit-summary";
-import { auditUrl } from "@/lib/audit-filters";
+import { auditUrl, PAGE_SIZE } from "@/lib/audit-filters";
+import { useDecisionLog } from "@/lib/decision-log";
 import { agentReachCounts, agentSubgraph } from "@/lib/agent-graph";
 import { formatDate, pluralise } from "@/lib/format";
 import { PolicyFlow } from "@/components/policy_files/PolicyGraphDialog";
+import { ResolvedGrid } from "@/components/policy_files/InspectorTabs";
+import { DetailDrawer } from "@/components/audit/drawer";
+import { EventsTable } from "@/components/audit/pieces";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -55,18 +61,20 @@ export function AgentHub() {
 
   // Roles x tools for this agent, as the engine tabulates them. Only projects
   // with a policy.yaml compose; others have no matrix.
-  const policyFiles = usePolicyFiles(scope.projectId);
-  const modular = isModular(policyFiles.data);
+  const modular = isModular(usePolicyFiles(scope.projectId).data);
   const toolNames = useMemo(
     () => agent?.manifest?.tools?.map((t) => t.name) ?? [],
     [agent],
   );
-  const matrix = usePolicyMatrix(
+  const matrixQuery = usePolicyMatrix(
     scope.projectId,
     agent?.name ?? "",
     modular && !!agent,
     toolNames,
-  ).data;
+  );
+  // Forward null (not undefined) on error so ResolvedGrid shows its error
+  // branch instead of spinning on "Loading grid…" forever.
+  const matrix = matrixQuery.isError ? null : matrixQuery.data;
   const roleModes = useMemo(
     () => (matrix ? roleModesOf(matrix) : undefined),
     [matrix],
@@ -146,6 +154,7 @@ export function AgentHub() {
           {
             agent,
             roleModes,
+            matrix,
             activity,
             activityError: summary.isError && !summary.data,
             activityStale: summary.isError && !!summary.data,
@@ -165,6 +174,9 @@ export function AgentHub() {
 export interface HubContext {
   agent: AgentManifestView;
   roleModes?: (tool: string) => RoleMode[];
+  /** Engine-tabulated roles x tools for this agent: null on error, undefined
+   * while loading and on a classic project (the query is off). */
+  matrix: PolicyMatrix | undefined | null;
   activity: { all: number; deny: number; needs_approval: number } | null;
   /** The 24h summary never loaded: "—" in the strip and a note. */
   activityError: boolean;
@@ -183,6 +195,20 @@ export function AgentOverviewTab() {
 export function AgentResourcesTab() {
   const ctx = useOutletContext<HubContext>();
   return <ManifestView agent={ctx.agent} roleModes={ctx.roleModes} />;
+}
+
+export function AgentPoliciesTab() {
+  const ctx = useOutletContext<HubContext>();
+  return <AgentPolicies agent={ctx.agent} matrix={ctx.matrix} />;
+}
+
+export function AgentDecisionsTab() {
+  const ctx = useOutletContext<HubContext>();
+  const { projectId } = useProjectScoped();
+  // Keyed, so another agent's (or project's) page size doesn't carry over.
+  return (
+    <AgentDecisions key={`${projectId}:${ctx.agent.name}`} agent={ctx.agent} />
+  );
 }
 
 /** Tools + skills, or null for an agent that never registered: a 0 would
@@ -218,6 +244,12 @@ function HubTabs({ resources }: { resources: number | null }) {
             {resources}
           </Badge>
         )}
+      </NavLink>
+      <NavLink to="policies" className={cls}>
+        Policies
+      </NavLink>
+      <NavLink to="decisions" className={cls}>
+        Decision log
       </NavLink>
     </nav>
   );
@@ -345,6 +377,166 @@ function Placeholder({ children }: { children: React.ReactNode }) {
   return (
     <div className="grid h-40 place-items-center border-t border-border px-6 text-center text-meta text-muted-foreground">
       {children}
+    </div>
+  );
+}
+
+/** Policies: the engine-resolved roles x tools grid for this agent, plus the
+ * project's policy files. Read-only here: editing stays on the Policies page. */
+function AgentPolicies({
+  agent,
+  matrix,
+}: {
+  agent: AgentManifestView;
+  matrix: PolicyMatrix | undefined | null;
+}) {
+  const navigate = useNavigate();
+  const { projectId } = useProjectScoped();
+  // A cached hit: the hub already loaded the files.
+  const files = usePolicyFiles(projectId);
+  const kind = files.data
+    ? isModular(files.data)
+      ? "modular"
+      : "classic"
+    : files.isError
+      ? "error"
+      : "loading";
+
+  if (kind === "loading" || kind === "error") {
+    return (
+      <Card className="grid place-items-center p-10 text-sm text-muted-foreground">
+        {kind === "loading"
+          ? "Loading policy…"
+          : "Couldn't load this project's policy files. Try refreshing the page."}
+      </Card>
+    );
+  }
+
+  // Classic projects don't compose a cross-role grid: each agent enforces its
+  // own policy. Point at the editor rather than show an empty grid.
+  if (kind === "classic") {
+    return (
+      <Card className="grid place-items-center gap-2 p-10 text-center text-sm text-muted-foreground">
+        <span>
+          Classic project —{" "}
+          <span className="font-mono text-foreground">{agent.name}</span>{" "}
+          enforces its own policy, with no composed roles × tools grid.
+        </span>
+        <Link to="/policies" className="text-primary hover:underline">
+          Open in Policies →
+        </Link>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-4 py-3">
+        <h2 className="text-body font-semibold">
+          How each role may use <span className="font-mono">{agent.name}</span>
+          &rsquo;s tools
+        </h2>
+        <span className="text-meta text-muted-foreground">
+          resolved by the policy engine
+        </span>
+        <Link
+          to="/policies"
+          className="ml-auto text-meta text-primary hover:underline"
+        >
+          Edit in Policies →
+        </Link>
+      </div>
+      <div className="flex h-[440px] flex-col">
+        <ResolvedGrid
+          matrix={matrix}
+          errorText="Couldn't load the grid. Try refreshing the page."
+          onPick={() => navigate("/policies")}
+        />
+      </div>
+      {!!files.data?.length && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-border px-4 py-2.5 text-meta text-muted-foreground">
+          <span>Project policy files</span>
+          {files.data.map((f) => (
+            <span
+              key={f.name}
+              className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground"
+            >
+              {f.name}
+            </span>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** Decision log: the audit log pre-scoped to this agent (24h), with the full
+ * audit table and drawer. The drawer's "Filter to…" footer is hidden: every
+ * row here is already this agent. */
+function AgentDecisions({ agent }: { agent: AgentManifestView }) {
+  const { projectId } = useProjectScoped();
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const {
+    listQ,
+    page,
+    loadMore,
+    loadingMore,
+    sel,
+    setSel,
+    clearSel,
+    related,
+    exportJsonl,
+  } = useDecisionLog(
+    projectId,
+    { agent: agent.name, window: "24h", limit },
+    setLimit,
+    `${agent.name}-decisions.jsonl`,
+  );
+  const failed = listQ.isError && !page;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2 text-meta text-muted-foreground">
+        <span>
+          Decisions for{" "}
+          <span className="font-mono text-foreground">{agent.name}</span> · last
+          24h
+        </span>
+        <Link
+          to={auditUrl({ agent: agent.name, range: "24h" })}
+          className="ml-auto text-primary hover:underline"
+        >
+          Open in full audit log →
+        </Link>
+      </div>
+      {listQ.isError && page && (
+        <p className="text-meta text-muted-foreground">
+          Couldn't refresh; these are the last decisions loaded.
+        </p>
+      )}
+      <EventsTable
+        rows={page?.rows ?? []}
+        total={page?.total ?? 0}
+        onSelect={setSel}
+        selectedId={sel?.event_id}
+        onLoadMore={loadMore}
+        loadingMore={loadingMore}
+        onExport={exportJsonl}
+        emptyText={
+          listQ.isPending
+            ? "Loading decisions…"
+            : failed
+              ? "Couldn't load this agent's decisions. Try refreshing the page."
+              : "No decisions in the last 24h."
+        }
+      />
+      <DetailDrawer
+        event={sel}
+        related={related}
+        projectId={projectId}
+        onClose={clearSel}
+        onSelect={setSel}
+      />
     </div>
   );
 }
