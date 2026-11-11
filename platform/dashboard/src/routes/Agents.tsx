@@ -6,6 +6,7 @@ import {
   usePolicyMatrix,
 } from "@/lib/policy_files";
 import { isModular } from "@/lib/file_tree";
+import { roleModesOf, type RoleMode } from "@/lib/role-modes";
 import { useAgentSelection } from "@/lib/agent_param";
 import {
   Ban,
@@ -21,7 +22,6 @@ import {
   type AgentManifestView,
   type GuardDefinition,
   type InputSchema,
-  type PolicyMatrixCell,
   type SkillDefinition,
   type SkillResources,
   type ToolDefinition,
@@ -37,7 +37,7 @@ import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { auditUrl } from "@/lib/audit-filters";
 import { useAgentActivity24h } from "@/lib/audit-summary";
-import { pluralise } from "@/lib/format";
+import { formatDate, pluralise } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
@@ -87,22 +87,10 @@ export function AgentsPage() {
     modular && !!active,
     toolNames,
   ).data;
-  const roleModes = useMemo(() => {
-    if (!matrix) return undefined;
-    const listed = new Set(matrix.tools);
-    return (tool: string): RoleMode[] => {
-      const defaulted = !listed.has(tool);
-      return matrix.roles.map((role) => {
-        const cell = matrix.cells[tool]?.[role];
-        return {
-          role,
-          mode: cell?.mode,
-          constraint: cell?.constraint ?? null,
-          defaulted,
-        };
-      });
-    };
-  }, [matrix]);
+  const roleModes = useMemo(
+    () => (matrix ? roleModesOf(matrix) : undefined),
+    [matrix],
+  );
   const activeActivity = active ? activityOf(active.name) : null;
   const canManageBans = useCanManageBans();
 
@@ -193,7 +181,12 @@ export function AgentsPage() {
                 <div className="min-w-0 flex-1 basis-[320px]">
                   <div className="flex flex-wrap items-center gap-2.5">
                     <h2 className="font-mono text-title-sm font-semibold">
-                      {active.name}
+                      <Link
+                        to={`/agents/${encodeURIComponent(active.name)}`}
+                        className="hover:underline"
+                      >
+                        {active.name}
+                      </Link>
                     </h2>
                     <Badge variant="outline" className="font-mono text-[11px]">
                       {active.version !== null
@@ -327,7 +320,7 @@ export function AgentsPage() {
   );
 }
 
-function ManifestView({
+export function ManifestView({
   agent,
   roleModes,
 }: {
@@ -358,14 +351,7 @@ function ManifestView({
 }
 
 /** How each role treats one tool, from the composed policy. */
-interface RoleMode {
-  role: string;
-  mode: PolicyMatrixCell["mode"] | undefined;
-  /** The engine's condition text, when the cell is constrained. */
-  constraint: string | null;
-  /** The policy lists the tool for no role: every chip is a fallback. */
-  defaulted: boolean;
-}
+export type { RoleMode };
 
 function ToolsSection({
   tools,
@@ -711,12 +697,4 @@ function SkillResourceDetails({
       )}
     </details>
   );
-}
-
-function formatDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
 }
