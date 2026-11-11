@@ -698,17 +698,32 @@ Each real release (`release.yml`, target `pypi`) also publishes `hexgate-api`,
 and Docker Hub's `docker.io/hexgate/` (one build, so the digest is the same in
 both), through `.github/workflows/docker-publish.yml` behind the
 `docker-release` environment's reviewers. Docker Hub needs that environment's
-`DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets; GHCR needs none. To (re)publish an existing
-tag by hand, dispatch that workflow from `main` with the tag.
+`DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets; GHCR needs none. The
+Docker Hub namespace is the `DOCKERHUB_NAMESPACE` repository variable,
+`hexgate` when unset.
 
 Each image is built from the tag for `linux/amd64` and `linux/arm64`, each
-architecture scanned (the publish fails on a fixable HIGH/CRITICAL finding
-unless `.trivyignore` lists it), pushed as one multi-arch image with SBOM and
-provenance attestations, and signed with cosign (the multi-arch digest and each
-architecture's). Docker picks the host's architecture on pull. To run them with
-the deploy compose on an arm64 host, drop its `platform: linux/amd64` pins. Tags are the version
-(`0.3.4`) and the commit (`sha-<commit>`); there is no `latest`. Pull by
-digest, after checking the signature:
+architecture scanned (a fixable HIGH/CRITICAL finding fails it), pushed as one
+multi-arch image with SBOM and provenance attestations, and signed with cosign
+(the multi-arch digest and each architecture's). Docker picks the host's
+architecture on pull. To run them with the deploy compose on an arm64 host,
+drop its `platform: linux/amd64` pins.
+
+- **The scan runs twice.** `release.yml` first runs the workflow as a dry run
+  (build and scan, no credentials, no push) before publishing anything, so a
+  finding stops the release before PyPI. The publish job scans again, right
+  before its push.
+- **Accepting a finding:** list it, with a reason, in `.trivyignore` on
+  `main`. The workflow reads that file from its own commit, not from the tag,
+  so it also unblocks a tag that already exists.
+- **By hand:** dispatch the workflow from `main` with a tag to (re)publish it,
+  or with `dry-run` (and no tag) to scan `main` without publishing. Tags cut
+  before image publishing existed (v0.3.4 and earlier) are refused: their
+  Dockerfiles are amd64-only and trust every proxy.
+
+Tags are the version (`0.4.0`, or `0.4.0rc1` for a pre-release) and the commit
+(`sha-<commit>`); there is no `latest`. Pull by digest, after checking the
+signature:
 
 ```bash
 # or docker.io/hexgate/hexgate-api@sha256:<digest>, same identity

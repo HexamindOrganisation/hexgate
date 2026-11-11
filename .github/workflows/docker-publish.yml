@@ -7,10 +7,21 @@ name: docker-publish
 # published`: release.yml creates the release with GITHUB_TOKEN, and events
 # made with that token never start other workflows.
 #
-# Per image: build from the tag's checkout, scan, and only if the scan is
-# clean push with SBOM + provenance attestations, then sign the pushed digest
-# with cosign (keyless, through the job's OIDC identity). Pull by digest and
-# verify with `cosign verify` (platform/DEPLOY.md, "Published images").
+# Per image: build from the tag's checkout for amd64 and arm64, scan each
+# architecture, and only if the scan is clean push with SBOM + provenance
+# attestations, then sign the pushed digest with cosign (keyless, through the
+# job's OIDC identity). Pull by digest and verify with `cosign verify`
+# (platform/DEPLOY.md, "Published images").
+#
+# `dry-run: true` builds and scans only, without credentials or approval: of
+# the tag if one is given, else of the workflow's own commit. release.yml runs
+# it before anything irreversible, so a failing scan stops the release before
+# PyPI instead of after.
+#
+# Two checkouts per job: the workflow's own commit (ci/), for the build-and-
+# scan action and .trivyignore, and the source being built (src/). So a
+# finding can be accepted in .trivyignore on main for a tag that already
+# exists.
 #
 # ----------------------------------------------------------------------
 # REQUIRED before the first run: a GitHub Environment named `docker-release`
@@ -20,7 +31,9 @@ name: docker-publish
 #     - Environment secrets (only this gated job can read them):
 #         DOCKERHUB_USERNAME  the Docker Hub account that owns the token
 #         DOCKERHUB_TOKEN     a Docker Hub access token, Read & Write,
-#                             with push rights on the `hexgate` namespace
+#                             with push rights on the Docker Hub namespace
+# Optional repository variable DOCKERHUB_NAMESPACE: the Docker Hub namespace,
+# `hexgate` when unset (a fork sets its own).
 # GHCR needs no secret: the job's GITHUB_TOKEN pushes there.
 # ----------------------------------------------------------------------
 
@@ -28,130 +41,145 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: "Release tag to publish, e.g. v0.3.4."
+        description: "Release tag to publish, e.g. v0.4.0. Optional for a dry run."
         type: string
-        required: true
+        required: false
+        default: ""
+      dry-run:
+        description: "Build and scan only: no push, no credentials, no approval."
+        type: boolean
+        required: false
+        default: false
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag to publish, e.g. v0.3.4."
+        description: "Existing release tag to publish, e.g. v0.4.0. Optional for a dry run."
         type: string
-        required: true
+        required: false
+        default: ""
+      dry-run:
+        description: "Build and scan only: no push, no credentials, no approval."
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: docker-publish-${{ inputs.tag }}
+  group: docker-publish-${{ inputs.tag || github.sha }}-${{ inputs.dry-run }}
   cancel-in-progress: false
 
 jobs:
+  scan:
+    name: ${{ matrix.image }} (dry run)
+    if: ${{ inputs.dry-run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: &images
+        include:
+          - image: hexgate-api
+            context: src
+            dockerfile: src/platform/api/Dockerfile
+          - image: hexgate-mcp
+            context: src
+            dockerfile: src/platform/mcp/Dockerfile
+          - image: hexgate-collector
+            context: src/platform/collector
+            dockerfile: src/platform/collector/Dockerfile
+
+    steps:
+      - &resolve
+        # The tag reaches the shell as an env var and must look like a release
+        # tag (the same shape release.yml enforces) before anything uses it.
+        # GHCR wants lowercase owner names.
+        name: Resolve the source
+        id: meta
+        env:
+          TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          IMAGE: ${{ matrix.image }}
+          HUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || 'hexgate' }}
+        run: |
+          if [ -z "$TAG" ] && [ "$DRY_RUN" = "true" ]; then
+            echo "ref=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          elif [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?$ ]]; then
+            echo "ref=refs/tags/$TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::not a release tag: '$TAG'"
+            exit 1
+          fi
+          {
+            echo "version=${TAG#v}"
+            echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/$IMAGE"
+            echo "hub=docker.io/$HUB_NAMESPACE/$IMAGE"
+          } >> "$GITHUB_OUTPUT"
+
+      - &checkout-ci
+        name: Check out the workflow's commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          path: ci
+          persist-credentials: false
+
+      - &checkout-src
+        name: Check out the source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ steps.meta.outputs.ref }}
+          path: src
+          persist-credentials: false
+
+      # A tag cut before image publishing existed has amd64-only Dockerfiles
+      # (an amd64 OPA binary passes the arm64 build on an amd64 runner, then
+      # fails on a real arm64 host) and trusts every proxy. Refuse it: such a
+      # tree has no docker-publish.yml, which arrived with those fixes.
+      - &check-src
+        name: Refuse a source that predates image publishing
+        id: rev
+        run: |
+          if [ ! -f src/.github/workflows/docker-publish.yml ]; then
+            echo "::error::this tag predates image publishing; its Dockerfiles are not safe to publish"
+            exit 1
+          fi
+          echo "sha=$(git -C src rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - &build-and-scan
+        name: Build and scan
+        uses: ./ci/.github/actions/build-and-scan
+        with:
+          context: ${{ matrix.context }}
+          dockerfile: ${{ matrix.dockerfile }}
+          ignorefile: ci/.trivyignore
+
   publish:
     name: ${{ matrix.image }}
+    if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     environment: docker-release
     # Only this job holds a registry write and an OIDC token, and only behind
-    # the environment's reviewers.
+    # the environment's reviewers. One job builds both architectures, so the
+    # push needs one approval and yields one multi-arch digest.
     permissions:
       contents: read
       packages: write
       id-token: write
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - image: hexgate-api
-            context: .
-            dockerfile: platform/api/Dockerfile
-          - image: hexgate-mcp
-            context: .
-            dockerfile: platform/mcp/Dockerfile
-          - image: hexgate-collector
-            context: platform/collector
-            dockerfile: platform/collector/Dockerfile
+      matrix: *images
 
     steps:
-      # The tag reaches the shell as an env var and must look like a release
-      # tag before anything uses it. GHCR wants lowercase owner names.
-      - name: Resolve the tag
-        id: meta
-        env:
-          TAG: ${{ inputs.tag }}
-          IMAGE: ${{ matrix.image }}
-        run: |
-          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::not a release tag: $TAG"
-            exit 1
-          fi
-          {
-            echo "tag=$TAG"
-            echo "version=${TAG#v}"
-            echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/$IMAGE"
-            echo "hub=docker.io/hexgate/$IMAGE"
-          } >> "$GITHUB_OUTPUT"
-
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: refs/tags/${{ steps.meta.outputs.tag }}
-          persist-credentials: false
-
-      - name: Commit of the tag
-        id: rev
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      # Emulation for the arm64 half of the build. Only the final stages need
-      # it: the dashboard bundle and the Go compile run on the build platform
-      # (see the Dockerfiles). One job builds both architectures, so the push
-      # needs one approval and yields one multi-arch digest.
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
-        with:
-          platforms: arm64
-
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-
-      # One single-platform archive per architecture: given a multi-arch
-      # image, Trivy scans only its first platform and ignores --platform.
-      # No cache-from/cache-to: a cache shared with PR builds could be
-      # poisoned by a PR. The push build below reuses these builds' layers
-      # from the job's own builder.
-      - name: Build amd64 for the scan
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64
-          outputs: type=docker,dest=${{ runner.temp }}/image-amd64.tar
-
-      - name: Build arm64 for the scan
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/arm64
-          outputs: type=docker,dest=${{ runner.temp }}/image-arm64.tar
-
-      # Trivy from its image pinned by digest, not trivy-action, whose tags
-      # were hijacked in 2026. It reads the saved tar: no Docker socket is
-      # mounted into it. Fails on HIGH/CRITICAL findings that have a fix;
-      # accept one deliberately by listing it in .trivyignore with a reason.
-      - name: Scan
-        run: |
-          mounts=()
-          flags=()
-          if [ -f .trivyignore ]; then
-            mounts+=(-v "$PWD/.trivyignore:/trivyignore:ro")
-            flags+=(--ignorefile /trivyignore)
-          fi
-          for arch in amd64 arm64; do
-            echo "::group::linux/$arch"
-            docker run --rm "${mounts[@]}" \
-              -v "$RUNNER_TEMP/image-$arch.tar:/image.tar:ro" \
-              aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c \
-              image --input /image.tar --scanners vuln \
-              --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
-              "${flags[@]}"
-            echo "::endgroup::"
-          done
+      - *resolve
+      - *checkout-ci
+      - *checkout-src
+      - *check-src
+      # Scanned again here, right before the push, even after release.yml's
+      # dry run: this is the build that ships.
+      - *build-and-scan
 
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:

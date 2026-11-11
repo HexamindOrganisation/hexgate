@@ -1,10 +1,12 @@
 name: release
 
 # Manual trigger only — click "Run workflow" in the Actions tab.
-# Pick a version-type (or explicit version), the workflow runs the full
-# test matrix as a gate, bumps the SDK version, builds sdist + wheel,
-# publishes to PyPI via trusted publishing (OIDC — no token), commits
-# the bump, tags it, and opens a GitHub release with auto-generated notes.
+# Pick a version-type (or explicit version), the workflow scans the platform
+# images (a real release only), runs the full test matrix as a gate, bumps
+# the SDK version, builds sdist + wheel, publishes to PyPI via trusted
+# publishing (OIDC — no token), commits the bump, tags it, opens a GitHub
+# release with auto-generated notes, then publishes the platform images
+# (docker-publish.yml).
 #
 # ----------------------------------------------------------------------
 # PyPI trusted-publisher registration — REQUIRED before the first run:
@@ -72,7 +74,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Build and scan the platform images (dry run: no credentials, no push)
+  # before the release job publishes anything irreversible. Only for a real
+  # release, the one that goes on to publish images; dry runs and TestPyPI
+  # runs skip it.
+  image-scan:
+    if: ${{ !inputs.dry-run && inputs.target == 'pypi' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/docker-publish.yml
+    with:
+      dry-run: true
+
   release:
+    needs: image-scan
+    # Runs after a passing scan, or when the scan was skipped (dry run,
+    # TestPyPI); never after a failed or cancelled one.
+    if: ${{ !cancelled() && (needs.image-scan.result == 'success' || needs.image-scan.result == 'skipped') }}
     runs-on: ubuntu-latest
     # Ties this job to the GitHub Environment defined in the repo
     # settings — that's what enforces the required-reviewer prompt and
@@ -213,6 +231,16 @@ jobs:
           # Re-read what uv wrote, so the rest of the workflow has the
           # canonical value (handles dev / rc / etc. suffixes correctly).
           NEXT=$(uv version --short)
+          # A real release also tags images as v$NEXT, and docker-publish.yml
+          # accepts only this shape. Refuse anything else HERE, before PyPI,
+          # the tag and the GitHub release, not after them.
+          if [ "$TARGET" = "pypi" ] && ! [[ "$NEXT" =~ ^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?$ ]]; then
+            echo "::error::$NEXT is not X.Y.Z or X.Y.Z{a,b,rc}N, the versions the platform images can be tagged with"
+            exit 1
+          fi
+          # platform/api pins the SDK by path; keep its lock's hexgate entry
+          # in step with the bump (it is committed with the root lock below).
+          (cd platform/api && uv lock)
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"
           echo "Resolved next version: $NEXT"
 
@@ -274,7 +302,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml uv.lock
+          git add pyproject.toml uv.lock platform/api/uv.lock
           git commit -m "release: v${{ steps.bump.outputs.version }}"
           git tag "v${{ steps.bump.outputs.version }}"
           git push origin HEAD:main
