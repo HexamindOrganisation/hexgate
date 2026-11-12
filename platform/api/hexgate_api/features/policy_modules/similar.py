@@ -1,5 +1,6 @@
-"""Similar agents: which registered agents look most like a given one, by
-keyword, so a new policy can start from the closest agents' policies.
+"""Similar agents: which registered agents look most like a given one, by their
+tool names and roles, so a new policy can start from the closest agents'
+policies. Tool descriptions are not compared.
 
 No embeddings. Each pair of agents gets three similarities between 0 and 1,
 one per signal: the tool names both register, the words of those names, and

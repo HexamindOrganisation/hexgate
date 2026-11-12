@@ -267,9 +267,10 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
     @mcp.tool(annotations=READ_ONLY, structured_output=False)
     async def policy_search_similar(project_id: str, agent: str, limit: int = 5) -> str:
         """Find the registered agents closest to `agent`, to start its policy
-        from theirs. Ranked by keyword overlap, best first. `score` is 0 to 1:
-        the weighted sum of three `signals`, each 0 to 1 (shared tool names 0.7,
-        words in tool names 0.2, roles the project policy defines 0.1). A
+        from theirs. Ranked by shared tool names, words in tool names and
+        roles, best first; tool descriptions are not compared. `score` is 0 to
+        1: the weighted sum of three `signals`, each 0 to 1 (shared tool names
+        0.7, words in tool names 0.2, roles the project policy defines 0.1). A
         feature few agents have counts for more, and an agent with many tools
         does not outrank a small one for it. Each match lists what was shared
         in `reasons`, and `has_policy` says whether it has a policy of its own:

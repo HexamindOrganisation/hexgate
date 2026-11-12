@@ -632,10 +632,10 @@ async def api_policy_similar_agents(
     _user: User = Depends(require_org_member),
     session: AsyncSession = Depends(get_session),
 ) -> SimilarAgentsResponse:
-    """The other registered agents closest to ``agent`` by keyword (shared
-    tools, tool-name and description words, roles), best first by a 0 to 1
-    ``score``, each with its per-signal ``signals``, the ``reasons`` it ranked
-    and whether it has a policy to start from. 404 for an
+    """The other registered agents closest to ``agent`` by shared tool names,
+    words in tool names and roles, best first by a 0 to 1 ``score``, each with
+    its per-signal ``signals``, the ``reasons`` it ranked and whether it has a
+    policy to start from. Tool descriptions are not compared. 404 for an
     ``agent`` that is not registered; 422 as for ``/policy/coverage``."""
     try:
         has_manifest, matches = await similar.similar_agents(
