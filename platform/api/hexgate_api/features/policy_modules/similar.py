@@ -206,5 +206,10 @@ async def similar_agents(
                     reasons=reasons,
                 )
             )
+    # A full sort, O(n log n), not a top-`limit` heap, O(n log limit): a project
+    # has tens of agents, and loading and parsing every agent's policy and
+    # manifest, plus the rarity counts that need every agent, cost far more. If
+    # projects reach thousands of agents, `heapq.nsmallest(limit, matches, key)`
+    # with the same key is the drop-in.
     matches.sort(key=lambda m: (-m.score, m.agent))
     return agent in manifests, matches[:limit]
