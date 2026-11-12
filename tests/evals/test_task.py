@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -463,13 +464,15 @@ def test_the_running_sandbox_reaches_only_anthropic_through_the_proxy() -> None:
 
 
 def test_sandbox_image_installs_opa_per_architecture_before_dropping_root() -> None:
+    # The version and checksums themselves are checked against the API image's
+    # by tests/test_opa_pin.py; this pins the per-architecture shape.
     dockerfile = task.COMPOSE.with_name("Dockerfile").read_text()
-    for arch, sha in [
-        ("amd64", "00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084"),
-        ("arm64", "48061407a2d7b0b59440fc3a257e7bb251e9ec62f6ce7b1e45c142263ae24413"),
-    ]:
-        url = f"https://openpolicyagent.org/downloads/v0.70.0/opa_linux_{arch}_static"
-        assert f"--checksum=sha256:{sha} \\\n    {url} /opa" in dockerfile
+    for arch in ("amd64", "arm64"):
+        assert re.search(
+            r"--checksum=sha256:[0-9a-f]{64} \\\n    "
+            rf"https://openpolicyagent\.org/downloads/v[0-9.]+/opa_linux_{arch}_static /opa",
+            dockerfile,
+        ), arch
     assert "FROM opa-${TARGETARCH}" in dockerfile
     assert dockerfile.index("/usr/local/bin/opa") < dockerfile.index("\nUSER ")
 

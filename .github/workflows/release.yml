@@ -1,10 +1,12 @@
 name: release
 
 # Manual trigger only — click "Run workflow" in the Actions tab.
-# Pick a version-type (or explicit version), the workflow runs the full
-# test matrix as a gate, bumps the SDK version, builds sdist + wheel,
-# publishes to PyPI via trusted publishing (OIDC — no token), commits
-# the bump, tags it, and opens a GitHub release with auto-generated notes.
+# Pick a version-type (or explicit version), the workflow scans the platform
+# images (a real release only), runs the full test matrix as a gate, bumps
+# the SDK version, builds sdist + wheel, publishes to PyPI via trusted
+# publishing (OIDC — no token), commits the bump, tags it, opens a GitHub
+# release with auto-generated notes, then publishes the platform images
+# (docker-publish.yml).
 #
 # ----------------------------------------------------------------------
 # PyPI trusted-publisher registration — REQUIRED before the first run:
@@ -72,17 +74,40 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Build and scan the platform images (dry run: no credentials, no push)
+  # before the release job publishes anything irreversible. Only for a real
+  # release, the one that goes on to publish images; dry runs and TestPyPI
+  # runs skip it.
+  image-scan:
+    if: ${{ !inputs.dry-run && inputs.target == 'pypi' }}
+    # A ceiling, not a grant: it must cover every job in docker-publish.yml,
+    # the skipped publish job included, or the whole release fails to start.
+    # The scan job itself runs with contents: read.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/docker-publish.yml
+    with:
+      dry-run: true
+
   release:
+    needs: image-scan
+    # Runs after a passing scan, or when the scan was skipped (dry run,
+    # TestPyPI); never after a failed or cancelled one.
+    if: ${{ !cancelled() && (needs.image-scan.result == 'success' || needs.image-scan.result == 'skipped') }}
     runs-on: ubuntu-latest
     # Ties this job to the GitHub Environment defined in the repo
     # settings — that's what enforces the required-reviewer prompt and
     # the main-only branch restriction. Also what PyPI's trusted-publisher
     # entry pins against (we registered with Environment = pypi-release).
     environment: pypi-release
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Full history so the GitHub release-notes generator can
           # `git log` since the previous tag.
@@ -96,7 +121,7 @@ jobs:
       # --------------------------------------------------------------
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
@@ -113,20 +138,23 @@ jobs:
             --speed-limit 1024 --speed-time 20 \
             --retry 5 --retry-all-errors --retry-delay 5 \
             -o opa \
-            https://github.com/open-policy-agent/opa/releases/download/v0.70.0/opa_linux_amd64_static
+            https://github.com/open-policy-agent/opa/releases/download/v1.21.4/opa_linux_amd64_static
+          # Same pin as platform/api/Dockerfile: a tampered download fails here.
+          echo "2ab571f367f293bb19523b76f92f1945bbf245003392c7f392903f95c2b9b630  opa" | sha256sum -c -
           chmod +x opa
           sudo mv opa /usr/local/bin/opa
           opa version
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
-          version: 9
+          # The exact version package.json's packageManager pins.
+          package_json_file: platform/dashboard/package.json
 
-      - name: Set up Node 20
-        uses: actions/setup-node@v4
+      - name: Set up Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
           cache-dependency-path: platform/dashboard/pnpm-lock.yaml
 
@@ -178,8 +206,16 @@ jobs:
 
       - name: Bump version
         id: bump
+        # Inputs reach the shell as env vars, never spliced into the script:
+        # a free-text `version` could otherwise inject commands into a job
+        # holding a write token.
+        env:
+          TARGET: ${{ inputs.target }}
+          VERSION: ${{ inputs.version }}
+          VERSION_TYPE: ${{ inputs.version-type }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          if [ "${{ inputs.target }}" = "testpypi" ]; then
+          if [ "$TARGET" = "testpypi" ]; then
             # TestPyPI runs use an ephemeral dev version tied to the
             # workflow run number. Each dry-run gets its own slot
             # (`0.0.0.dev<run>`) so iterating against TestPyPI never
@@ -190,16 +226,26 @@ jobs:
             # *real* PyPI, and that decision shouldn't be consumed by a
             # dry run. The pyproject.toml change is never committed back
             # to main on this path (see step 6).
-            uv version "0.0.0.dev${{ github.run_number }}"
-          elif [ -n "${{ inputs.version }}" ]; then
+            uv version "0.0.0.dev$RUN_NUMBER"
+          elif [ -n "$VERSION" ]; then
             # Explicit version (e.g. "1.2.3") overrides version-type.
-            uv version "${{ inputs.version }}"
+            uv version "$VERSION"
           else
-            uv version --bump "${{ inputs.version-type }}"
+            uv version --bump "$VERSION_TYPE"
           fi
           # Re-read what uv wrote, so the rest of the workflow has the
           # canonical value (handles dev / rc / etc. suffixes correctly).
           NEXT=$(uv version --short)
+          # A real release also tags images as v$NEXT, and docker-publish.yml
+          # accepts only this shape. Refuse anything else HERE, before PyPI,
+          # the tag and the GitHub release, not after them.
+          if [ "$TARGET" = "pypi" ] && ! [[ "$NEXT" =~ ^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?$ ]]; then
+            echo "::error::$NEXT is not X.Y.Z or X.Y.Z{a,b,rc}N, the versions the platform images can be tagged with"
+            exit 1
+          fi
+          # platform/api pins the SDK by path; keep its lock's hexgate entry
+          # in step with the bump (it is committed with the root lock below).
+          (cd platform/api && uv lock)
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"
           echo "Resolved next version: $NEXT"
 
@@ -229,13 +275,13 @@ jobs:
       # already-published file.
       - name: Publish to PyPI
         if: ${{ !inputs.dry-run && inputs.target == 'pypi' }}
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           skip-existing: true
 
       - name: Publish to TestPyPI
         if: ${{ !inputs.dry-run && inputs.target == 'testpypi' }}
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
@@ -261,7 +307,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml uv.lock
+          git add pyproject.toml uv.lock platform/api/uv.lock
           git commit -m "release: v${{ steps.bump.outputs.version }}"
           git tag "v${{ steps.bump.outputs.version }}"
           git push origin HEAD:main
@@ -269,9 +315,23 @@ jobs:
 
       - name: GitHub release
         if: ${{ !inputs.dry-run && inputs.target == 'pypi' }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: "v${{ steps.bump.outputs.version }}"
           name: "v${{ steps.bump.outputs.version }}"
           # Auto-generate notes from commits since the previous tag.
           generate_release_notes: true
+
+  # The platform images for the same tag. Called, not triggered by the
+  # release: a release made with GITHUB_TOKEN starts no other workflow. Its
+  # own `docker-release` environment asks for a second approval.
+  images:
+    needs: release
+    if: ${{ !inputs.dry-run && inputs.target == 'pypi' }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/docker-publish.yml
+    with:
+      tag: v${{ needs.release.outputs.version }}

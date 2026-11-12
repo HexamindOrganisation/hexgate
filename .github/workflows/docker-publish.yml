@@ -1,0 +1,269 @@
+name: docker-publish
+
+# Publish the platform images (api, mcp, collector) to GHCR and Docker Hub for
+# a release tag: one build, so both registries serve the same digest.
+# Called by release.yml once a real release is tagged, or dispatched by hand
+# from main: with an existing tag to (re)publish it, or without one to
+# publish main's commit as `sha-<commit>` only. Not on `release:
+# published`: release.yml creates the release with GITHUB_TOKEN, and events
+# made with that token never start other workflows.
+#
+# Per image: build from the tag's checkout for amd64 and arm64, scan each
+# architecture, and only if the scan is clean push with SBOM + provenance
+# attestations, then sign the pushed digest with cosign (keyless, through the
+# job's OIDC identity). Pull by digest and verify with `cosign verify`
+# (platform/DEPLOY.md, "Published images").
+#
+# Without a tag, the source is the workflow's own commit, with or without
+# dry-run. `dry-run: true` builds and scans only, without credentials or
+# approval. release.yml runs
+# it before anything irreversible, so a failing scan stops the release before
+# PyPI instead of after.
+#
+# Two checkouts per job: the workflow's own commit (ci/), for the build-and-
+# scan action and .trivyignore.yaml, and the source being built (src/). So a
+# finding can be accepted in .trivyignore.yaml on main for a tag that already
+# exists.
+#
+# ----------------------------------------------------------------------
+# REQUIRED before the first run: a GitHub Environment named `docker-release`
+#   Settings → Environments → New environment → "docker-release"
+#     - Required reviewers: at least one maintainer
+#     - Deployment branches: main only
+#     - Environment secrets (only this gated job can read them):
+#         DOCKERHUB_USERNAME  the Docker Hub account that owns the token
+#         DOCKERHUB_TOKEN     a Docker Hub access token, Read & Write,
+#                             with push rights on the Docker Hub namespace
+# Optional repository variable DOCKERHUB_NAMESPACE: the Docker Hub namespace,
+# `hexgate` when unset (a fork sets its own).
+# GHCR needs no secret: the job's GITHUB_TOKEN pushes there.
+#
+# REQUIRED after the first publish: make each GHCR package public. The first
+# push creates hexgate-api, hexgate-mcp and hexgate-collector as private org
+# packages, and `docker compose pull` gets `denied` until then:
+#   Organization → Packages → <package> → Package settings → Change visibility
+# ----------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to publish, e.g. v0.4.0. Empty: the calling commit, tagged sha-<commit> only."
+        type: string
+        required: false
+        default: ""
+      dry-run:
+        description: "Build and scan only: no push, no credentials, no approval."
+        type: boolean
+        required: false
+        default: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to publish, e.g. v0.4.0. Empty: this commit, tagged sha-<commit> only."
+        type: string
+        required: false
+        default: ""
+      dry-run:
+        description: "Build and scan only: no push, no credentials, no approval."
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-publish-${{ inputs.tag || github.sha }}-${{ inputs.dry-run }}
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: ${{ matrix.image }} (dry run)
+    if: ${{ inputs.dry-run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: &images
+        include:
+          - image: hexgate-api
+            context: src
+            dockerfile: src/platform/api/Dockerfile
+          - image: hexgate-mcp
+            context: src
+            dockerfile: src/platform/mcp/Dockerfile
+          - image: hexgate-collector
+            context: src/platform/collector
+            dockerfile: src/platform/collector/Dockerfile
+
+    steps:
+      - &resolve
+        # The tag reaches the shell as an env var and must look like a release
+        # tag (the same shape release.yml enforces) before anything uses it.
+        # No tag: the workflow's own commit (main, for a publish: the
+        # environment only admits main). GHCR wants lowercase owner names.
+        name: Resolve the source
+        id: meta
+        env:
+          TAG: ${{ inputs.tag }}
+          IMAGE: ${{ matrix.image }}
+          HUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || 'hexgate' }}
+        run: |
+          if [ -z "$TAG" ]; then
+            echo "ref=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          elif [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?$ ]]; then
+            echo "ref=refs/tags/$TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::not a release tag: '$TAG'"
+            exit 1
+          fi
+          {
+            echo "version=${TAG#v}"
+            echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/$IMAGE"
+            echo "hub=docker.io/$HUB_NAMESPACE/$IMAGE"
+          } >> "$GITHUB_OUTPUT"
+
+      - &checkout-ci
+        name: Check out the workflow's commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          path: ci
+          persist-credentials: false
+
+      - &checkout-src
+        name: Check out the source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ steps.meta.outputs.ref }}
+          path: src
+          persist-credentials: false
+
+      # A tag cut before image publishing existed has amd64-only Dockerfiles
+      # (an amd64 OPA binary passes the arm64 build on an amd64 runner, then
+      # fails on a real arm64 host) and trusts every proxy. Refuse it: such a
+      # tree has no docker-publish.yml, which arrived with those fixes.
+      - &check-src
+        name: Refuse a source that predates image publishing
+        id: rev
+        run: |
+          if [ ! -f src/.github/workflows/docker-publish.yml ]; then
+            echo "::error::this tag predates image publishing; its Dockerfiles are not safe to publish"
+            exit 1
+          fi
+          echo "sha=$(git -C src rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - &build-and-scan
+        name: Build and scan
+        uses: ./ci/.github/actions/build-and-scan
+        with:
+          context: ${{ matrix.context }}
+          dockerfile: ${{ matrix.dockerfile }}
+          ignorefile: ci/.trivyignore.yaml
+
+  publish:
+    name: ${{ matrix.image }}
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    environment: docker-release
+    # Only this job holds a registry write and an OIDC token, and only behind
+    # the environment's reviewers. One job builds both architectures, so the
+    # push needs one approval and yields one multi-arch digest.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix: *images
+
+    steps:
+      - *resolve
+      - *checkout-ci
+      - *checkout-src
+      - *check-src
+      # Scanned again here, right before the push, even after release.yml's
+      # dry run: this is the build that ships.
+      - *build-and-scan
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Immutable tags only: the version (when publishing a release tag) and
+      # the commit. No `latest`, so a tag never changes meaning; consumers
+      # should still pull by digest.
+      - name: Tags
+        id: tags
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          HUB: ${{ steps.meta.outputs.hub }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHA: ${{ steps.rev.outputs.sha }}
+        run: |
+          {
+            echo "list<<EOF"
+            for repo in "$IMAGE" "$HUB"; do
+              if [ -n "$VERSION" ]; then
+                echo "$repo:$VERSION"
+              fi
+              echo "$repo:sha-$SHA"
+            done
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Push
+        id: push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.tags.outputs.list }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.rev.outputs.sha }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version || format('sha-{0}', steps.rev.outputs.sha) }}
+            org.opencontainers.image.licenses=MIT
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+
+      # Keyless: the signature binds the digest to this workflow's identity,
+      # which `cosign verify` checks (DEPLOY.md). Signatures live beside the
+      # image in each registry, so sign it in both. The digest is the
+      # multi-arch index; --recursive also signs each platform's manifest,
+      # so a digest pinned to one architecture verifies too.
+      - name: Sign
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          HUB: ${{ steps.meta.outputs.hub }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes --recursive "$IMAGE@$DIGEST" "$HUB@$DIGEST"
+
+      - name: Summary
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          HUB: ${{ steps.meta.outputs.hub }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          VERSION: ${{ steps.meta.outputs.version || format('sha-{0}', steps.rev.outputs.sha) }}
+        run: |
+          {
+            echo "Published \`$VERSION\` as digest \`$DIGEST\`:"
+            echo "- \`$IMAGE@$DIGEST\`"
+            echo "- \`$HUB@$DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"
