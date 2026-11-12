@@ -12,6 +12,9 @@ dependencies = [
     # are nested (`_IncludedRouter`) and drop out of `app.routes`, which the
     # OAuth scope-mark tests enumerate. 0.137 to 0.161 are untested.
     "fastapi>=0.115,<0.137",
+    # Imported directly (features/oauth/provider.py) and capped for the same
+    # reason as fastapi: a new major can change route shapes under it.
+    "starlette<2",
     "uvicorn[standard]>=0.32",
     "sqlmodel>=0.0.22",
     "pydantic>=2.9",

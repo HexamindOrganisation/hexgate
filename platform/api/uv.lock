@@ -985,6 +985,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "resend" },
     { name = "sqlmodel" },
+    { name = "starlette" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "weasyprint" },
 ]
@@ -1022,6 +1023,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.1.1" },
     { name = "resend", specifier = ">=2.4" },
     { name = "sqlmodel", specifier = ">=0.0.22" },
+    { name = "starlette", specifier = "<2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
     { name = "weasyprint", specifier = ">=70.0" },
 ]
