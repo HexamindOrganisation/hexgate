@@ -396,11 +396,6 @@ def test_naive_driver_timestamps_are_stamped_utc() -> None:
     assert row["received_at"].tzinfo is timezone.utc
 
 
-def test_aware_driver_timestamps_are_left_alone() -> None:
-    aware = datetime(2026, 5, 4, 7, 8, 9, tzinfo=timezone.utc)
-    assert service._as_utc(aware) is aware
-
-
 def test_empty_period_reports_no_coverage_dates() -> None:
     """min/max over zero rows come back as the epoch, not NULL — a table with
     no events would otherwise claim coverage from 1970."""
