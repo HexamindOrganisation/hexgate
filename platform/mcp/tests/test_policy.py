@@ -41,6 +41,7 @@ ANSWERS = {
     ("POST", "/policy/preview"): {"resolved": {}, "lints": []},
     ("POST", "/policy/test"): {"outcome": "allow"},
     ("GET", "/policy/coverage"): {"agents": []},
+    ("GET", "/policy/similar-agents"): {"agent": "bot", "matches": []},
 }
 # The tools that read the resolved policy, so refuse a project with no store.
 RESOLVED = [
@@ -59,6 +60,7 @@ CALLS = [
     ("policy_check", {}),
     ("policy_dry_run", DRY_RUN),
     ("policy_coverage", {}),
+    ("policy_search_similar", {"agent": "bot"}),
 ]
 
 
@@ -521,3 +523,50 @@ def test_when_policy_coverage_exceeds_the_cap_then_whole_agents_are_kept(token):
     assert sent_back["truncated"] is True
     assert 0 < len(sent_back["agents"]) < len(fleet)
     assert sent_back["agents"] == fleet[: len(sent_back["agents"])]
+
+
+def similar_match(name: str, **extra) -> dict:
+    return {
+        "agent": name,
+        "score": 0.45,
+        "has_policy": True,
+        "roles": ["support"],
+        "signals": {"tools": 0.5, "name_words": 0.4, "roles": 1.0},
+        "reasons": {
+            "shared_tools": ["issue_refund"],
+            "shared_name_words": [],
+            "shared_roles": ["support"],
+        },
+        **extra,
+    }
+
+
+def test_policy_search_similar_happy_path(token):
+    # `note` stands for a field the API adds later: it goes out marked.
+    answer = {
+        "agent": "bot",
+        "has_manifest": True,
+        "matches": [similar_match("billing-bot", note=INJECTED)],
+    }
+    mock_api(**{"/policy/similar-agents": answer})
+
+    result = call(token, "policy_search_similar", agent="bot", limit=3)
+
+    assert json.loads(result["content"][0]["text"]) == {
+        "agent": "bot",
+        "has_manifest": True,
+        "matches": [similar_match("billing-bot", untrusted_note=INJECTED)],
+    }
+    assert [sent(r) for r in api_requests()] == [
+        ("GET", "/policy/similar-agents", {"agent": "bot", "limit": "3"})
+    ]
+
+
+def test_when_agent_is_unknown_then_policy_search_similar_carries_the_404(token):
+    detail = "agent 'ghost' is not registered"
+    mock_api()
+    respx.get(f"{API_URL}{BASE}/policy/similar-agents").respond(
+        404, json={"detail": detail}
+    )
+
+    assert detail in error(call(token, "policy_search_similar", agent="ghost"))
