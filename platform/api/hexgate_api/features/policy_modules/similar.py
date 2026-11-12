@@ -84,7 +84,9 @@ def _words(text: str) -> list[str]:
 
 def _singular(word: str) -> str:
     """``invoices`` → ``invoice``, ``boxes`` → ``box``; not ``address`` or
-    ``status``."""
+    ``status``. Deliberately rough and English only (``queries`` is not
+    handled): the simplest rule that matches the common plurals, until
+    embeddings replace the word comparison."""
     if len(word) < _MIN_PLURAL_WORD or word.endswith(("ss", "us", "is")):
         return word
     if _ES_PLURAL.search(word):
