@@ -301,3 +301,7 @@ async def test_when_target_has_no_policy_section_then_candidates_are_scored_alik
     # policy to copy must not rank below the one without.
     scores = {m["agent"]: m["score"] for m in matches}
     assert scores == {"other_bot": pytest.approx(1.0), "refund_bot": pytest.approx(1.0)}
+
+
+def test_when_weights_are_summed_then_they_equal_1():
+    assert sum(similar.SIGNAL_WEIGHTS.values()) == pytest.approx(1.0)
