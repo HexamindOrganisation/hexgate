@@ -141,17 +141,23 @@ expect:
 
 ## A starting project
 
-Besides the policy files, a starting project holds what the Hexgate MCP server
-would return to a real agent:
+Besides the policy files, a starting project holds the platform's data that the
+Hexgate MCP server would show a real agent. The files keep the API's own field
+names (`GET /agents/manifest`, `GET /audit/decisions`); the MCP tools return the
+same data with each free-text field renamed `untrusted_<field>` (a tool's
+`description`, an audit row's `args`, `attributes` and `reason`, among others),
+so an agent in the MCP server's flow reads those names, not the ones in these
+files:
 
 - `agents.json` (required): every agent in the project with its manifest, as
-  `agents_list` (`GET /agents/manifest`) returns it. A case's agent knows only
+  the API returns it (`agents_list` returns it with the renames above). A case's agent knows only
   the tools, arguments and skills in its own manifest, plus the synthetic
   `net.*`, `agent.run`, `agent.<via>:<target>` (a sub-agent its manifest
   lists with that `via`; with none listed, a LangChain agent may reach any
   other agent in this list as a tool, since LangGraph hides those edges) and
   `skill:` / `skill.resource:` / `skill.script:` calls.
-- `audit.json` (optional): audit rows, as `audit_decisions` returns them. Caller
+- `audit.json` (optional): audit rows, as the API returns them
+  (`audit_decisions` returns them with the renames above). Caller
   attributes are set per request, not in the manifest, so the `ctx.*` names a
   case's agent knows are the `attributes` keys of its own rows (any agent's,
   for a case without `agent`).
@@ -185,6 +191,60 @@ The loader adds these, so a case lists only what is particular to it.
   calls are dry-run for each case's `agent` (on every agent for a case
   without one), so every case on a project with a `preserve.yaml` should name
   the same agent or none.
+
+## Run with the MCP server
+
+`-T agent=claude` cannot use the Hexgate MCP server. The sandbox's only route
+out is the proxy, and `squid.conf` allows `api.anthropic.com:443` and nothing
+else, so the MCP host is refused; the container also holds no browser to log in
+with and no login of yours, only `CLAUDE_CODE_OAUTH_TOKEN`. To see how Claude
+Code does with the server, run a case by hand on your machine and score the
+files it leaves:
+
+1. Log in once: `claude mcp add -s user --transport http hexgate <MCP URL>`
+   (`https://app.hexgate.ai/mcp` for Hexgate Cloud; `-s user` so the server is
+   also there in the folder of step 2), start a new Claude Code session, `/mcp`, Authenticate, and tick the project the case should use.
+   The login lives in Claude Code's own credential store on your machine, and
+   the run below uses it: it is your session, not one made for the eval.
+2. Copy the case's starting project (`starting_projects/…`, or the case's own
+   `starting_project/`; not `preserve.yaml`) into an empty folder outside the
+   repo, put the `write-policy` skill in its `.claude/skills/`, and run
+   `claude` there with the prompt `/write-policy <the case's request>`. The skill
+   runs `hexgate policy …` (`--engine wasm` needs `opa`), so `hexgate` and `opa`
+   must be on your `PATH` there. Nothing of the sandbox applies:
+   there is no proxy, and the agent can read whatever your account can.
+   The server's tools act on the platform project you ticked, not on the case's
+   `agents.json` and `audit.json`, and `policy_save` overwrites that project's
+   stored policy file while leaving nothing in the folder, so such a run scores
+   as no change. Tick a throwaway project, and have the agent edit the folder's
+   files; only those are scored. (`policy_write_local` exists only on a server
+   you started yourself with `HEXGATE_MCP_LOCAL_POLICY_DIR`, never on Hexgate
+   Cloud.)
+3. Score the folder from the repo root. `grade` is the scorer's own function;
+   `explicit_request/support_refund_cap` is a case id, and the last argument is
+   the agent's final message, which a case with `mentions_any` or
+   `mentions_all` checks (`done` fails those):
+
+```bash
+PYTHONPATH=. uv run --extra dev --extra evals python /path/to/score.py \
+    explicit_request/support_refund_cap /path/to/folder "done"
+```
+
+with `score.py`:
+
+```python
+import sys
+from pathlib import Path
+from evals.policy_writing.cases import load_cases
+from evals.policy_writing.task import grade
+
+case = next(c for c in load_cases() if c["id"] == sys.argv[1])
+print(grade(case, Path(sys.argv[2]), sys.argv[3], (0, 0)).explanation)
+```
+
+Keep `score.py` outside the repo. The `(0, 0)` skips the size check the sandbox
+run applies, and the run is one sample, not the epochs of `make policy-eval`.
+Each run bills the subscription of the account you are logged in with.
 
 ## Our answers
 
