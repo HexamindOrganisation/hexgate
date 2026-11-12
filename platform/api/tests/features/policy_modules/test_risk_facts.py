@@ -29,6 +29,12 @@ def _manifest() -> AgentManifest:
             "framework": "hexgate",
             "tools": [
                 tool("refund_order", amount="number", currency="string"),
+                tool("fetch_page", url="string", note="string"),
+                tool("post_hook", callbackUrl="string"),
+                tool("ping", host_name="string"),
+                tool("open_page", targeturl="string"),
+                tool("fetch_all", targetURLs="string"),
+                tool("compare", url2="string"),
                 tool("delete_user", user_id="string"),
             ],
         }
@@ -137,8 +143,65 @@ def test_when_a_tool_falls_to_an_allowing_default_then_it_counts():
     facts = _facts({"default_policy": {"mode": "allow"}}, _manifest())
     assert facts == {
         UNBOUNDED,
+        ("fetch_page", "host_without_allowlist", "url"),
+        ("post_hook", "host_without_allowlist", "callbackUrl"),
+        ("ping", "host_without_allowlist", "host_name"),
+        ("open_page", "host_without_allowlist", "targeturl"),
+        ("fetch_all", "host_without_allowlist", "targetURLs"),
+        ("compare", "host_without_allowlist", "url2"),
         ("delete_user", "destructive_without_approval", None),
+        ("net.http_request", "host_without_allowlist", "host"),
     }
+
+
+@pytest.mark.parametrize(
+    ("constraint", "flagged"),
+    [
+        ('startswith(args.url, "https://api.example.com/")', False),
+        ('startswith(args.url, "http://billing:8080/")', False),
+        ('matches(args.url, "^http://10\\\\.0\\\\.0\\\\.5/")', False),
+        ('matches(args.url, "^https://api\\\\.example\\\\.com/")', False),
+        ('matches(args.url, "^https://.*\\\\.example\\\\.com/")', True),
+        ('matches(args.url, "^https://api.example.com/")', True),
+        ('matches(args.url, "^https://api\\\\.example\\\\.com/?")', True),
+        ('matches(args.url, "^https://api\\\\.example\\\\.com/|^http")', True),
+        ('args.url in ["https://a.example/"]', False),
+        ('"https://a.example/" == args.url', False),
+        ('startswith(args.url, "https://")', True),
+        ('matches(args.url, "^https?://")', True),
+        ('startswith(args.url, "https://api.example.com")', True),
+        ('endswith(args.url, ".example.com")', True),
+        ('contains(args.url, "example.com")', True),
+        ('matches(args.url, "example\\\\.com")', True),
+        ('not startswith(args.url, "http://")', True),
+        ('startswith(args.note, "https://a.example/")', True),
+    ],
+)
+def test_when_url_has_a_constraint_then_only_a_named_host_pins_it(constraint, flagged):
+    policy = {"tools": {"fetch_page": {"mode": "allow", "constraints": [constraint]}}}
+    fact = ("fetch_page", "host_without_allowlist", "url")
+    assert (fact in _facts(policy, _manifest())) is flagged
+
+
+@pytest.mark.parametrize(
+    ("constraint", "flagged"),
+    [
+        (None, True),
+        ('args.host in ["api.example.com"]', False),
+        ('endswith(args.host, ".example.com")', False),
+        ('args.host == "internal" or endswith(args.host, ".internal")', False),
+        ('endswith(args.host, "example.com")', True),
+        ('endswith(args.host, ".1")', True),
+        ('startswith(args.url, "https://api.example.com/")', False),
+        ('endswith(args.url, ".example.com")', True),
+    ],
+)
+def test_when_egress_is_allowed_then_only_a_host_or_url_pin_clears_it(
+    constraint, flagged
+):
+    rule = {"mode": "allow", "constraints": [constraint] if constraint else []}
+    fact = ("net.http_request", "host_without_allowlist", "host")
+    assert (fact in _facts({"tools": {"net.http_request": rule}})) is flagged
 
 
 @pytest.mark.parametrize(
