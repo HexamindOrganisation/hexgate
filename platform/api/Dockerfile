@@ -52,7 +52,7 @@ ADD --checksum=sha256:810aa96e44f1f852d044888cf830324e44eafd0f510345339011347ab4
 FROM opa-${TARGETARCH} AS opa
 
 # The uv binary only, for the runtime stage below.
-FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
+FROM ghcr.io/astral-sh/uv:0.13.8@sha256:5cc1805e2426484abca4ad46ea783bab281fdb225fd82d8ce6d66a81254bac85 AS uv
 
 # ---- control-plane API ---------------------------------------------------
 # The official Python image, not uv's python image: it is rebuilt with each
