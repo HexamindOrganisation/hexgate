@@ -22,6 +22,7 @@ import type { JSX, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useActive, useProjectScoped } from "./active";
+import { useProjects } from "./projects";
 
 describe("useActive store", () => {
   beforeEach(() => {
@@ -211,5 +212,38 @@ describe("useProjectScoped", () => {
       expect(result.current.status).toBe("ready");
     });
     expect(result.current.projectId).toBe("proj-1");
+  });
+
+  it("stays 'loading' for a saved project the list no longer holds", async () => {
+    stubFetch({
+      "/v1/orgs": [
+        {
+          id: "org-1",
+          slug: "acme",
+          name: "Acme",
+          created_at: "2026-01-01T00:00:00Z",
+          role: "owner",
+        },
+      ],
+      "/v1/orgs/org-1/projects": [
+        {
+          id: "proj-1",
+          org_id: "org-1",
+          name: "production",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    });
+    act(() => {
+      useActive.setState({ activeOrgId: "org-1", activeProjectId: "deleted" });
+    });
+    const { result } = renderHook(
+      () => ({ scope: useProjectScoped(), projects: useProjects("org-1") }),
+      { wrapper: makeWrapper() },
+    );
+    // Once the list lands it still isn't ready: no page requests "deleted".
+    await waitFor(() => expect(result.current.projects.data).toBeDefined());
+    expect(result.current.scope.status).toBe("loading");
+    expect(result.current.scope.projectId).toBeNull();
   });
 });

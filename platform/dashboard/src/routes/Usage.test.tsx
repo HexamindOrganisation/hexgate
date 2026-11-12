@@ -3,7 +3,7 @@
  *
  * Load-bearing invariants:
  *
- *   1. KPI tiles render compact token counts and range-based averages
+ *   1. The stat strip renders compact token counts and range-based averages
  *      (24h → hourly average, everything else → daily average).
  *   2. Filter selection (model) lands in the next query URL.
  *   3. The empty-user bucket ("" over the wire) displays as "(none)" and
@@ -172,7 +172,7 @@ describe("UsagePage", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders KPI tiles with compact token counts and a daily average", async () => {
+  it("renders the stat strip with compact token counts and a daily average", async () => {
     stubFetch();
     renderWithProviders(<UsagePage />);
 
@@ -183,7 +183,7 @@ describe("UsagePage", () => {
     expect(screen.getByText("75% of total")).toBeInTheDocument();
     expect(screen.getByText("25% of total")).toBeInTheDocument();
     expect(screen.getByText("41/day avg")).toBeInTheDocument();
-    expect(screen.getByText("40000/day avg")).toBeInTheDocument();
+    expect(screen.getByText("40.0K/day avg")).toBeInTheDocument();
   });
 
   it("shows zero percentages and the empty breakdown message with no calls yet", async () => {
@@ -192,7 +192,15 @@ describe("UsagePage", () => {
 
     expect(await screen.findByText("demo-project")).toBeInTheDocument();
     expect(screen.getAllByText("0% of total")).toHaveLength(2);
-    expect(screen.getByText("No LLM calls match.")).toBeInTheDocument();
+    expect(screen.getByText("No model calls match.")).toBeInTheDocument();
+  });
+
+  it("says when no model calls fall in the range", async () => {
+    stubFetch(SUMMARY_EMPTY);
+    renderWithProviders(<UsagePage />);
+    expect(
+      await screen.findByText(/No model calls in the last 30 days/),
+    ).toBeInTheDocument();
   });
 
   it("shows an hourly average for the 24h range", async () => {

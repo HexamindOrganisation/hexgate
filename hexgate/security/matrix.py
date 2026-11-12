@@ -69,7 +69,8 @@ own ``constraints``, so a role-wide ``AgentPolicy.constraints`` fence does not
 reach its edges and a grant renders less conditional there than the engine
 enforces; it also renders no ``file_scope``. This module is the correct side on
 both counts. Worth reconciling when the graph and the report are asked to agree
-— not in this PR, which adds no endpoint.
+— still to do. The matrix itself is served at
+``GET /v1/projects/{id}/policy/matrix``.
 """
 
 from __future__ import annotations

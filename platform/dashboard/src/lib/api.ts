@@ -374,7 +374,28 @@ export interface PolicyFileDraft {
 export interface PolicyPreviewResponse {
   /** The effective policy per role, or null when the draft doesn't compose. */
   resolved: ResolvedPolicy | null;
+  /** The draft's roles x tools matrix, or null when it doesn't compose. */
+  matrix: PolicyMatrix | null;
   lints: PolicyLint[];
+}
+
+/** One role's standing authorisation for one tool, as the engine decides it.
+ * `constraint` is the composed condition (role-wide fence first); null on a
+ * deny. Mirrors platform/api/schemas.py PolicyMatrixCell. */
+export interface PolicyMatrixCell {
+  mode: "allow" | "approval" | "deny";
+  constraint: string | null;
+}
+
+/** Roles x tools for one agent's resolved policy. `cells[tool][role]` covers
+ * every listed tool; `defaults[role]` is the fallback for an ordinary tool
+ * outside `tools` (reserved `agent.*` keys are always deny). */
+export interface PolicyMatrix {
+  roles: string[];
+  tools: string[];
+  cells: Record<string, Record<string, PolicyMatrixCell>>;
+  defaults: Record<string, PolicyMatrixCell>;
+  aliased_default: string | null;
 }
 
 export type PolicyTestOutcome = "allow" | "deny" | "approval_required";
@@ -430,6 +451,8 @@ export interface AuditSummary {
 /** One time bucket; `bucket` is an ISO string. */
 export interface AuditTimeseriesPoint {
   bucket: string;
+  /** Width of every bucket in the series, in minutes. */
+  bucket_minutes: number;
   allow: number;
   deny: number;
   needs_approval: number;
@@ -857,12 +880,15 @@ function encodePath(path: string): string {
   return path.split("/").map(encodeURIComponent).join("/");
 }
 
-function qs(params: Record<string, string | number | undefined>): string {
+function qs(
+  params: Record<string, string | number | string[] | undefined>,
+): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     // undefined = omit. '' is kept: `role=` (empty value) is meaningful —
-    // it selects the no-role bucket server-side.
-    if (value !== undefined) search.set(key, String(value));
+    // it selects the no-role bucket server-side. A list repeats the key.
+    if (Array.isArray(value)) for (const v of value) search.append(key, v);
+    else if (value !== undefined) search.set(key, String(value));
   }
   const str = search.toString();
   return str ? `?${str}` : "";
@@ -1021,6 +1047,13 @@ export const api = {
     request<{ roles: ResolvedPolicy }>(
       `/v1/projects/${projectId}/policy/resolve${qs({ role, agent })}`,
     ).then((r) => r.roles),
+
+  /** `tools` the policy doesn't list come back in `cells` with the engine's
+   * fallback (reserved keys deny), but not in `tools`. */
+  getPolicyMatrix: (projectId: string, agent?: string, tools: string[] = []) =>
+    request<PolicyMatrix>(
+      `/v1/projects/${projectId}/policy/matrix${qs({ agent: agent || undefined, tool: tools })}`,
+    ),
 
   checkPolicy: (projectId: string) =>
     request<{ ok: boolean; lints: PolicyLint[] }>(

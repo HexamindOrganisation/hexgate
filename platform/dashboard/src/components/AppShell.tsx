@@ -19,6 +19,7 @@ import {
   ScrollText,
   Settings2,
   Files,
+  House,
   Sun,
   Users,
   type LucideIcon,
@@ -38,14 +39,23 @@ import { CreateOrgDialog } from "@/components/CreateOrgDialog";
 import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { PreviewBanner } from "@/components/PreviewBanner";
 import { VerifyEmailBanner } from "@/components/VerifyEmailBanner";
-import { useActive } from "@/lib/active";
+import { useActive, useProjectScoped } from "@/lib/active";
+import { useActiveBanCount, useCanManageBans } from "@/lib/bans";
 import { useLogout, useUser } from "@/lib/auth";
 import { useOrgs } from "@/lib/orgs";
 import { useProjects } from "@/lib/projects";
 import { useUi } from "@/lib/ui";
-import { isDark, schemeAccent, useTheme, type Scheme } from "@/lib/theme";
+import {
+  type Mode,
+  SCHEMES,
+  schemeAccent,
+  useIsDark,
+  useTheme,
+} from "@/lib/theme";
 import { usePresentMode } from "@/lib/present";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 /**
  * Bootstrap effect — runs on every AppShell mount.
@@ -106,19 +116,48 @@ function useActiveBootstrap(): void {
   ]);
 }
 
-// The core product features. Org/account admin lives in the settings space
-// (see `settingsLinks`), reached from the account menu — not this sidebar.
-const workspaceLinks = [
-  { to: "/agents", label: "Agents", icon: Bot },
-  { to: "/policies", label: "Policies", icon: Files },
-  { to: "/graph", label: "Graph", icon: Network },
-  { to: "/playground", label: "Playground", icon: MessageSquareCode },
-  { to: "/audit", label: "Audit", icon: ScrollText },
-  { to: "/usage", label: "Usage", icon: BarChart3 },
-  { to: "/bans", label: "Bans", icon: Ban },
-  // One word, like every other entry here.
-  { to: "/ai-act", label: "Governance", icon: Scale },
-  { to: "/tokens", label: "API keys", icon: KeyRound },
+interface NavLinkDef {
+  to: string;
+  label: string;
+  icon: LucideIcon;
+  end?: boolean;
+}
+
+interface NavGroup {
+  /** Section heading; omitted for the top group (Home). */
+  label?: string;
+  links: NavLinkDef[];
+}
+
+// The core product features, grouped by job. Org/account admin lives in the
+// settings space (see `settingsLinks`), reached from the account menu.
+const workspaceGroups: NavGroup[] = [
+  { links: [{ to: "/", label: "Home", icon: House, end: true }] },
+  {
+    label: "Build",
+    links: [
+      { to: "/agents", label: "Agents", icon: Bot },
+      { to: "/policies", label: "Policies", icon: Files },
+      { to: "/graph", label: "Graph", icon: Network },
+      { to: "/playground", label: "Playground", icon: MessageSquareCode },
+    ],
+  },
+  {
+    label: "Monitor",
+    links: [
+      { to: "/audit", label: "Audit", icon: ScrollText },
+      { to: "/usage", label: "Usage", icon: BarChart3 },
+    ],
+  },
+  {
+    label: "Control",
+    links: [
+      { to: "/bans", label: "Bans", icon: Ban },
+      // One word, like every other entry here.
+      { to: "/ai-act", label: "Governance", icon: Scale },
+      { to: "/tokens", label: "API keys", icon: KeyRound },
+    ],
+  },
 ];
 
 /** The settings-space pages that belong to the signed-in user, not an org. */
@@ -156,7 +195,7 @@ function settingsOrgId(
 
 /** The settings-space sidebar. Member/settings links need the active org, so
  * they're built per-render; omitted when no org is selected. */
-function settingsLinks(activeOrgId: string | null) {
+function settingsLinks(activeOrgId: string | null): NavLinkDef[] {
   return [
     { to: "/orgs", label: "Organizations", icon: Building2, end: true },
     ...(activeOrgId
@@ -185,43 +224,53 @@ function NavItem({
   icon: Icon,
   end,
   badge,
-  status,
   collapsed,
-}: {
-  to: string;
-  label: string;
-  icon: LucideIcon;
-  end?: boolean;
-  badge?: string;
-  status?: string;
+}: NavLinkDef & {
+  /** A count that needs attention, and how to say it ("2 active bans"). */
+  badge?: { value: number; text: string };
   collapsed?: boolean;
 }) {
+  const counted = badge && `${label}, ${badge.text}`;
   return (
     <NavLink
       to={to}
       end={end}
-      title={collapsed ? label : undefined}
+      // Collapsed, the tooltip carries the count the dot stands for.
+      title={collapsed ? (counted ?? label) : undefined}
+      aria-label={counted}
       className={({ isActive }) =>
         cn(
-          "flex h-9 items-center rounded-md text-sm transition-colors",
-          collapsed ? "justify-center px-0" : "justify-between px-2",
+          "flex h-9 items-center rounded-lg text-sm transition-colors",
+          collapsed ? "justify-center px-0" : "justify-between px-2.5",
           isActive
-            ? "bg-primary/15 text-primary font-medium"
-            : "text-muted-foreground hover:bg-accent hover:text-foreground",
+            ? "bg-card font-semibold text-foreground shadow-xs ring-1 ring-border"
+            : "font-medium text-muted-foreground hover:bg-accent hover:text-foreground",
         )
       }
     >
-      <span className="flex items-center gap-2.5">
-        <Icon className="size-4 shrink-0" />
-        {!collapsed && label}
-      </span>
-      {!collapsed && badge && (
-        <span className="text-[11px] text-muted-foreground">{badge}</span>
-      )}
-      {!collapsed && status && (
-        <span className="rounded-full bg-allow/15 px-1.5 py-0.5 text-[10px] font-medium text-allow">
-          {status}
-        </span>
+      {({ isActive }) => (
+        <>
+          <span className="relative flex items-center gap-2.5">
+            <Icon
+              className={cn("size-4 shrink-0", isActive && "text-primary")}
+            />
+            {!collapsed && label}
+            {/* Collapsed: a dot on the icon keeps the signal visible. */}
+            {collapsed && badge && (
+              <span className="absolute -top-0.5 left-3 size-2 rounded-full bg-deny ring-2 ring-background" />
+            )}
+          </span>
+          {/* The link's aria-label already reads the count. */}
+          {badge && !collapsed && (
+            <Badge
+              variant="deny"
+              aria-hidden
+              className="h-[18px] min-w-[18px] justify-center rounded-full px-1.5 py-0 text-[11px] font-semibold"
+            >
+              {badge.value}
+            </Badge>
+          )}
+        </>
       )}
     </NavLink>
   );
@@ -247,9 +296,26 @@ export function AppShell() {
   const activeOrgId = useActive((s) => s.activeOrgId);
   // Scope the settings links to the URL's org (falling back to the active one)
   // so a refresh/deep-link to /orgs/:id/... keeps the sidebar on that org.
-  const links = inSettings
-    ? settingsLinks(settingsOrgId(pathname, activeOrgId))
-    : workspaceLinks;
+  const groups: NavGroup[] = inSettings
+    ? [{ links: settingsLinks(settingsOrgId(pathname, activeOrgId)) }]
+    : workspaceGroups;
+  // Active bans need attention, so the nav shows their count. Admin-only
+  // endpoint, and only once the project scope has resolved.
+  const canManageBans = useCanManageBans();
+  const scope = useProjectScoped();
+  const activeBans = useActiveBanCount(
+    // projectName is set only once the id is found in the projects list, so
+    // an unverified id (the list failed to load) is never polled.
+    !inSettings && canManageBans && scope.projectName !== null
+      ? scope.projectId
+      : null,
+  ).data;
+  const bansBadge = activeBans
+    ? {
+        value: activeBans,
+        text: `${activeBans} active ${activeBans === 1 ? "ban" : "bans"}`,
+      }
+    : undefined;
 
   // The workspace create-dialogs live here, not in OrgProjectSwitcher, so
   // collapsing the sidebar (which unmounts the switcher trigger) can't unmount
@@ -293,11 +359,11 @@ export function AppShell() {
     <div className="flex h-screen bg-background text-foreground">
       <aside
         className={cn(
-          // No hard right border — the card-vs-background shade separates the
-          // sidebar from the content (VSCode "shades, not rules"). The whole
-          // shell lives in the sidebar (switcher on top, account on the
-          // bottom) so the content column reclaims the old header's height.
-          "flex flex-col bg-card transition-[width] duration-200",
+          // Same ground as the page plus a hairline, so the active item can
+          // sit on it as a raised card. The whole shell lives in the sidebar
+          // (switcher on top, account on the bottom), so the content column
+          // reclaims the old header's height.
+          "flex flex-col border-r border-border bg-background transition-[width] duration-200",
           sidebarCollapsed ? "w-14" : "w-[240px]",
         )}
       >
@@ -314,7 +380,7 @@ export function AppShell() {
               {inSettings ? (
                 <button
                   type="button"
-                  onClick={() => navigate("/agents")}
+                  onClick={() => navigate("/")}
                   className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <ArrowLeft className="size-4" />
@@ -348,16 +414,31 @@ export function AppShell() {
           {inSettings && sidebarCollapsed && (
             <div className="mb-0.5 flex flex-col gap-0.5">
               <NavItem
-                to="/agents"
+                to="/"
+                end
                 label="Back to workspace"
                 icon={ArrowLeft}
                 collapsed
               />
             </div>
           )}
-          <div className="flex flex-col gap-0.5">
-            {links.map((l) => (
-              <NavItem key={l.to} {...l} collapsed={sidebarCollapsed} />
+          <div className="flex flex-col gap-4">
+            {groups.map((g, i) => (
+              <div key={g.label ?? i} className="flex flex-col gap-0.5">
+                {g.label && !sidebarCollapsed && (
+                  <div className="px-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    {g.label}
+                  </div>
+                )}
+                {g.links.map((l) => (
+                  <NavItem
+                    key={l.to}
+                    {...l}
+                    badge={l.to === "/bans" ? bansBadge : undefined}
+                    collapsed={sidebarCollapsed}
+                  />
+                ))}
+              </div>
             ))}
           </div>
         </nav>
@@ -468,62 +549,59 @@ const MODES = [
   ["system", Monitor, "System"],
 ] as const;
 
-const SCHEMES: [Scheme, string][] = [
-  ["blue", "Blue"],
-  ["plum", "Plum"],
-];
-
 /** Appearance picker inside the account menu: mode (light/dark/system) + accent
- * scheme (blue/plum). Plain buttons so a pick doesn't close the menu. */
+ * scheme. A toggle group and plain buttons, not menu items, so a pick doesn't
+ * close the menu. */
 function AppearanceControl() {
   const mode = useTheme((s) => s.mode);
   const scheme = useTheme((s) => s.scheme);
   const setMode = useTheme((s) => s.setMode);
   const setScheme = useTheme((s) => s.setScheme);
-  // Resolve the swatch colour for the current palette from theme's single source
-  // so the dots track light/dark like the real --primary token.
-  const dark = isDark(mode);
-
-  const seg =
-    "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs text-muted-foreground transition-colors hover:text-foreground";
-  const on = "bg-accent text-foreground";
+  // Reactive, so the dots follow an OS light/dark flip while mode is "system".
+  const dark = useIsDark();
 
   return (
-    <div className="px-2 py-1.5">
-      <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">
+    <div className="space-y-3 px-2 py-2">
+      <div className="text-caption font-semibold uppercase tracking-wider text-muted-foreground">
         Appearance
       </div>
-      <div className="flex gap-1">
+      <ToggleGroup
+        type="single"
+        value={mode}
+        // Radix sends "" when the selected item is clicked again: keep it.
+        onValueChange={(v) => v && setMode(v as Mode)}
+        aria-label="Theme"
+        className="grid w-full grid-cols-3"
+      >
         {MODES.map(([m, Icon, label]) => (
-          <button
-            key={m}
-            type="button"
-            title={label}
-            aria-label={label}
-            onClick={() => setMode(m)}
-            className={cn(seg, mode === m && on)}
-          >
-            <Icon className="size-4" />
-          </button>
-        ))}
-      </div>
-      <div className="mt-1 flex gap-1">
-        {SCHEMES.map(([s, label]) => (
-          <button
-            key={s}
-            type="button"
-            title={`${label} accent`}
-            aria-label={`${label} accent`}
-            onClick={() => setScheme(s)}
-            className={cn(seg, scheme === s && on)}
-          >
-            <span
-              className="size-3 rounded-full"
-              style={{ backgroundColor: `hsl(${schemeAccent(s, dark)})` }}
-            />
+          <ToggleGroupItem key={m} value={m} className="px-1">
+            <Icon className="size-3.5" />
             {label}
-          </button>
+          </ToggleGroupItem>
         ))}
+      </ToggleGroup>
+      <div>
+        <div className="mb-1.5 text-xs font-medium text-muted-foreground">
+          Accent
+        </div>
+        <div className="flex gap-2">
+          {SCHEMES.map(({ id, label }) => (
+            <button
+              key={id}
+              type="button"
+              title={label}
+              aria-label={`${label} accent`}
+              aria-pressed={scheme === id}
+              onClick={() => setScheme(id)}
+              className={cn(
+                "size-6 rounded-full transition-shadow",
+                scheme === id &&
+                  "ring-2 ring-foreground ring-offset-2 ring-offset-popover",
+              )}
+              style={{ backgroundColor: `hsl(${schemeAccent(id, dark)})` }}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );

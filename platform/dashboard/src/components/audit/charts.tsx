@@ -1,6 +1,6 @@
 /**
- * Audit-specific chart pieces. The reusable SVG primitives (AreaChart,
- * Donut, Sparkline) live in ``components/ui/charts.tsx``; what stays here
+ * Audit-specific chart pieces. The reusable primitives (StackedBars,
+ * Sparkline) live in ``components/ui/charts.tsx``; what stays here
  * is bound to the allow/deny/needs_approval outcome domain.
  */
 
@@ -66,7 +66,7 @@ export function BreakdownBar({
         </>
       }
       segments={[
-        { className: "bg-allow", widthPct: seg("allow") },
+        { className: "bg-allow-fill", widthPct: seg("allow") },
         { className: "bg-approval", widthPct: seg("needs_approval") },
         { className: "bg-deny", widthPct: seg("deny") },
       ]}

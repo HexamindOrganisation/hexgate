@@ -13,6 +13,7 @@ import {
   Panel,
   Position,
   ReactFlow,
+  ViewportPortal,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useNavigate } from "react-router-dom";
@@ -22,6 +23,9 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { usePolicyGraph } from "@/lib/policy_files";
 import type { PolicyGraph, PolicyGraphEdge } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { HEX_H, HEX_W, delegates, layeredLayout } from "@/lib/graph-layout";
+import { pluralise } from "@/lib/format";
+import { verdictLabel } from "@/lib/policy";
 
 // Verdict → edge color (green allow, amber approval, red deny) — mid-tone
 // hexes that read on both the light and dark graph ground.
@@ -84,7 +88,13 @@ type NodeData = { label: string; kind: string };
 type EdgeData = Pick<
   PolicyGraphEdge,
   "kind" | "via" | "verdict" | "constraints" | "roles"
->;
+> & {
+  /** Points the edge passes through (layout coordinates), so it routes
+   * around nodes it doesn't touch. */
+  bends?: { x: number; y: number }[];
+  /** Offset of its arrival at the target, apart from a parallel edge's. */
+  endDy?: number;
+};
 
 // The hover-focus state is passed through CONTEXT, not through node/edge data,
 // so the nodes/edges arrays stay stable on hover — recomputing them (and the
@@ -95,10 +105,10 @@ type FocusValue = {
   activeEdges: Set<number> | null;
   hoverNode: string | null;
   hoverEdge: number | null;
-  // `animate` turns on the flowing-dot animation; `depth` is each node's
-  // distance from a root (role), used to stagger the flow outward.
+  // `animate` turns on the flowing-dot animation; `col` is each node's
+  // column (role → agent hops → tool), used to stagger the flow outward.
   animate: boolean;
-  depth: Map<string, number>;
+  col: Record<string, number>;
 };
 const FocusCtx = createContext<FocusValue>({
   activeNodes: null,
@@ -106,7 +116,7 @@ const FocusCtx = createContext<FocusValue>({
   hoverNode: null,
   hoverEdge: null,
   animate: false,
-  depth: new Map(),
+  col: {},
 });
 
 /** A hexagon node (SVG outline + centered label), styled by kind. */
@@ -139,12 +149,12 @@ function HexNode({ id, data }: NodeProps<Node<NodeData>>) {
   const tag = dim ? DIM.tag : k.tag;
   const glow = hovered ? 20 : dim ? 0 : 6;
   return (
-    <div className="relative" style={{ width: 136, height: 118 }}>
+    <div className="relative" style={{ width: HEX_W, height: HEX_H }}>
       <Handle type="target" position={Position.Left} style={centerHandle} />
       <svg
-        width="136"
-        height="118"
-        viewBox="0 0 136 118"
+        width={HEX_W}
+        height={HEX_H}
+        viewBox={`0 0 ${HEX_W} ${HEX_H}`}
         className="absolute inset-0"
         style={{
           // color-mix (not a hex-alpha suffix) so the glow alpha works with the
@@ -198,7 +208,52 @@ function HexNode({ id, data }: NodeProps<Node<NodeData>>) {
   );
 }
 
-/** Verdict-colored bezier edge with a small kind/via label. Deny + handoff
+// End the visible path just off the target hex's side tip (the path arrives
+// level), so the arrowhead sits on the border, not under the node.
+const ARROW_GAP = HEX_W / 2 + 4;
+
+type EdgeGeometry = { path: string; labelX: number; labelY: number };
+
+type Point = { x: number; y: number };
+const midpoint = (p: Point, q: Point) => ({
+  x: (p.x + q.x) / 2,
+  y: (p.y + q.y) / 2,
+});
+
+/** Through any bend points with horizontal tangents, so an edge leaves and
+ * enters its nodes level and runs level through each lane. The label sits on
+ * the middle bend, or midway along the middle segment, so it's on the edge
+ * and inside a reserved lane, never over a hex. */
+function bentPath(points: Point[], endDy = 0): EdgeGeometry {
+  const last = points[points.length - 1];
+  const before = points[points.length - 2];
+  // Arrive at the hex's side facing the edge; off the tip (a fanned edge)
+  // the slanted border sits further in, by its slope (34 across, 53 down).
+  const gap = ARROW_GAP - (Math.abs(endDy) * 34) / 53;
+  const end = {
+    x: last.x + (before.x > last.x ? gap : -gap),
+    y: last.y + endDy,
+  };
+  const pts = [...points.slice(0, -1), end];
+  let path = `M${pts[0].x},${pts[0].y}`;
+  for (let k = 1; k < pts.length; k++) {
+    const p = pts[k - 1];
+    const q = pts[k];
+    const mx = (p.x + q.x) / 2;
+    path += ` C${mx},${p.y} ${mx},${q.y} ${q.x},${q.y}`;
+  }
+  const bends = points.slice(1, -1);
+  const n = bends.length;
+  const mid =
+    n % 2 === 1
+      ? bends[(n - 1) / 2]
+      : n
+        ? midpoint(bends[n / 2 - 1], bends[n / 2])
+        : midpoint(pts[0], end);
+  return { path, labelX: mid.x, labelY: mid.y };
+}
+
+/** Verdict-colored routed edge with a small kind/via label. Deny + handoff
  * render dashed; a denied edge is dimmed. */
 function PolicyEdge({
   id,
@@ -216,31 +271,14 @@ function PolicyEdge({
   const dimmed = focus.activeEdges ? !focus.activeEdges.has(idx) : false;
   const hovered = focus.hoverEdge === idx;
   const inFocus = focus.activeEdges ? focus.activeEdges.has(idx) : true;
-  const dx = targetX - sourceX;
-  const dy = targetY - sourceY;
-  const dist = Math.hypot(dx, dy) || 1;
-  const ux = dx / dist;
-  const uy = dy / dist;
-  // Stop the visible path at the target node's border so the arrowhead sits on
-  // the edge, not hidden under the node center.
-  const gap = 60;
-  const tX = targetX - ux * gap;
-  const tY = targetY - uy * gap;
-  // A cubic bezier bowed perpendicular to the line. The bow side alternates by
-  // the edge's index parity, so parallel-ish edges don't all curve the same way
-  // (and a reversed pair bows the other side, since its direction flips).
-  const side = idx % 2 === 0 ? 1 : -1;
-  const nx = -uy * side;
-  const ny = ux * side;
-  const bow = 0.16 * dist;
-  const c1x = sourceX + (tX - sourceX) / 3 + nx * bow;
-  const c1y = sourceY + (tY - sourceY) / 3 + ny * bow;
-  const c2x = sourceX + (2 * (tX - sourceX)) / 3 + nx * bow;
-  const c2y = sourceY + (2 * (tY - sourceY)) / 3 + ny * bow;
-  const path = `M${sourceX},${sourceY} C${c1x},${c1y} ${c2x},${c2y} ${tX},${tY}`;
-  // Label at the bezier midpoint, B(0.5).
-  const labelX = 0.125 * sourceX + 0.375 * c1x + 0.375 * c2x + 0.125 * tX;
-  const labelY = 0.125 * sourceY + 0.375 * c1y + 0.375 * c2y + 0.125 * tY;
+  const { path, labelX, labelY } = bentPath(
+    [
+      { x: sourceX, y: sourceY },
+      ...(data?.bends ?? []),
+      { x: targetX, y: targetY },
+    ],
+    data?.endDy,
+  );
   const color = VERDICT[data?.verdict ?? "allow"] ?? "#8a93a3";
   const dashed = data?.verdict === "deny" || data?.via === "handoff";
   const label =
@@ -255,10 +293,9 @@ function PolicyEdge({
   const baseWidth = data?.verdict === "deny" ? 2.2 : 2.6;
   // A flowing dot travels source→target when the edge is selected/hovered, or
   // when Animate is on and the edge is in focus. The start is staggered by the
-  // source's depth from a role, so a click's paths light role → agent → tool in
-  // sequence.
+  // source's column, so a click's paths light role → agent → tool in sequence.
   const flowing = selected || hovered || (focus.animate && inFocus);
-  const flowDelay = (focus.depth.get(source) ?? 0) * 0.4;
+  const flowDelay = (focus.col[source] ?? 0) * 0.4;
   return (
     <>
       <BaseEdge
@@ -313,74 +350,189 @@ function PolicyEdge({
   );
 }
 
+/** The column headings, drawn in the viewport so they pan and zoom with the
+ * graph without being nodes (no clicks, hovers or tab stops to guard). */
+function ColumnLabels({
+  columns,
+}: {
+  columns: { title: string; x: number; top: number }[];
+}) {
+  return (
+    <ViewportPortal>
+      {columns.map((c) => (
+        <div
+          key={c.title}
+          style={{
+            position: "absolute",
+            width: HEX_W,
+            transform: `translate(${c.x - HEX_W / 2}px, ${c.top - 40}px)`,
+          }}
+          className="pointer-events-none text-center font-mono text-[13px] font-medium uppercase tracking-wider text-muted-foreground"
+        >
+          {c.title}
+        </div>
+      ))}
+    </ViewportPortal>
+  );
+}
+
 const nodeTypes = { hex: HexNode };
 const edgeTypes = { policy: PolicyEdge };
 
-/** Force-directed layout (Fruchterman–Reingold): every node repels every other
- * and each edge pulls its endpoints together, so the graph relaxes into a
- * spread, uncluttered arrangement instead of dense columns. Deterministic — a
- * fixed golden-angle seed + fixed iteration count — so it doesn't jitter between
- * renders; nodes stay draggable afterwards. */
-function layout(graph: PolicyGraph): Record<string, { x: number; y: number }> {
-  const N = graph.nodes.length;
-  const pos = graph.nodes.map((_, i) => {
-    const a = i * 2.399963; // golden angle → an even, deterministic spiral seed
-    const r = 40 + 26 * Math.sqrt(i);
-    return { x: Math.cos(a) * r, y: Math.sin(a) * r };
-  });
-  const index: Record<string, number> = {};
-  graph.nodes.forEach((n, i) => (index[n.id] = i));
-  const links = graph.edges
-    .map((e) => [index[e.source], index[e.target]] as const)
-    .filter(([s, t]) => s != null && t != null);
+const nodeLabel = (id: string) => id.slice(id.indexOf(":") + 1);
 
-  const k = 300; // ideal node separation (hexes are ~136px wide)
-  const ITER = 420;
-  let temp = k * 1.4;
-  const cool = temp / (ITER + 1);
-
-  for (let it = 0; it < ITER; it++) {
-    const disp = pos.map(() => ({ x: 0, y: 0 }));
-    for (let i = 0; i < N; i++) {
-      for (let j = i + 1; j < N; j++) {
-        let dx = pos[i].x - pos[j].x;
-        let dy = pos[i].y - pos[j].y;
-        const d = Math.hypot(dx, dy) || 0.01;
-        const f = (k * k) / d; // repulsion
-        dx = (dx / d) * f;
-        dy = (dy / d) * f;
-        disp[i].x += dx;
-        disp[i].y += dy;
-        disp[j].x -= dx;
-        disp[j].y -= dy;
-      }
-    }
-    for (const [s, t] of links) {
-      let dx = pos[s].x - pos[t].x;
-      let dy = pos[s].y - pos[t].y;
-      const d = Math.hypot(dx, dy) || 0.01;
-      const f = (d * d) / k; // attraction
-      dx = (dx / d) * f;
-      dy = (dy / d) * f;
-      disp[s].x -= dx;
-      disp[s].y -= dy;
-      disp[t].x += dx;
-      disp[t].y += dy;
-    }
-    for (let i = 0; i < N; i++) {
-      const d = Math.hypot(disp[i].x, disp[i].y) || 0.01;
-      pos[i].x += (disp[i].x / d) * Math.min(d, temp); // capped by temperature
-      pos[i].y += (disp[i].y / d) * Math.min(d, temp);
-    }
-    temp -= cool; // cool down
-  }
-
-  const out: Record<string, { x: number; y: number }> = {};
-  graph.nodes.forEach((n, i) => (out[n.id] = pos[i]));
-  return out;
+/** id → the name the graph shows (`mcp:mcp-demo-read` is `demo-read`), so
+ * every panel names a node as its hexagon does. */
+function labelLookup(graph: PolicyGraph): (id: string) => string {
+  const labels = new Map(graph.nodes.map((n) => [n.id, n.label]));
+  return (id) => labels.get(id) ?? nodeLabel(id);
 }
 
-const nodeLabel = (id: string) => id.slice(id.indexOf(":") + 1);
+/** A verdict chip; `constraints` add a "*" with the conditions on hover. */
+function VerdictTag({
+  verdict,
+  constraints = [],
+}: {
+  verdict: string;
+  constraints?: string[];
+}) {
+  return (
+    <span
+      className="shrink-0 rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider"
+      title={constraints.join(" ∧ ") || undefined}
+      style={{
+        color: VERDICT[verdict],
+        border: `1px solid ${VERDICT[verdict]}66`,
+      }}
+    >
+      {verdictLabel(verdict)}
+      {constraints.length > 0 && " *"}
+    </span>
+  );
+}
+
+/** One list in the side panel: the far end of each edge plus its verdict. */
+function EdgeList({
+  title,
+  edges,
+  end,
+  labelOf,
+}: {
+  title: string;
+  edges: PolicyGraphEdge[];
+  end: "source" | "target";
+  labelOf: (id: string) => string;
+}) {
+  if (edges.length === 0) return null;
+  return (
+    <div className="mt-3">
+      <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+        {title}
+      </div>
+      <ul className="space-y-1">
+        {edges.map((e, i) => (
+          <li key={i} className="flex items-center justify-between gap-2">
+            <span className="truncate">
+              {labelOf(e[end])}
+              {e.kind === "reach" && (
+                <span className="text-muted-foreground"> · {e.via}</span>
+              )}
+            </span>
+            <VerdictTag verdict={e.verdict} constraints={e.constraints} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** What the pinned node reaches, and who reaches it. */
+function NodePanel({
+  graph,
+  id,
+  labelOf,
+  onClose,
+}: {
+  graph: PolicyGraph;
+  id: string;
+  labelOf: (id: string) => string;
+  onClose: () => void;
+}) {
+  const node = graph.nodes.find((n) => n.id === id);
+  if (!node) return null;
+  const from = graph.edges.filter((e) => e.source === id);
+  const to = graph.edges.filter((e) => e.target === id);
+  const calls = from.filter((e) => e.kind === "call");
+  const open = calls.filter((e) => e.verdict !== "deny");
+  const summary =
+    node.kind === "agent"
+      ? `Calls ${open.length} of ${pluralise(calls.length, "tool")} — ${
+          open.filter((e) => e.constraints.length > 0).length
+        } with constraints, ${
+          open.filter((e) => e.verdict === "approval_required").length
+        } behind approval.`
+      : node.kind === "role"
+        ? `Admitted by ${from.filter((e) => e.verdict !== "deny").length} of ${pluralise(from.length, "agent")}.`
+        : `Callable by ${to.filter((e) => e.verdict !== "deny").length} of ${pluralise(to.length, "agent")}.`;
+  return (
+    <aside
+      aria-label={`${node.kind} ${node.label}`}
+      className="max-h-[40vh] w-72 overflow-y-auto rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            {KIND[node.kind]?.label ?? node.kind}
+          </div>
+          <div className="text-sm">{node.label}</div>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close details"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <X size={13} />
+        </button>
+      </div>
+      <p className="mt-1 font-sans text-xs text-muted-foreground">{summary}</p>
+      {node.kind === "agent" && (
+        <>
+          <EdgeList
+            labelOf={labelOf}
+            title="Admitted roles"
+            edges={to.filter((e) => e.kind === "admission")}
+            end="source"
+          />
+          <EdgeList
+            labelOf={labelOf}
+            title="Reached by"
+            edges={to.filter((e) => e.kind === "reach")}
+            end="source"
+          />
+          <EdgeList
+            labelOf={labelOf}
+            title="Tools"
+            edges={calls}
+            end="target"
+          />
+          <EdgeList
+            labelOf={labelOf}
+            title="Reaches"
+            edges={from.filter((e) => e.kind === "reach")}
+            end="target"
+          />
+        </>
+      )}
+      {node.kind === "role" && (
+        <EdgeList labelOf={labelOf} title="Agents" edges={from} end="target" />
+      )}
+      {(node.kind === "tool" || node.kind === "mcp") && (
+        <EdgeList labelOf={labelOf} title="Called by" edges={to} end="source" />
+      )}
+    </aside>
+  );
+}
 
 type BypassWarning = {
   toolId: string;
@@ -395,12 +547,14 @@ type BypassWarning = {
  * *different* constraints, and A can (transitively) reach B — so A can delegate
  * to B to call T beyond its own limit. Computed from the graph's call/reach
  * edges + their constraints. */
-function bypassWarnings(graph: PolicyGraph): BypassWarning[] {
+function bypassWarnings(
+  graph: PolicyGraph,
+  labelOf: (id: string) => string,
+): BypassWarning[] {
   const reachOut = new Map<string, string[]>();
   graph.edges.forEach((e) => {
-    // Only a permitted reach can be used to delegate — a denied one can't, so it
-    // never enables a bypass.
-    if (e.kind === "reach" && e.verdict !== "deny") {
+    // A denied reach can't be used to delegate, so it never enables a bypass.
+    if (delegates(e)) {
       const a = reachOut.get(e.source) ?? [];
       a.push(e.target);
       reachOut.set(e.source, a);
@@ -442,9 +596,9 @@ function bypassWarnings(graph: PolicyGraph): BypassWarning[] {
         seen.add(key);
         out.push({
           toolId,
-          tool: nodeLabel(toolId),
-          strict: nodeLabel(a.agent),
-          loose: nodeLabel(b.agent),
+          tool: labelOf(toolId),
+          strict: labelOf(a.agent),
+          loose: labelOf(b.agent),
           strictC: a.constraints,
           looseC: b.constraints,
         });
@@ -463,8 +617,12 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
   );
   const [pinned, setPinned] = useState<string | null>(null);
   const [animate, setAnimate] = useState(false);
-  const pos = useMemo(() => layout(graph), [graph]);
-  const warnings = useMemo(() => bypassWarnings(graph), [graph]);
+  const lay = useMemo(() => layeredLayout(graph), [graph]);
+  const labelOf = useMemo(() => labelLookup(graph), [graph]);
+  const warnings = useMemo(
+    () => bypassWarnings(graph, labelOf),
+    [graph, labelOf],
+  );
 
   // Directed adjacency (out + in) for transitive reachability.
   const adj = useMemo(() => {
@@ -480,32 +638,6 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
     });
     return { out, inc };
   }, [graph]);
-
-  // Each node's distance from a root (a node with no incoming edge — a role, or
-  // an ungoverned entry). Staggers the flow animation so dots ripple outward
-  // role → agent → tool.
-  const depth = useMemo(() => {
-    const d = new Map<string, number>();
-    const q = graph.nodes
-      .filter((n) => (adj.inc.get(n.id) ?? []).length === 0)
-      .map((n) => {
-        d.set(n.id, 0);
-        return n.id;
-      });
-    for (let h = 0; h < q.length; h++) {
-      const u = q[h];
-      const du = d.get(u) ?? 0;
-      for (const v of adj.out.get(u) ?? [])
-        if (!d.has(v)) {
-          d.set(v, du + 1);
-          q.push(v);
-        }
-    }
-    graph.nodes.forEach((n) => {
-      if (!d.has(n.id)) d.set(n.id, 0);
-    });
-    return d;
-  }, [graph, adj]);
 
   // Provided via context so it never rebuilds the nodes/edges arrays (which
   // would flash the graph).
@@ -574,18 +706,21 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
     };
   }, [pinned, hover, graph, adj]);
 
-  // Stable across hover (depend only on graph/pos), so React Flow doesn't
-  // regenerate markers or thrash edge mouse events.
+  // Stable across hover (depend only on graph and its layout), so React Flow
+  // doesn't regenerate markers or thrash edge mouse events.
   const nodes: Node<NodeData>[] = useMemo(
     () =>
       graph.nodes.map((n) => ({
         id: n.id,
         type: "hex",
-        position: pos[n.id] ?? { x: 0, y: 0 },
+        position: {
+          x: (lay.pos[n.id]?.x ?? 0) - HEX_W / 2,
+          y: (lay.pos[n.id]?.y ?? 0) - HEX_H / 2,
+        },
         data: { label: n.label, kind: n.kind },
         draggable: false,
       })),
-    [graph, pos],
+    [graph, lay],
   );
 
   const edges: Edge<EdgeData>[] = useMemo(
@@ -607,14 +742,18 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
           verdict: e.verdict,
           constraints: e.constraints,
           roles: e.roles,
+          bends: lay.bends[i],
+          endDy: lay.endDy[i],
         },
       })),
-    [graph],
+    [graph, lay],
   );
 
   const ctxValue = useMemo<FocusValue>(
-    () => ({ ...focus, animate, depth }),
-    [focus, animate, depth],
+    // Each node's column staggers the flow animation, so dots ripple outward
+    // role → agent → tool in the order the columns show.
+    () => ({ ...focus, animate, col: lay.col }),
+    [focus, animate, lay],
   );
 
   return (
@@ -642,7 +781,11 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
         }
         onEdgeMouseLeave={() => setHover(null)}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
+        // Room above the top row for the column headings, which sit in the
+        // viewport rather than among the fitted nodes.
+        fitViewOptions={{
+          padding: { top: "96px", right: 0.2, bottom: 0.2, left: 0.2 },
+        }}
         proOptions={{ hideAttribution: true }}
         minZoom={0.3}
         maxZoom={1.8}
@@ -660,6 +803,7 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
         }}
       >
         <Background color="var(--gr-dots)" gap={22} />
+        <ColumnLabels columns={lay.columns} />
         <Controls
           showInteractive={false}
           style={{
@@ -668,7 +812,7 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
             borderRadius: 8,
           }}
         />
-        <Panel position="top-right">
+        <Panel position="top-right" className="flex flex-col items-end gap-2">
           <button
             onClick={() => setAnimate((a) => !a)}
             className={cn(
@@ -686,6 +830,67 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
             <Play size={12} />
             {animate ? "Animating…" : "Animate flow"}
           </button>
+          {pinned && (
+            <NodePanel
+              graph={graph}
+              id={pinned}
+              labelOf={labelOf}
+              onClose={() => setPinned(null)}
+            />
+          )}
+          {/* Stacked under the node panel so the two never overlap. */}
+          {selected && (
+            // Capped and scrolling like the node panel, so the two together
+            // stay clear of the canvas bottom and the bypass warnings.
+            <div className="max-h-[25vh] w-64 overflow-y-auto rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur">
+              <div className="mb-2 flex items-center justify-between">
+                <VerdictTag verdict={selected.verdict} />
+                <button
+                  onClick={() => setSelected(null)}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+              <div className="mb-1 text-foreground">
+                {labelOf(selected.source)}
+                <span className="text-muted-foreground/50">
+                  {" "}
+                  {selected.kind === "reach"
+                    ? `→ ${selected.via} →`
+                    : selected.kind === "admission"
+                      ? "→ admits →"
+                      : "→ calls →"}{" "}
+                </span>
+                {labelOf(selected.target)}
+              </div>
+              {selected.roles.length > 0 && (
+                <div className="mb-2 text-[10px] text-muted-foreground">
+                  role{selected.roles.length > 1 ? "s" : ""}:{" "}
+                  {selected.roles.join(", ")}
+                </div>
+              )}
+              {selected.constraints.length > 0 ? (
+                <div className="space-y-1">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    constraints
+                  </div>
+                  {selected.constraints.map((c, i) => (
+                    <div
+                      key={i}
+                      className="rounded bg-muted px-2 py-1 text-[10.5px] text-foreground"
+                    >
+                      {c}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-[10px] text-muted-foreground">
+                  no constraints
+                </div>
+              )}
+            </div>
+          )}
         </Panel>
         <Panel position="top-left">
           <div className="flex flex-wrap gap-3 rounded-lg border border-border bg-card/90 px-3 py-2 font-mono text-[10px] text-muted-foreground backdrop-blur">
@@ -695,7 +900,7 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
                   className="inline-block h-2 w-4 rounded"
                   style={{ background: VERDICT[v] }}
                 />
-                {v === "approval_required" ? "approval" : v}
+                {verdictLabel(v)}
               </span>
             ))}
             <span className="text-muted-foreground/40">·</span>
@@ -732,68 +937,6 @@ function PolicyFlow({ graph }: { graph: PolicyGraph }) {
                   </button>
                 ))}
               </div>
-            </div>
-          </Panel>
-        )}
-        {selected && (
-          <Panel position="bottom-right">
-            <div className="w-64 rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur">
-              <div className="mb-2 flex items-center justify-between">
-                <span
-                  className="rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider"
-                  style={{
-                    color: VERDICT[selected.verdict],
-                    border: `1px solid ${VERDICT[selected.verdict]}66`,
-                  }}
-                >
-                  {selected.verdict === "approval_required"
-                    ? "approval"
-                    : selected.verdict}
-                </span>
-                <button
-                  onClick={() => setSelected(null)}
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  <X size={13} />
-                </button>
-              </div>
-              <div className="mb-1 text-foreground">
-                {nodeLabel(selected.source)}
-                <span className="text-muted-foreground/50">
-                  {" "}
-                  {selected.kind === "reach"
-                    ? `→ ${selected.via} →`
-                    : selected.kind === "admission"
-                      ? "→ admits →"
-                      : "→ calls →"}{" "}
-                </span>
-                {nodeLabel(selected.target)}
-              </div>
-              {selected.roles.length > 0 && (
-                <div className="mb-2 text-[10px] text-muted-foreground">
-                  role{selected.roles.length > 1 ? "s" : ""}:{" "}
-                  {selected.roles.join(", ")}
-                </div>
-              )}
-              {selected.constraints.length > 0 ? (
-                <div className="space-y-1">
-                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    constraints
-                  </div>
-                  {selected.constraints.map((c, i) => (
-                    <div
-                      key={i}
-                      className="rounded bg-muted px-2 py-1 text-[10.5px] text-foreground"
-                    >
-                      {c}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-[10px] text-muted-foreground">
-                  no constraints
-                </div>
-              )}
             </div>
           </Panel>
         )}

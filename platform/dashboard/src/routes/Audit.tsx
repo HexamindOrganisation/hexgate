@@ -1,41 +1,41 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import {
-  Activity,
-  Check,
-  CircleDashed,
-  Filter,
-  Lightbulb,
-  X,
-} from "lucide-react";
-import { endOfDay, startOfDay } from "date-fns";
-import { useNavigate } from "react-router-dom";
+import { Filter, Lightbulb, X } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   api,
   type AuditDecisionRow,
   type AuditOutcome,
   LLM_MESSAGE_PAGE,
 } from "@/lib/api";
-import { useActive, useProjectScoped } from "@/lib/active";
+import { useProjectScoped } from "@/lib/active";
 import { useCanManageBans } from "@/lib/bans";
-import { useProjects } from "@/lib/projects";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { DashboardRangePicker } from "@/components/ui/dashboard-range-picker";
-import { AreaChart, type ChartBucket, Donut } from "@/components/ui/charts";
+import { type ChartBucket, StackedBars } from "@/components/ui/charts";
+import { StatStrip } from "@/components/ui/stat-strip";
+import { AuditOnboarding } from "@/components/audit/onboarding";
+import { burstFilters } from "@/components/audit/anomalies";
 import { type Counts, DecisionBadge } from "@/components/audit/charts";
 import {
   displayNoValue,
   OUT_LABEL,
+  OUT_SWATCH,
   OUTCOME_SERIES,
   scopeNoValue,
 } from "@/components/audit/chart-tokens";
 import {
-  type AuditFilters as Filters,
+  EMPTY_AUDIT_FILTERS,
+  fromAuditSearch,
+  pageLimitFor,
+  type SetAuditFilters,
+  toAuditSearch,
   useAuditFilters,
+  withAuditFilters,
 } from "@/lib/audit-filters";
-import { rangeDays } from "@/lib/date-range";
+import { rangeDays, rangePhrase } from "@/lib/date-range";
 import { fmtTs } from "@/components/audit/fmt";
 import { LlmMessagesSection } from "@/components/audit/messages";
 import {
@@ -44,10 +44,19 @@ import {
   BreakdownCard,
   EventsTable,
   FilterBar,
-  KpiCard,
 } from "@/components/audit/pieces";
+import { PageHeader } from "@/components/ui/page-header";
 
 const ZERO_COUNTS: Counts = { allow: 0, deny: 0, needs_approval: 0, total: 0 };
+
+/** "day", "hour", "6 hours", "15 minutes" for a bucket width. */
+function bucketUnit(minutes: number): string {
+  if (minutes >= 1440 && minutes % 1440 === 0)
+    return minutes === 1440 ? "day" : `${minutes / 1440} days`;
+  if (minutes % 60 === 0)
+    return minutes === 60 ? "hour" : `${minutes / 60} hours`;
+  return minutes === 1 ? "minute" : `${minutes} minutes`;
+}
 
 const fmtFull = (d: Date) =>
   d.toISOString().replace("T", " ").replace("Z", " UTC");
@@ -65,7 +74,7 @@ function KV({
   muted?: boolean;
 }) {
   return (
-    <div className="grid grid-cols-[116px_1fr] items-baseline gap-2.5 py-[5px] text-[12.5px]">
+    <div className="grid grid-cols-[116px_1fr] items-baseline gap-2.5 py-[5px] text-meta">
       <div className="text-muted-foreground">{k}</div>
       <div
         className={`break-words ${mono ? "font-mono text-xs" : ""} ${muted ? "text-muted-foreground" : "text-foreground"}`}
@@ -119,7 +128,7 @@ function DetailDrawer({
   projectId: string | null;
   onClose: () => void;
   onSelect: (e: AuditDecisionRow) => void;
-  setF: (u: (p: Filters) => Filters) => void;
+  setF: SetAuditFilters;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -235,7 +244,7 @@ function DetailDrawer({
                 : "No reason recorded.")}
             {e.error_type && (
               <span
-                className={`mt-1.5 block font-mono text-[11.5px] ${tone.text}`}
+                className={`mt-1.5 block font-mono text-caption ${tone.text}`}
               >
                 error_type: {e.error_type}
               </span>
@@ -248,7 +257,7 @@ function DetailDrawer({
                 {e.violations.map((v) => (
                   <span
                     key={v}
-                    className="rounded-md bg-deny/15 px-2 py-[3px] font-mono text-[11.5px] text-deny"
+                    className="rounded-md bg-deny/15 px-2 py-[3px] font-mono text-caption text-deny"
                   >
                     {v}
                   </span>
@@ -304,7 +313,7 @@ function DetailDrawer({
           </DrawerSection>
 
           <DrawerSection label="Arguments">
-            <pre className="m-0 whitespace-pre-wrap rounded-lg border border-border bg-muted p-3 font-mono text-[11.5px] leading-relaxed text-foreground">
+            <pre className="m-0 whitespace-pre-wrap rounded-lg border border-border bg-muted p-3 font-mono text-caption leading-relaxed text-foreground">
               {argStr}
             </pre>
           </DrawerSection>
@@ -326,7 +335,7 @@ function DetailDrawer({
 
           {attrStr && (
             <DrawerSection label="Context attributes">
-              <pre className="m-0 whitespace-pre-wrap rounded-lg border border-border bg-muted p-3 font-mono text-[11.5px] leading-relaxed text-foreground">
+              <pre className="m-0 whitespace-pre-wrap rounded-lg border border-border bg-muted p-3 font-mono text-caption leading-relaxed text-foreground">
                 {attrStr}
               </pre>
             </DrawerSection>
@@ -410,22 +419,91 @@ function DetailDrawer({
 export function AuditPage() {
   const projectScope = useProjectScoped();
   const projectId = projectScope.projectId;
-  const activeOrgId = useActive((s) => s.activeOrgId);
   const navigate = useNavigate();
   const canManageBans = useCanManageBans();
-  // Resolve the active project's display name for the page subtitle
-  // (already cached by the AppShell bootstrap; falls back to the id).
-  const projectsQ = useProjects(activeOrgId);
-  const projectName =
-    projectsQ.data?.find((p) => p.id === projectId)?.name ?? projectId;
-  // Filter + paging state lives in a zustand store (see lib/audit-filters)
-  // so the dialled-in slice survives route switches; drawer selection is
-  // ephemeral and stays local.
-  const f = useAuditFilters((s) => s.filters);
-  const setF = useAuditFilters((s) => s.setFilters);
-  const tableLimit = useAuditFilters((s) => s.tableLimit);
-  const loadMore = useAuditFilters((s) => s.loadMore);
-  const [sel, setSel] = useState<AuditDecisionRow | null>(null);
+  // Display name for the page subtitle; falls back to the id.
+  const projectName = projectScope.projectName ?? projectId;
+  // The URL is the source of truth for the filters, so a link, a reload or
+  // a shared URL opens the same slice and the first render already queries
+  // it. A bare /audit (the sidebar) is redirected to the last view.
+  const [params, setParams] = useSearchParams();
+  const lastSearch = useAuditFilters(
+    (s) => (projectId && s.lastSearch[projectId]) || "",
+  );
+  const remember = useAuditFilters((s) => s.remember);
+  const urlFilters = useMemo(() => fromAuditSearch(params), [params]);
+  const saved = useMemo(
+    () =>
+      fromAuditSearch(new URLSearchParams(lastSearch)) ?? EMPTY_AUDIT_FILTERS,
+    [lastSearch],
+  );
+  // The project this page's filters belong to. A switch while Audit is open
+  // shows (and fetches) the new project's last view from the first render,
+  // and the effect rewrites the URL to it; a link or reload only ever meets
+  // the project it loads in, so it keeps its filters.
+  const [viewProject, setViewProject] = useState(projectId);
+  if (viewProject === null && projectId) setViewProject(projectId);
+  const switching = !!projectId && !!viewProject && viewProject !== projectId;
+  // The switch is done once the URL shows the new view.
+  if (
+    switching &&
+    params.toString() === withAuditFilters(params, saved).toString()
+  )
+    setViewProject(projectId);
+  const f = switching ? saved : (urlFilters ?? saved);
+  const viewKey = toAuditSearch(f).toString();
+  // Calls in one event compose: each builds on the previous one's result,
+  // not on the render's `f`.
+  const latest = useRef(f);
+  useEffect(() => {
+    latest.current = f;
+  }, [f]);
+  useEffect(() => {
+    // Rewrite a bare /audit to the last view, and a malformed URL to what
+    // the page actually shows, so a copied link matches the screen.
+    // Wait for the project: the remembered view is per project.
+    if (!projectId) return;
+    if (params.toString() !== withAuditFilters(params, f).toString())
+      setParams((prev) => withAuditFilters(prev, f), { replace: true });
+    if (urlFilters && !switching) remember(projectId, viewKey);
+  }, [
+    switching,
+    urlFilters,
+    viewKey,
+    f,
+    params,
+    projectId,
+    remember,
+    setParams,
+  ]);
+  const setF: SetAuditFilters = useCallback(
+    (update) => {
+      latest.current = update(latest.current);
+      const next = latest.current;
+      // A change made mid-switch builds on the new view and ends the switch.
+      setViewProject(projectId);
+      setParams((prev) => withAuditFilters(prev, next), { replace: true });
+    },
+    [setParams, projectId],
+  );
+  // Paging belongs to one view of one project; any other starts at one page.
+  const pageKey = `${projectId}?${viewKey}`;
+  const tableLimit = useAuditFilters((s) => pageLimitFor(s, pageKey));
+  const loadMoreFor = useAuditFilters((s) => s.loadMore);
+  const loadMore = () => loadMoreFor(pageKey);
+  // Drawer selection is ephemeral and stays local; it belongs to the
+  // project it was picked in, and a switch drops it.
+  const [picked, setPicked] = useState<{
+    project: string | null;
+    row: AuditDecisionRow;
+  } | null>(null);
+  if (picked && picked.project !== projectId) setPicked(null);
+  const sel = picked?.row ?? null;
+  const setSel = useCallback(
+    (row: AuditDecisionRow | null) =>
+      setPicked(row && { project: projectId, row }),
+    [projectId],
+  );
 
   // UI state → wire: '' = "all" locally, so unset filters are omitted
   // (undefined). The "(none)" label (role/user) maps back to '' — the
@@ -455,7 +533,7 @@ export function AuditPage() {
     enabled: !!projectId,
     queryFn: () => api.getAuditSummary(optionsScope, projectId as string),
   });
-  // Scoped summary/timeseries: KPIs, donut, area, breakdown.
+  // Scoped summary/timeseries: stat strip, chart, breakdown.
   const summaryQ = useQuery({
     queryKey: ["audit", "summary", projectId, scope],
     enabled: !!projectId,
@@ -516,11 +594,19 @@ export function AuditPage() {
       }
     : ZERO_COUNTS;
 
+  // The server says how wide its buckets are (an older one doesn't: then
+  // the gap between neighbours); null when there's nothing to tell by.
+  const bucketMinutes = useMemo(() => {
+    const d = tsQ.data;
+    if (d?.[0]?.bucket_minutes) return d[0].bucket_minutes;
+    if (!d || d.length < 2) return null;
+    return Math.round((+new Date(d[1].bucket) - +new Date(d[0].bucket)) / 6e4);
+  }, [tsQ.data]);
   const days: ChartBucket[] = useMemo(
     () =>
       (tsQ.data ?? []).map((p) => ({
         label: new Date(p.bucket),
-        mode: f.range === "24h" ? "hour" : "day",
+        mode: (bucketMinutes ?? 0) >= 1440 ? "day" : "hour",
         values: {
           allow: p.allow,
           deny: p.deny,
@@ -528,7 +614,7 @@ export function AuditPage() {
         },
         total: p.allow + p.deny + p.needs_approval,
       })),
-    [tsQ.data, f.range],
+    [tsQ.data, bucketMinutes],
   );
   const spark = useMemo(
     () => ({
@@ -559,6 +645,13 @@ export function AuditPage() {
 
   const options = optionsQ.data;
   const rangeTotal = options?.totals.all ?? 0;
+  // Filters that narrow the summary (outcome only narrows the log).
+  const scopeFiltered = !!(f.agent || f.role || f.tool || f.user);
+  const hasFilters = scopeFiltered || !!(f.outcome || f.start_date);
+  // Nothing recorded in the range and nothing filtered out: show next steps
+  // instead of a wall of zeros.
+  const showOnboarding = optionsQ.isSuccess && rangeTotal === 0 && !hasFilters;
+  const rangeText = rangePhrase(f.range, f.start_date);
   const related = (relatedQ.data?.rows ?? [])
     .filter((r) => r.event_id !== sel?.event_id)
     .slice(0, 6);
@@ -587,16 +680,47 @@ export function AuditPage() {
   return (
     <>
       <div className="mx-auto max-w-[1400px]">
-        <header className="mb-6 flex items-end justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Audit</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Every policy decision for project{" "}
-              <span className="font-mono text-foreground">{projectName}</span>
-            </p>
-          </div>
-          <DashboardRangePicker f={f} setF={setF} />
-        </header>
+        <PageHeader
+          title="Audit"
+          description={
+            // Placeholder data is the previous range's: hold the numbers
+            // until the new range lands.
+            counts.total > 0 && !summaryQ.isPlaceholderData ? (
+              <>
+                <span className="font-semibold text-foreground">
+                  {counts.total.toLocaleString()}
+                </span>{" "}
+                {scopeFiltered
+                  ? `decisions match these filters ${rangeText}`
+                  : `policy decisions ${rangeText} for `}
+                {!scopeFiltered && (
+                  <span className="font-mono text-foreground">
+                    {projectName}
+                  </span>
+                )}
+                . Deny rate{" "}
+                <span className="font-semibold text-deny">{denyRate}%</span>.
+              </>
+            ) : (
+              <>
+                Every policy decision for project{" "}
+                <span className="font-mono text-foreground">{projectName}</span>
+              </>
+            )
+          }
+          actions={
+            <>
+              <span
+                className="flex items-center gap-1.5 text-meta text-muted-foreground"
+                title="Refreshes every 30 seconds"
+              >
+                <span className="size-1.5 rounded-full bg-success" />
+                Live
+              </span>
+              <DashboardRangePicker f={f} setF={setF} />
+            </>
+          }
+        />
 
         <FilterBar
           f={f}
@@ -609,132 +733,151 @@ export function AuditPage() {
         />
         <ActiveChips f={f} setF={setF} />
 
-        <div className="mb-4 grid grid-cols-4 gap-4">
-          <KpiCard
-            label="Decisions"
-            icon={Activity}
-            value={counts.total.toLocaleString()}
-            sub={avgLabel}
-            spark={spark.total}
-            sparkColor="hsl(var(--primary))"
-            showSpark
+        {showOnboarding ? (
+          <AuditOnboarding
+            onWiden={
+              f.range !== "90d"
+                ? () =>
+                    setF((p) => ({
+                      ...p,
+                      range: "90d",
+                      customMode: false,
+                      start_date: null,
+                      end_date: null,
+                    }))
+                : undefined
+            }
           />
-          <KpiCard
-            label="Allowed"
-            icon={Check}
-            value={counts.allow.toLocaleString()}
-            color="allow"
-            sub={`${allowPct}% of decisions`}
-            spark={spark.allow}
-            sparkColor="hsl(var(--semantic-allow))"
-            showSpark
-            onClick={() => setOutcome("allow")}
-            active={f.outcome === "allow"}
-          />
-          <KpiCard
-            label="Denied"
-            icon={X}
-            value={counts.deny.toLocaleString()}
-            color="deny"
-            sub={`${denyRate}% deny rate`}
-            spark={spark.deny}
-            sparkColor="hsl(var(--semantic-deny))"
-            showSpark
-            onClick={() => setOutcome("deny")}
-            active={f.outcome === "deny"}
-          />
-          <KpiCard
-            label="Needs approval"
-            icon={CircleDashed}
-            value={counts.needs_approval.toLocaleString()}
-            color="approval"
-            sub={`${apprPct}% of decisions`}
-            spark={spark.needs_approval}
-            sparkColor="hsl(var(--semantic-approval))"
-            showSpark
-            onClick={() => setOutcome("needs_approval")}
-            active={f.outcome === "needs_approval"}
-          />
-        </div>
-
-        <div className="mb-4 grid grid-cols-[1.55fr_1fr] gap-4">
-          <Card className="p-6">
-            <div className="mb-3.5 flex items-center justify-between">
-              <div className="text-[13px] font-medium text-muted-foreground">
-                Decisions over time
-              </div>
-              <div className="flex gap-3.5 text-[11px] text-muted-foreground">
-                {OUTCOME_SERIES.map((s) => (
-                  <span key={s.key} className="flex items-center gap-1.5">
-                    <span className={`size-2 rounded-sm ${s.swatchClass}`} />
-                    {s.label}
-                  </span>
-                ))}
-              </div>
-            </div>
-            {days.length ? (
-              <AreaChart buckets={days} series={OUTCOME_SERIES} />
-            ) : (
-              <div className="flex h-60 items-center justify-center text-[13px] text-muted-foreground">
-                No decisions in this range.
-              </div>
-            )}
-          </Card>
-          <Card className="p-6">
-            <div className="mb-4 text-[13px] font-medium text-muted-foreground">
-              Outcome breakdown
-            </div>
-            <Donut
-              values={{ ...counts }}
-              total={counts.total}
-              series={OUTCOME_SERIES}
-              caption="decisions"
+        ) : (
+          <div className="space-y-4">
+            <StatStrip
+              stats={[
+                {
+                  key: "total",
+                  label: "Decisions",
+                  value: counts.total.toLocaleString(),
+                  sub: avgLabel,
+                  spark: spark.total,
+                  sparkColor: "hsl(var(--muted-foreground))",
+                },
+                {
+                  key: "deny",
+                  label: "Denied",
+                  swatchClass: OUT_SWATCH.deny,
+                  value: counts.deny.toLocaleString(),
+                  valueClass: "text-deny",
+                  sub: `${denyRate}% deny rate`,
+                  spark: spark.deny,
+                  sparkColor: "hsl(var(--semantic-deny))",
+                  onClick: () => setOutcome("deny"),
+                  active: f.outcome === "deny",
+                },
+                {
+                  key: "needs_approval",
+                  label: "Needs approval",
+                  swatchClass: OUT_SWATCH.needs_approval,
+                  value: counts.needs_approval.toLocaleString(),
+                  valueClass: "text-approval",
+                  sub: `${apprPct}% of decisions`,
+                  spark: spark.needs_approval,
+                  sparkColor: "hsl(var(--semantic-approval))",
+                  onClick: () => setOutcome("needs_approval"),
+                  active: f.outcome === "needs_approval",
+                },
+                {
+                  key: "allow",
+                  label: "Allowed",
+                  swatchClass: OUT_SWATCH.allow,
+                  value: counts.allow.toLocaleString(),
+                  sub: `${allowPct}% of decisions`,
+                  spark: spark.allow,
+                  sparkColor: "hsl(var(--semantic-allow))",
+                  onClick: () => setOutcome("allow"),
+                  active: f.outcome === "allow",
+                },
+              ]}
+              split={(["deny", "needs_approval", "allow"] as const).map(
+                (key) => ({
+                  key,
+                  value: counts[key],
+                  className: OUT_SWATCH[key],
+                }),
+              )}
             />
-          </Card>
-        </div>
 
-        {!!anomaliesQ.data?.length && (
-          <div className="mb-4">
-            <AnomaliesCard
-              rows={anomaliesQ.data}
-              onRowClick={(from, to, userId) =>
-                setF((p) => ({
-                  ...p,
-                  customMode: true,
-                  start_date: startOfDay(from),
-                  end_date: endOfDay(to),
-                  user: userId,
-                }))
-              }
-              onBanUser={
-                canManageBans
-                  ? (userId) =>
-                      navigate(`/bans?ban_user=${encodeURIComponent(userId)}`)
-                  : undefined
-              }
+            {!!anomaliesQ.data?.length && (
+              <AnomaliesCard
+                rows={anomaliesQ.data}
+                onRowClick={(from, to, userId) =>
+                  setF((p) => ({ ...p, ...burstFilters(userId, from, to) }))
+                }
+                onBanUser={
+                  canManageBans
+                    ? (userId) =>
+                        navigate(`/bans?ban_user=${encodeURIComponent(userId)}`)
+                    : undefined
+                }
+              />
+            )}
+
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+              <Card className="p-5">
+                <div className="mb-5 flex flex-wrap items-baseline justify-between gap-2">
+                  <h2 className="text-body font-semibold">
+                    {bucketMinutes === null
+                      ? "Decisions over time"
+                      : `Decisions per ${bucketUnit(bucketMinutes)}`}
+                    {/* Server day buckets are UTC days; say so, since the
+                        log below groups by local day. */}
+                    {bucketMinutes !== null && bucketMinutes >= 1440 && (
+                      <span className="ml-1.5 text-meta font-normal text-muted-foreground">
+                        UTC
+                      </span>
+                    )}
+                  </h2>
+                  <div className="flex gap-3.5 text-xs text-muted-foreground">
+                    {[...OUTCOME_SERIES].reverse().map((s) => (
+                      <span key={s.key} className="flex items-center gap-1.5">
+                        <span
+                          className={`size-2 rounded-sm ${s.swatchClass}`}
+                        />
+                        {s.label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                {days.some((d) => d.total > 0) ? (
+                  <StackedBars
+                    buckets={days}
+                    series={OUTCOME_SERIES}
+                    bucketMinutes={bucketMinutes ?? undefined}
+                  />
+                ) : (
+                  <div className="flex h-52 items-center justify-center text-meta text-muted-foreground">
+                    No decisions in this range.
+                  </div>
+                )}
+              </Card>
+              <BreakdownCard
+                byTool={summary?.by_tool ?? []}
+                byAgent={summary?.by_agent ?? []}
+                byRole={summary?.by_role.map(displayNoValue) ?? []}
+                f={f}
+                setF={setF}
+              />
+            </div>
+
+            <EventsTable
+              rows={listQ.data?.rows ?? []}
+              total={listQ.data?.total ?? 0}
+              onSelect={setSel}
+              selectedId={sel?.event_id}
+              onLoadMore={loadMore}
+              loadingMore={listQ.isFetching}
+              onExport={exportJsonl}
             />
           </div>
         )}
-
-        <div className="mb-4">
-          <BreakdownCard
-            byTool={summary?.by_tool ?? []}
-            byAgent={summary?.by_agent ?? []}
-            byRole={summary?.by_role.map(displayNoValue) ?? []}
-            f={f}
-            setF={setF}
-          />
-        </div>
-
-        <EventsTable
-          rows={listQ.data?.rows ?? []}
-          total={listQ.data?.total ?? 0}
-          onSelect={setSel}
-          selectedId={sel?.event_id}
-          onLoadMore={loadMore}
-          loadingMore={listQ.isFetching}
-          onExport={exportJsonl}
-        />
       </div>
 
       <DetailDrawer

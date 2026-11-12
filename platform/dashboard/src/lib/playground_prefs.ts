@@ -12,6 +12,8 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import { SCHEME_ACCENTS } from "@/lib/theme";
+
 interface PlaygroundPrefs {
   /** Custom highlight as HSL channels ("H S% L%"); "" = the theme default. */
   accent: string;
@@ -20,6 +22,20 @@ interface PlaygroundPrefs {
   setAccent: (accent: string) => void;
   setName: (projectId: string, name: string) => void;
 }
+
+/** v0 preset value → its v1 equivalent (old dark blue; old fixed violet → dark, the default mode). */
+const LEGACY_ACCENTS: Record<string, string> = {
+  "226 78% 65%": SCHEME_ACCENTS.blue.dark,
+  "262 70% 58%": SCHEME_ACCENTS.violet.dark,
+};
+
+/** Rose, amber and emerald, dropped in v2: red, amber and green mean deny,
+ * approval and connected, so a saved one goes back to the app's accent. */
+export const DROPPED_ACCENTS = new Set([
+  "340 75% 55%",
+  "38 92% 50%",
+  "152 60% 40%",
+]);
 
 export const usePlaygroundPrefs = create<PlaygroundPrefs>()(
   persist(
@@ -33,6 +49,19 @@ export const usePlaygroundPrefs = create<PlaygroundPrefs>()(
     {
       name: "hexgate-playground",
       storage: createJSONStorage(() => localStorage),
+      version: 2,
+      migrate: (persisted, version) => {
+        const s = persisted as PlaygroundPrefs;
+        // v0 saved presets whose values moved with the v1 palette; repoint
+        // them so the swatch still shows as selected.
+        if (version < 1 && s.accent in LEGACY_ACCENTS) {
+          return { ...s, accent: LEGACY_ACCENTS[s.accent] };
+        }
+        if (version < 2 && DROPPED_ACCENTS.has(s.accent)) {
+          return { ...s, accent: "" };
+        }
+        return s;
+      },
     },
   ),
 );

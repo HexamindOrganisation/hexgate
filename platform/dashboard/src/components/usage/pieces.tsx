@@ -164,7 +164,7 @@ export function UsageBreakdownCard({
         { value: "calls", label: "by calls" },
       ]}
       onMetricChange={setMetric}
-      emptyMessage="No LLM calls match."
+      emptyMessage="No model calls match."
       legend={
         <span className="flex items-center gap-1.5">
           <span className="size-2 rounded-sm bg-primary" />

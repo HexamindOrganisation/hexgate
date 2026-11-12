@@ -23,9 +23,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuditAnomaly, AuditDecisionRow, LlmMessageRow } from "@/lib/api";
 import { useActive } from "@/lib/active";
-import { EMPTY_AUDIT_FILTERS, useAuditFilters } from "@/lib/audit-filters";
+import {
+  type AuditFilters,
+  EMPTY_AUDIT_FILTERS,
+  fromAuditSearch,
+  toAuditSearch,
+  useAuditFilters,
+} from "@/lib/audit-filters";
 import { AuditPage } from "@/routes/Audit";
 import { renderWithProviders } from "@/test/render";
+
+/** The filters Audit last showed in `project` (its URL, mirrored in the
+ * store). */
+const currentFiltersOf = (project: string): AuditFilters =>
+  fromAuditSearch(
+    new URLSearchParams(useAuditFilters.getState().lastSearch[project] ?? ""),
+  ) ?? EMPTY_AUDIT_FILTERS;
+
+const currentFilters = () => currentFiltersOf(PROJECT);
+
+/** Make `patch` the remembered view, which a bare /audit reopens. */
+const seedFilters = (patch: Partial<AuditFilters>) =>
+  useAuditFilters.setState({
+    lastSearch: {
+      [PROJECT]: toAuditSearch({ ...EMPTY_AUDIT_FILTERS, ...patch }).toString(),
+    },
+  });
 
 const PROJECT = "p1";
 
@@ -35,6 +58,15 @@ const counts = (all: number, allow: number, deny: number, appr = 0) => ({
   deny,
   needs_approval: appr,
 });
+
+/** A range with nothing recorded. */
+const EMPTY_SUMMARY = {
+  totals: counts(0, 0, 0),
+  by_agent: [],
+  by_role: [],
+  by_tool: [],
+  by_user: [],
+};
 
 const SUMMARY = {
   totals: counts(10, 6, 4),
@@ -230,7 +262,11 @@ let messageRows: () => LlmMessageRow[] = () => MESSAGES;
  * every requested URL (path + query) so tests can assert what filter
  * state actually reached the API.
  */
-function stubFetch(anomalies: AuditAnomaly[] = [], role = "owner"): string[] {
+function stubFetch(
+  anomalies: AuditAnomaly[] = [],
+  role = "owner",
+  summary: unknown = SUMMARY,
+): string[] {
   const calls: string[] = [];
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -263,9 +299,15 @@ function stubFetch(anomalies: AuditAnomaly[] = [], role = "owner"): string[] {
               name: "demo-project",
               created_at: "2026-01-01T00:00:00Z",
             },
+            {
+              id: "p2",
+              org_id: "org-1",
+              name: "other-project",
+              created_at: "2026-01-01T00:00:00Z",
+            },
           ]);
         case `/v1/projects/${PROJECT}/audit/summary`:
-          return json(SUMMARY);
+          return json(summary);
         case `/v1/projects/${PROJECT}/audit/timeseries`:
           return json([]);
         case `/v1/projects/${PROJECT}/audit/decisions`: {
@@ -323,10 +365,7 @@ describe("AuditPage", () => {
       useActive.setState({ activeOrgId: "org-1", activeProjectId: PROJECT });
       // The filter store is module-global — reset so a filter dialled in
       // by test A doesn't narrow test B's queries.
-      useAuditFilters.setState({
-        filters: EMPTY_AUDIT_FILTERS,
-        tableLimit: 40,
-      });
+      useAuditFilters.setState({ lastSearch: {}, pageKey: "", pageLimit: 40 });
     });
     messageRows = () => MESSAGES;
   });
@@ -400,6 +439,177 @@ describe("AuditPage", () => {
     ).toBe(false);
   });
 
+  it("applies filters carried by the URL, replacing the session's", async () => {
+    seedFilters({ tool: "leftover" });
+    const calls = stubFetch();
+    renderWithProviders(<AuditPage />, {
+      initialRoute: "/audit?range=24h&agent=agent-x",
+    });
+    await waitFor(() => {
+      const f = currentFilters();
+      expect(f.agent).toBe("agent-x");
+      expect(f.range).toBe("24h");
+      expect(f.tool).toBe("");
+    });
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (u) => u.includes("/audit/decisions") && u.includes("agent=agent-x"),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("opens the new project's last view on a project switch", async () => {
+    const calls = stubFetch();
+    useAuditFilters.setState({
+      lastSearch: {
+        p2: toAuditSearch({
+          ...EMPTY_AUDIT_FILTERS,
+          tool: "tool-b",
+        }).toString(),
+      },
+    });
+    renderWithProviders(<AuditPage />, {
+      initialRoute: "/audit?range=24h&agent=agent-a",
+    });
+    await waitFor(() => expect(currentFilters().agent).toBe("agent-a"));
+    act(() => useActive.setState({ activeProjectId: "p2" }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (u) =>
+            u.startsWith("/v1/projects/p2/audit/decisions") &&
+            u.includes("tool=tool-b"),
+        ),
+      ).toBe(true),
+    );
+    // Not even one request runs B with A's filters, and B's view stands.
+    expect(
+      calls.some(
+        (u) => u.startsWith("/v1/projects/p2") && u.includes("agent-a"),
+      ),
+    ).toBe(false);
+    expect(currentFiltersOf("p2").tool).toBe("tool-b");
+    expect(useAuditFilters.getState().lastSearch.p2).not.toContain("agent-a");
+  });
+
+  it("keeps a link's filters over the project's last view", async () => {
+    stubFetch();
+    useAuditFilters.setState({
+      lastSearch: {
+        p1: toAuditSearch({ ...EMPTY_AUDIT_FILTERS, tool: "saved" }).toString(),
+      },
+    });
+    renderWithProviders(<AuditPage />, {
+      initialRoute: "/audit?range=24h&agent=linked",
+    });
+    await waitFor(() => expect(currentFilters().agent).toBe("linked"));
+    expect(currentFilters().tool).toBe("");
+  });
+
+  it("closes the previous project's event on a project switch", async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(<AuditPage />, { initialRoute: "/audit?range=30d" });
+    await openDrawer(user);
+    act(() => useActive.setState({ activeProjectId: "p2" }));
+    await waitFor(() => expect(screen.queryByText("evt-1")).toBeNull());
+    // Coming back doesn't reopen it.
+    act(() => useActive.setState({ activeProjectId: PROJECT }));
+    await screen.findByText("blocked by policy");
+    expect(screen.queryByText("evt-1")).toBeNull();
+  });
+
+  it("a bare /audit reopens the last view", async () => {
+    seedFilters({ agent: "agent-y" });
+    const calls = stubFetch();
+    renderWithProviders(<AuditPage />, { initialRoute: "/audit" });
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (u) => u.includes("/audit/decisions") && u.includes("agent=agent-y"),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("reads the range in one sentence: total and deny rate", async () => {
+    stubFetch();
+    renderWithProviders(<AuditPage />);
+    // SUMMARY: 10 decisions, 4 denied.
+    const header = (await screen.findByRole("heading", { name: "Audit" }))
+      .parentElement as HTMLElement;
+    await waitFor(() =>
+      expect(header).toHaveTextContent(
+        /10 policy decisions in the last \d+ (days|hours) for demo-project\. Deny rate 40\.0%\./,
+      ),
+    );
+  });
+
+  it("does not call a filtered count the project total", async () => {
+    seedFilters({ tool: "read_file" });
+    stubFetch();
+    renderWithProviders(<AuditPage />);
+    const header = (await screen.findByRole("heading", { name: "Audit" }))
+      .parentElement as HTMLElement;
+    await waitFor(() =>
+      expect(header).toHaveTextContent(/10 decisions match these filters/),
+    );
+    expect(header).not.toHaveTextContent("for demo-project");
+  });
+
+  it("titles the chart with the server's bucket width", async () => {
+    stubFetch();
+    // The first point is off the grid: a guess from the first gap would be
+    // wrong; the width the server sends is not.
+    const answer = vi.mocked(window.fetch).getMockImplementation()!;
+    vi.mocked(window.fetch).mockImplementation(async (input, init) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path !== `/v1/projects/${PROJECT}/audit/timeseries`)
+        return answer(input, init);
+      const point = (bucket: string) => ({
+        bucket,
+        bucket_minutes: 1440,
+        allow: 1,
+        deny: 0,
+        needs_approval: 0,
+      });
+      return new Response(
+        JSON.stringify([
+          point("2026-10-01T07:13:00Z"),
+          point("2026-10-02T00:00:00Z"),
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    renderWithProviders(<AuditPage />);
+    expect(await screen.findByText(/Decisions per day/)).toBeInTheDocument();
+  });
+
+  it("shows next steps instead of zeros when the range holds nothing", async () => {
+    stubFetch([], "owner", EMPTY_SUMMARY);
+    renderWithProviders(<AuditPage />);
+    expect(
+      await screen.findByText("No decisions in this range"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /API keys/ })).toHaveAttribute(
+      "href",
+      "/tokens",
+    );
+    expect(screen.queryByText("Decision log")).not.toBeInTheDocument();
+  });
+
+  it("keeps the log, not next steps, when a filter empties the range", async () => {
+    seedFilters({ tool: "read_file" });
+    stubFetch([], "owner", EMPTY_SUMMARY);
+    renderWithProviders(<AuditPage />);
+    expect(await screen.findByText("Decision log")).toBeInTheDocument();
+    expect(
+      screen.queryByText("No decisions in this range"),
+    ).not.toBeInTheDocument();
+  });
+
   it("outcome KPI card toggles the outcome filter", async () => {
     const calls = stubFetch();
     const user = userEvent.setup();
@@ -444,12 +654,12 @@ describe("AuditPage", () => {
 
     await user.click(bar);
     await waitFor(() => {
-      expect(useAuditFilters.getState().filters.tool).toBe("read_file");
+      expect(currentFilters().tool).toBe("read_file");
     });
 
     await user.click(bar);
     await waitFor(() => {
-      expect(useAuditFilters.getState().filters.tool).toBe("");
+      expect(currentFilters().tool).toBe("");
     });
   });
 
@@ -922,14 +1132,10 @@ describe("AuditPage", () => {
       const user = userEvent.setup();
 
       act(() => {
-        useAuditFilters.setState({
-          filters: {
-            ...EMPTY_AUDIT_FILTERS,
-            customMode: true,
-            start_date: new Date(2026, 5, 1),
-            end_date: new Date(2026, 5, 15),
-          },
-          tableLimit: 40,
+        seedFilters({
+          customMode: true,
+          start_date: new Date(2026, 5, 1),
+          end_date: new Date(2026, 5, 15),
         });
       });
 
@@ -945,33 +1151,43 @@ describe("AuditPage", () => {
       await user.click(screen.getByText("7d"));
 
       await waitFor(() => {
-        expect(useAuditFilters.getState().filters.start_date).toBeNull();
-        expect(useAuditFilters.getState().filters.end_date).toBeNull();
+        expect(currentFilters().start_date).toBeNull();
+        expect(currentFilters().end_date).toBeNull();
       });
       expect(
         screen.queryByRole("button", { name: /→/ }),
       ).not.toBeInTheDocument();
     });
 
-    it("dates set in the store render as the formatted range in the picker button", async () => {
-      stubFetch();
+    it("dates picked on the page reach the URL and the queries", async () => {
+      const calls = stubFetch();
       const user = userEvent.setup();
-      renderWithProviders(<AuditPage />);
-
-      await screen.findByText("blocked by policy");
-      await user.click(screen.getByText("Custom"));
-
-      act(() => {
-        useAuditFilters.setState((s) => ({
-          ...s,
-          filters: {
-            ...s.filters,
-            start_date: new Date(2026, 5, 1),
-            end_date: new Date(2026, 5, 15),
-          },
-        }));
+      renderWithProviders(<AuditPage />, {
+        initialRoute: "/audit?range=30d&custom=1",
       });
+      await user.click(await screen.findByRole("button", { name: / → / }));
+      await user.click(within(await screen.findByRole("grid")).getByText("10"));
+      // The calendar re-renders on each pick: find it again.
+      await user.click(within(await screen.findByRole("grid")).getByText("12"));
+      await waitFor(() => {
+        const f = currentFilters();
+        expect(f.start_date?.getDate()).toBe(10);
+        expect(f.end_date?.getDate()).toBe(12);
+      });
+      await waitFor(() =>
+        expect(
+          calls.some(
+            (u) => u.includes("/audit/decisions") && u.includes("start_date="),
+          ),
+        ).toBe(true),
+      );
+    });
 
+    it("dates in the URL render as the formatted range in the picker button", async () => {
+      stubFetch();
+      renderWithProviders(<AuditPage />, {
+        initialRoute: "/audit?range=30d&custom=1&from=2026-06-01&to=2026-06-15",
+      });
       await screen.findByRole("button", { name: /Jun 1, 2026 → Jun 15, 2026/ });
     });
 
@@ -981,15 +1197,11 @@ describe("AuditPage", () => {
 
       // Seed: custom range + an agent filter so ActiveChips renders
       act(() => {
-        useAuditFilters.setState({
-          filters: {
-            ...EMPTY_AUDIT_FILTERS,
-            customMode: true,
-            agent: "example_agent",
-            start_date: new Date(2026, 5, 1),
-            end_date: new Date(2026, 5, 15),
-          },
-          tableLimit: 40,
+        seedFilters({
+          customMode: true,
+          agent: "example_agent",
+          start_date: new Date(2026, 5, 1),
+          end_date: new Date(2026, 5, 15),
         });
       });
 
@@ -1013,9 +1225,9 @@ describe("AuditPage", () => {
           screen.queryByRole("button", { name: /→/ }),
         ).not.toBeInTheDocument();
       });
-      expect(useAuditFilters.getState().filters.customMode).toBe(false);
-      expect(useAuditFilters.getState().filters.start_date).toBeNull();
-      expect(useAuditFilters.getState().filters.end_date).toBeNull();
+      expect(currentFilters().customMode).toBe(false);
+      expect(currentFilters().start_date).toBeNull();
+      expect(currentFilters().end_date).toBeNull();
     });
 
     it("selecting a preset dismisses the date picker and clears the dates", async () => {
@@ -1035,8 +1247,8 @@ describe("AuditPage", () => {
           screen.queryByRole("button", { name: /→/ }),
         ).not.toBeInTheDocument();
       });
-      expect(useAuditFilters.getState().filters.start_date).toBeNull();
-      expect(useAuditFilters.getState().filters.end_date).toBeNull();
+      expect(currentFilters().start_date).toBeNull();
+      expect(currentFilters().end_date).toBeNull();
     });
   });
 
@@ -1059,9 +1271,9 @@ describe("AuditPage", () => {
       await user.click(await screen.findByText("bob"));
 
       await waitFor(() => {
-        expect(useAuditFilters.getState().filters.user).toBe("bob");
-        expect(useAuditFilters.getState().filters.customMode).toBe(true);
-        expect(useAuditFilters.getState().filters.start_date).not.toBeNull();
+        expect(currentFilters().user).toBe("bob");
+        expect(currentFilters().customMode).toBe(true);
+        expect(currentFilters().start_date).not.toBeNull();
       });
       await waitFor(() => {
         expect(
@@ -1071,6 +1283,35 @@ describe("AuditPage", () => {
         ).toBe(true);
       });
       expect(screen.getByText("Clear all")).toBeInTheDocument();
+    });
+
+    it("shows the first three bursts and folds the rest", async () => {
+      stubFetch(
+        ["a", "b", "c", "d", "e"].map((u) => ({ ...ANOMALY, user_id: u })),
+      );
+      const user = userEvent.setup();
+      renderWithProviders(<AuditPage />);
+
+      expect(await screen.findByText("c")).toBeInTheDocument();
+      expect(screen.queryByText("d")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Show 2 more" }));
+      expect(screen.getByText("e")).toBeInTheDocument();
+    });
+
+    it("never folds a high-severity burst behind medium ones", async () => {
+      stubFetch([
+        ...["a", "b", "c"].map((u) => ({
+          ...ANOMALY,
+          user_id: u,
+          severity: "medium" as const,
+        })),
+        { ...ANOMALY, user_id: "zed" },
+      ]);
+      renderWithProviders(<AuditPage />);
+      expect(await screen.findByText("zed")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Show 1 more" }),
+      ).toBeInTheDocument();
     });
 
     it("renders a Medium badge for medium-severity anomalies", async () => {

@@ -37,9 +37,7 @@ export function BarRow({
       onClick={onClick}
       className={`mb-[11px] transition-opacity ${onClick ? "cursor-pointer" : ""} ${active === false ? "opacity-45" : ""}`}
     >
-      <div className="mb-1 flex justify-between gap-2 text-[12.5px]">
-        {header}
-      </div>
+      <div className="mb-1 flex justify-between gap-2 text-meta">{header}</div>
       <div
         className="flex h-1.5 min-w-6 overflow-hidden rounded-[3px] bg-secondary"
         style={{ width: `${Math.max(widthPct, 4)}%` }}
@@ -73,6 +71,7 @@ export function BreakdownCardShell<
   onFilterChange,
   emptyMessage,
   legend,
+  columns = 2,
 }: {
   dims: { id: Dim; label: string }[];
   dim: Dim;
@@ -89,6 +88,8 @@ export function BreakdownCardShell<
   onFilterChange: (next: string) => void;
   emptyMessage: string;
   legend: ReactNode;
+  /** Bar grid columns; 1 when the card sits in a narrow column. */
+  columns?: 1 | 2;
 }) {
   return (
     <Card className="flex flex-col p-6">
@@ -118,7 +119,9 @@ export function BreakdownCardShell<
           </SelectContent>
         </Select>
       </div>
-      <div className="grid flex-1 grid-cols-2 gap-x-8">
+      <div
+        className={`grid flex-1 gap-x-8 ${columns === 2 ? "grid-cols-2" : "grid-cols-1 content-start"}`}
+      >
         {rows.length ? (
           rows.map((row) => {
             const active = !activeFilterValue || activeFilterValue === row.key;
@@ -131,7 +134,7 @@ export function BreakdownCardShell<
             );
           })
         ) : (
-          <div className="py-2 text-[12.5px] text-muted-foreground">
+          <div className="py-2 text-meta text-muted-foreground">
             {emptyMessage}
           </div>
         )}

@@ -7,7 +7,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { useIsDark, useTheme, schemeAccent } from "@/lib/theme";
+import { SCHEMES, schemeAccent, useIsDark, useTheme } from "@/lib/theme";
 import {
   accentForeground,
   hexToHslChannels,
@@ -46,19 +46,14 @@ export function AccentStyle() {
   return null;
 }
 
-// Curated accent swatches (HSL channels, matching the --primary token format).
-// "Blue"/"Plum" mirror the two built-in schemes — read from theme's single
-// source so they match the built-in in BOTH palettes, not just the mode whose
-// value happened to be hardcoded; the rest are extra demo accents.
+// Accent swatches (HSL channels, the --primary token format): the app's own
+// schemes, so they match the built-in in BOTH palettes. No red, amber or
+// green: those mean deny, approval and connected.
 function accentPresets(dark: boolean): { name: string; value: string }[] {
-  return [
-    { name: "Blue", value: schemeAccent("blue", dark) },
-    { name: "Violet", value: "262 70% 58%" },
-    { name: "Plum", value: schemeAccent("plum", dark) },
-    { name: "Rose", value: "340 75% 55%" },
-    { name: "Amber", value: "38 92% 50%" },
-    { name: "Emerald", value: "152 60% 40%" },
-  ];
+  return SCHEMES.map((s) => ({
+    name: s.label,
+    value: schemeAccent(s.id, dark),
+  }));
 }
 
 function AccentPicker() {

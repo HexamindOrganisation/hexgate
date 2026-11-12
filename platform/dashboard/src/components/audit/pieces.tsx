@@ -1,4 +1,5 @@
-import { useMemo, useState, type ComponentType } from "react";
+import { useMemo, useState } from "react";
+import { isToday, isYesterday } from "date-fns";
 import {
   Ban,
   Check,
@@ -21,24 +22,18 @@ import type {
   SetAuditFilters as SetFilters,
 } from "@/lib/audit-filters";
 import { ActiveFilterChips } from "@/components/ui/active-filter-chips";
+import { Callout } from "@/components/ui/callout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ALL, FilterSelect } from "@/components/ui/filter-select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Sparkline } from "@/components/ui/charts";
+import { cn } from "@/lib/utils";
 import { BreakdownCardShell } from "@/components/ui/breakdown-card";
-import { BreakdownBar, type BreakdownDatum, DecisionBadge } from "./charts";
-import { OUTCOME_SERIES } from "./chart-tokens";
-import { fmtTs } from "./fmt";
+import { BreakdownBar, type BreakdownDatum } from "./charts";
+import { rankAnomalies } from "./anomalies";
+import { argsPreview, fmtClock } from "./fmt";
+import { OUT_LABEL, OUT_SWATCH, OUTCOME_SERIES } from "./chart-tokens";
 
 // Map a server breakdown row ({key, all, ...}) to the chart datum ({total, ...}).
 const toDatum = (r: AuditBreakdownRow): BreakdownDatum => ({
@@ -103,21 +98,21 @@ export function FilterBar({
         </ToggleGroupItem>
         <ToggleGroupItem
           value="allow"
-          className="text-allow data-[state=on]:bg-allow/15 data-[state=on]:text-allow"
+          className="text-allow data-[state=on]:text-allow"
         >
           <Check className="size-3" strokeWidth={2} />
           allow
         </ToggleGroupItem>
         <ToggleGroupItem
           value="deny"
-          className="text-deny data-[state=on]:bg-deny/15 data-[state=on]:text-deny"
+          className="text-deny data-[state=on]:text-deny"
         >
           <X className="size-3" strokeWidth={2} />
           deny
         </ToggleGroupItem>
         <ToggleGroupItem
           value="needs_approval"
-          className="text-approval data-[state=on]:bg-approval/15 data-[state=on]:text-approval"
+          className="text-approval data-[state=on]:text-approval"
         >
           <CircleDashed className="size-3" strokeWidth={2} />
           approval
@@ -159,62 +154,6 @@ export function ActiveChips({ f, setF }: { f: Filters; setF: SetFilters }) {
         }))
       }
     />
-  );
-}
-
-// ————————————————————————————————————————————— KPI tile
-export function KpiCard({
-  label,
-  icon: KpiIcon,
-  value,
-  sub,
-  color,
-  spark,
-  sparkColor,
-  showSpark,
-  onClick,
-  active,
-}: {
-  label: string;
-  icon: ComponentType<{ className?: string }>;
-  value: string;
-  sub: string;
-  color?: "allow" | "deny" | "approval";
-  spark?: number[];
-  sparkColor?: string;
-  showSpark?: boolean;
-  onClick?: () => void;
-  active?: boolean;
-}) {
-  // Static map — Tailwind's scanner can't see interpolated class names.
-  const valColor = {
-    allow: "text-allow",
-    deny: "text-deny",
-    approval: "text-approval",
-  };
-  return (
-    <Card
-      onClick={onClick}
-      className={`p-5 transition-colors ${onClick ? "cursor-pointer" : ""} ${active ? "border-primary/50" : ""}`}
-    >
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <KpiIcon className="size-3.5" />
-          <span>{label}</span>
-        </div>
-        <div
-          className={`text-[28px] font-semibold leading-tight tracking-tight ${color ? valColor[color] : ""}`}
-        >
-          {value}
-        </div>
-        <div className="text-[11.5px] text-muted-foreground">{sub}</div>
-        {showSpark && spark && (
-          <div className="mt-1.5">
-            <Sparkline data={spark} color={sparkColor} width={170} />
-          </div>
-        )}
-      </div>
-    </Card>
   );
 }
 
@@ -261,6 +200,7 @@ export function BreakdownCard({
         { value: "denials", label: "by denials" },
       ]}
       onMetricChange={setSort}
+      columns={1}
       emptyMessage="No decisions match."
       legend={
         <>
@@ -315,6 +255,40 @@ function RolesCell({ roles }: { roles: string[] }) {
 }
 
 // ————————————————————————————————————————————— Events table
+const OUTCOME_TEXT: Record<AuditOutcome, string> = {
+  deny: "text-deny",
+  needs_approval: "text-approval",
+  allow: "text-muted-foreground",
+};
+
+/** Swatch + label; the log's quiet alternative to the pill badge. */
+export function OutcomeLabel({ d }: { d: AuditOutcome }) {
+  return (
+    <span
+      className={cn("flex items-center gap-1.5 font-semibold", OUTCOME_TEXT[d])}
+    >
+      <span className={cn("size-2 shrink-0 rounded-sm", OUT_SWATCH[d])} />
+      {OUT_LABEL[d]}
+    </span>
+  );
+}
+
+function dayLabel(d: Date): string {
+  const date = d.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  return isToday(d)
+    ? `Today · ${date}`
+    : isYesterday(d)
+      ? `Yesterday · ${date}`
+      : date;
+}
+
+const LOG_COLS =
+  "grid grid-cols-[96px_92px_minmax(0,1.5fr)_120px_96px_minmax(0,1.6fr)_16px] items-center gap-3.5";
+
 export function EventsTable({
   rows,
   total,
@@ -332,84 +306,114 @@ export function EventsTable({
   loadingMore?: boolean;
   onExport?: () => void;
 }) {
+  // Rows arrive newest first, so consecutive runs share a day.
+  const groups: { label: string; rows: AuditDecisionRow[] }[] = [];
+  let lastDay = "";
+  for (const r of rows) {
+    const d = new Date(r.occurred_at);
+    const day = d.toDateString();
+    if (day === lastDay) groups.at(-1)!.rows.push(r);
+    else groups.push({ label: dayLabel(d), rows: [r] });
+    lastDay = day;
+  }
   return (
     <Card className="overflow-hidden p-0">
-      <div className="flex items-center justify-between border-b border-border px-5 py-4">
-        <div>
-          <div className="text-[15px] font-semibold">Decisions</div>
-          <div className="mt-0.5 text-xs text-muted-foreground">
-            Newest first · ordered by{" "}
-            <span className="font-mono">occurred_at</span>. Click a row to
-            inspect.
-          </div>
-        </div>
-        <Button variant="ghost" onClick={onExport} disabled={!onExport}>
+      <div className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-4">
+        <h2 className="text-body font-semibold">Decision log</h2>
+        <span className="text-meta text-muted-foreground">
+          {total.toLocaleString()} decisions · newest first. Click a row to
+          inspect.
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          className="ml-auto gap-1.5"
+          onClick={onExport}
+          disabled={!onExport}
+        >
           <Download className="size-3.5" />
           Export JSONL
         </Button>
       </div>
-      <div className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-[168px]">Time</TableHead>
-              <TableHead>Agent</TableHead>
-              <TableHead>Role</TableHead>
-              <TableHead>Tool</TableHead>
-              <TableHead className="w-[110px]">Outcome</TableHead>
-              <TableHead>Reason</TableHead>
-              <TableHead className="w-[30px]"></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((e) => (
-              <TableRow
-                key={e.event_id}
-                onClick={() => onSelect(e)}
-                className={`cursor-pointer ${selectedId === e.event_id ? "bg-primary/10 hover:bg-primary/10" : ""}`}
-              >
-                <TableCell className="font-mono text-xs text-muted-foreground">
-                  {fmtTs(new Date(e.occurred_at))}
-                </TableCell>
-                <TableCell className="font-mono text-[12.5px]">
-                  {e.agent_name}
-                </TableCell>
-                <TableCell
-                  className={e.user_roles.length ? "" : "text-muted-foreground"}
-                >
-                  <RolesCell roles={e.user_roles} />
-                </TableCell>
-                <TableCell className="font-mono text-[12.5px]">
-                  {e.tool_name}
-                </TableCell>
-                <TableCell>
-                  <DecisionBadge d={e.outcome} />
-                </TableCell>
-                <TableCell className="max-w-80 overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px] text-muted-foreground">
-                  {e.reason || "—"}
-                </TableCell>
-                <TableCell>
-                  <ChevronRight className="size-3.5 text-muted-foreground" />
-                </TableCell>
-              </TableRow>
-            ))}
-            {!rows.length && (
-              <TableRow>
-                <TableCell
-                  colSpan={7}
-                  className="py-8 text-center text-muted-foreground"
-                >
-                  No decisions match the current filters.
-                </TableCell>
-              </TableRow>
+      <div className="overflow-x-auto scrollbar-thin">
+        <div className="min-w-[940px]">
+          <div
+            className={cn(
+              LOG_COLS,
+              "border-b border-border px-5 py-2.5 text-caption font-semibold uppercase tracking-wider text-muted-foreground",
             )}
-          </TableBody>
-        </Table>
+          >
+            <span>Time</span>
+            <span>Outcome</span>
+            <span>Tool</span>
+            <span>Agent</span>
+            <span>Role</span>
+            <span>Reason</span>
+            <span />
+          </div>
+          {groups.map((g) => (
+            <div key={g.label}>
+              <div className="px-5 pb-1.5 pt-3.5 text-xs font-semibold text-muted-foreground">
+                {g.label}
+              </div>
+              {g.rows.map((e) => (
+                <button
+                  key={e.event_id}
+                  type="button"
+                  onClick={() => onSelect(e)}
+                  aria-current={selectedId === e.event_id || undefined}
+                  className={cn(
+                    LOG_COLS,
+                    "w-full border-t border-border/60 px-5 py-2.5 text-left text-meta transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                    selectedId === e.event_id &&
+                      "bg-primary/10 hover:bg-primary/10",
+                  )}
+                >
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {fmtClock(new Date(e.occurred_at))}
+                  </span>
+                  <OutcomeLabel d={e.outcome} />
+                  <span className="truncate font-mono">
+                    {e.tool_name}
+                    <span className="text-muted-foreground">
+                      {argsPreview(e.arguments)}
+                    </span>
+                  </span>
+                  <span className="truncate font-mono text-xs">
+                    {e.agent_name}
+                  </span>
+                  <span
+                    className={cn(
+                      "truncate",
+                      !e.user_roles.length && "text-muted-foreground",
+                    )}
+                  >
+                    <RolesCell roles={e.user_roles} />
+                  </span>
+                  <span
+                    className={cn(
+                      "truncate",
+                      e.outcome === "allow" && "text-muted-foreground",
+                    )}
+                  >
+                    {e.reason || "—"}
+                  </span>
+                  <ChevronRight className="size-3.5 text-muted-foreground" />
+                </button>
+              ))}
+            </div>
+          ))}
+          {!rows.length && (
+            <div className="py-10 text-center text-meta text-muted-foreground">
+              No decisions match the current filters.
+            </div>
+          )}
+        </div>
       </div>
       {rows.length < total && (
         <div className="border-t border-border px-5 py-3 text-center">
           <Button
-            variant="secondary"
+            variant="outline"
             size="sm"
             onClick={onLoadMore}
             disabled={loadingMore}
@@ -439,7 +443,7 @@ function fmtBurst(first: string, last: string): string {
     d.toLocaleTimeString("en-US", {
       hour: "2-digit",
       minute: "2-digit",
-      hour12: false,
+      hourCycle: "h23",
     });
   return date(f) === date(l)
     ? `${date(f)}, ${time(f)} → ${time(l)}`
@@ -456,6 +460,9 @@ function SeverityBadge({ severity }: { severity: AnomalySeverity }) {
   );
 }
 
+// The endpoint returns every burst; show the worst few up front.
+const ANOMALIES_SHOWN = 3;
+
 export function AnomaliesCard({
   rows,
   onRowClick,
@@ -464,79 +471,80 @@ export function AnomaliesCard({
   rows: AuditAnomaly[];
   onRowClick: (from: Date, to: Date, userId: string) => void;
   /** When set, each row gets a "Ban user" action (admins only — the caller
-   * gates on role). Undefined hides the column entirely. */
+   * gates on role). Undefined hides the action entirely. */
   onBanUser?: (userId: string) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const ranked = useMemo(() => rankAnomalies(rows), [rows]);
+  const shown = expanded ? ranked : ranked.slice(0, ANOMALIES_SHOWN);
   return (
-    <Card className="overflow-hidden p-0">
-      <div className="flex items-center gap-2 border-b border-border px-5 py-4">
-        <TriangleAlert className="size-4 text-approval" />
-        <div className="text-[15px] font-semibold">
-          Anomalies · {rows.length} detected
-        </div>
+    <section aria-label="Anomalies" className="space-y-2">
+      <div className="flex items-center gap-3 text-caption font-semibold uppercase tracking-wider text-muted-foreground">
+        Anomalies · {rows.length} detected
+        {rows.length > ANOMALIES_SHOWN && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="normal-case tracking-normal text-primary hover:underline"
+          >
+            {expanded
+              ? "Show fewer"
+              : `Show ${rows.length - ANOMALIES_SHOWN} more`}
+          </button>
+        )}
       </div>
-      <div className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-[90px]">Severity</TableHead>
-              <TableHead>User</TableHead>
-              <TableHead className="w-[80px]">Denies</TableHead>
-              <TableHead className="w-[90px]">Deny rate</TableHead>
-              <TableHead>When</TableHead>
-              {onBanUser && <TableHead className="w-[110px]" />}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((row) => (
-              <TableRow
-                key={`${row.user_id}-${row.first_seen}`}
-                className="cursor-pointer"
-                onClick={() =>
-                  onRowClick(
-                    new Date(row.first_seen),
-                    new Date(row.last_seen),
-                    row.user_id,
-                  )
-                }
-              >
-                <TableCell>
-                  <SeverityBadge severity={row.severity} />
-                </TableCell>
-                <TableCell className="font-mono text-[12.5px]">
+      {shown.map((row) => {
+        const inspect = () =>
+          onRowClick(
+            new Date(row.first_seen),
+            new Date(row.last_seen),
+            row.user_id,
+          );
+        return (
+          <Callout
+            key={`${row.user_id}-${row.first_seen}`}
+            icon={<TriangleAlert />}
+            title={
+              <span className="flex flex-wrap items-center gap-2">
+                Denial burst from
+                <button
+                  type="button"
+                  title="Filter the page to this burst"
+                  onClick={inspect}
+                  className="font-mono font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
                   {row.user_id}
-                </TableCell>
-                <TableCell>
-                  {row.deny}
-                  <span className="ml-1 text-xs text-muted-foreground">
-                    / {row.all}
-                  </span>
-                </TableCell>
-                <TableCell>{(row.deny_rate * 100).toFixed(0)}%</TableCell>
-                <TableCell className="font-mono text-xs text-muted-foreground">
-                  {fmtBurst(row.first_seen, row.last_seen)}
-                </TableCell>
+                </button>
+                <SeverityBadge severity={row.severity} />
+              </span>
+            }
+            actions={
+              <>
+                <Button variant="outline" size="sm" onClick={inspect}>
+                  Inspect
+                </Button>
                 {onBanUser && (
-                  <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="gap-1.5 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onBanUser(row.user_id);
-                      }}
-                    >
-                      <Ban className="size-3.5" />
-                      Ban user
-                    </Button>
-                  </TableCell>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => onBanUser(row.user_id)}
+                  >
+                    <Ban className="size-3.5" />
+                    Ban user
+                  </Button>
                 )}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-    </Card>
+              </>
+            }
+          >
+            {row.deny} of {row.all} calls denied ·{" "}
+            <span>{(row.deny_rate * 100).toFixed(0)}%</span> deny rate ·{" "}
+            <span className="font-mono">
+              {fmtBurst(row.first_seen, row.last_seen)}
+            </span>
+          </Callout>
+        );
+      })}
+    </section>
   );
 }

@@ -2,10 +2,23 @@
  * Shared window/range math for dashboard pages with a preset-range +
  * custom-date-picker toggle (Audit, Usage). Neutral module — both
  * audit-filters.ts and usage-filters.ts import from here rather than one
- * page's filter store owning logic the other needs too.
+ * page's filters owning logic the other needs too.
  */
 
 export type Range = "24h" | "7d" | "30d" | "90d";
+
+/** "the last …" wording for a preset range. */
+export const RANGE_LABEL: Record<Range, string> = {
+  "24h": "24 hours",
+  "7d": "7 days",
+  "30d": "30 days",
+  "90d": "90 days",
+};
+
+/** "in the last 7 days", or "in the selected range" for custom dates. */
+export function rangePhrase(range: Range, start: Date | null): string {
+  return start ? "in the selected range" : `in the last ${RANGE_LABEL[range]}`;
+}
 
 export const RANGE_DAYS: Record<Range, number> = {
   "24h": 1,
@@ -22,9 +35,9 @@ export interface RangePickerFilters {
   end_date: Date | null;
 }
 
-/** Fields every dashboard filter store (Audit, Usage) carries in common —
- * kept here, not duplicated per-store, so a shared field added to one
- * filter store is a type error until it's added to the other. */
+/** Fields every dashboard page's filters (Audit's URL, Usage's store) carry
+ * in common — kept here, not duplicated per page, so a shared field added to
+ * one is a type error until it's added to the other. */
 export interface BaseDashboardFilters extends RangePickerFilters {
   agent: string;
   user: string;

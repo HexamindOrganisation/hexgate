@@ -72,9 +72,14 @@ export function useCreateProject() {
   return useMutation({
     mutationFn: createProjectRequest,
     onSuccess: (project) => {
-      // Bust the listing for the org this project landed in. Use the
-      // returned project's org_id rather than the input so a future
-      // server-side org-redirect (we don't do this today) still works.
+      // Add it to the org's cached list at once, so selecting it right away
+      // isn't mistaken for a deleted project; then refetch the real list.
+      // The returned org_id, not the input, in case the server redirects.
+      qc.setQueryData<ProjectRead[]>(projectsKey(project.org_id), (prev) =>
+        prev && !prev.some((p) => p.id === project.id)
+          ? [...prev, project]
+          : prev,
+      );
       qc.invalidateQueries({ queryKey: projectsKey(project.org_id) });
     },
   });

@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useActive } from "@/lib/active";
 import type { GuardDefinition, SkillDefinition } from "@/lib/api";
 import { AgentsPage } from "@/routes/Agents";
-import { renderWithProviders } from "@/test/render";
+import { makeQueryClient, renderWithProviders } from "@/test/render";
 
 const PROJECT = "p1";
 
@@ -64,7 +64,11 @@ function withGuards(guards: GuardDefinition[] | null) {
   return { ...MANIFEST, manifest: { ...MANIFEST.manifest, guards } };
 }
 
-function stubFetch(role: string, manifest: unknown = MANIFEST) {
+function stubFetch(
+  role: string,
+  manifest: unknown = MANIFEST,
+  summary: "ok" | "error" = "ok",
+) {
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), {
       status: 200,
@@ -95,7 +99,58 @@ function stubFetch(role: string, manifest: unknown = MANIFEST) {
             },
           ]);
         case `/v1/projects/${PROJECT}/agents/manifest`:
-          return json([manifest]);
+          return manifest === "error"
+            ? new Response("boom", { status: 500 })
+            : json([manifest]);
+        case `/v1/projects/${PROJECT}/policy-files`:
+          return json([
+            {
+              name: "policy.yaml",
+              content: "",
+              content_hash: "h",
+              updated_at: "2026-01-01T00:00:00Z",
+            },
+          ]);
+        case `/v1/projects/${PROJECT}/policy/matrix`:
+          return json({
+            roles: ["guest", "support"],
+            tools: ["refund"],
+            cells: {
+              refund: {
+                guest: { mode: "deny", constraint: null },
+                support: { mode: "allow", constraint: "args.amount <= 50" },
+              },
+              // An unlisted manifest tool: the server's fallback cells.
+              ...(url.searchParams.getAll("tool").includes("lookup") && {
+                lookup: {
+                  guest: { mode: "deny", constraint: null },
+                  support: { mode: "allow", constraint: "user.tier == 1" },
+                },
+              }),
+            },
+            defaults: {
+              guest: { mode: "deny", constraint: null },
+              support: { mode: "allow", constraint: "user.tier == 1" },
+            },
+            aliased_default: null,
+          });
+        case `/v1/projects/${PROJECT}/audit/summary`:
+          if (summary === "error") return new Response("boom", { status: 500 });
+          return json({
+            totals: { all: 15, allow: 10, deny: 4, needs_approval: 1 },
+            by_agent: [
+              {
+                key: "support_bot",
+                all: 15,
+                allow: 10,
+                deny: 4,
+                needs_approval: 1,
+              },
+            ],
+            by_role: [],
+            by_tool: [],
+            by_user: [],
+          });
         default:
           return new Response("not found", { status: 404 });
       }
@@ -120,6 +175,102 @@ describe("AgentsPage — ban tie-in", () => {
 
     const link = await screen.findByRole("link", { name: /ban agent/i });
     expect(link).toHaveAttribute("href", "/bans?ban_agent=support_bot");
+  });
+
+  it("links View decisions to Audit for the agent over 24h", async () => {
+    stubFetch("admin");
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    const href = (
+      await screen.findByRole("link", { name: /view decisions/i })
+    ).getAttribute("href")!;
+    const params = new URL(href, "http://x").searchParams;
+    expect(params.get("agent")).toBe("support_bot");
+    expect(params.get("range")).toBe("24h");
+  });
+
+  it("shows how each role treats each tool", async () => {
+    stubFetch("admin", {
+      ...MANIFEST,
+      manifest: {
+        ...MANIFEST.manifest,
+        tools: [
+          {
+            name: "refund",
+            description: "",
+            input_schema: { type: "object", properties: {}, required: [] },
+          },
+          {
+            name: "lookup",
+            description: "",
+            input_schema: { type: "object", properties: {}, required: [] },
+          },
+        ],
+      },
+    });
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    // The engine's condition text rides on the chip.
+    expect(
+      await screen.findByTitle("support: args.amount <= 50"),
+    ).toHaveTextContent("support allow*");
+    // A manifest tool the policy doesn't list takes the engine's fallback,
+    // role-wide constraint included.
+    expect(
+      screen.getByTitle("guest: not listed, default applies"),
+    ).toHaveTextContent("guest deny");
+    expect(
+      screen.getByTitle("support: not listed, default applies, user.tier == 1"),
+    ).toHaveTextContent("support allow*");
+  });
+
+  it("shows the agent's last 24 hours", async () => {
+    stubFetch("admin");
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    expect(await screen.findByText("Calls · 24h")).toBeInTheDocument();
+    expect(screen.getByText(/15 calls in 24h/)).toBeInTheDocument();
+    expect(screen.getByText("4")).toBeInTheDocument();
+  });
+
+  it("lists each agent as a link to its own view", async () => {
+    stubFetch("admin");
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    const nav = await screen.findByRole("navigation", { name: "Agents" });
+    expect(
+      await within(nav).findByRole("link", { name: /support_bot/ }),
+    ).toHaveAttribute("href", "/agents?agent=support_bot");
+  });
+
+  it("marks the counts as old when a refresh fails", async () => {
+    stubFetch("admin", MANIFEST, "error");
+    const client = makeQueryClient();
+    // A summary that loaded earlier; the next poll fails.
+    client.setQueryData(["audit", "summary", PROJECT, { window: "24h" }], {
+      totals: { all: 15, allow: 10, deny: 4, needs_approval: 1 },
+      by_agent: [
+        { key: "support_bot", all: 15, allow: 10, deny: 4, needs_approval: 1 },
+      ],
+      by_role: [],
+      by_tool: [],
+      by_user: [],
+    });
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents", client });
+    expect(await screen.findByText(/Couldn't refresh/)).toBeInTheDocument();
+    expect(screen.getByText(/15 calls in 24h/)).toBeInTheDocument();
+  });
+
+  it("does not claim there are no agents while the project resolves", async () => {
+    vi.spyOn(window, "fetch").mockImplementation(() => new Promise(() => {}));
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    expect(await screen.findByText("Loading agents…")).toBeInTheDocument();
+    expect(screen.queryByText(/No agents yet/)).not.toBeInTheDocument();
+  });
+
+  it("says when agents couldn't load instead of claiming there are none", async () => {
+    stubFetch("admin", "error");
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    expect(
+      await screen.findByText("Couldn't load agents."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No agents yet.")).not.toBeInTheDocument();
   });
 
   it("hides the ban-agent link from a plain member", async () => {
