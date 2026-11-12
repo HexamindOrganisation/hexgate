@@ -69,13 +69,20 @@ runs:
           mounts+=(-v "$(realpath "$IGNOREFILE"):/ignore/$name:ro")
           flags+=(--ignorefile "/ignore/$name")
         fi
+        # One vuln DB download per job, shared by both archs: the DB registry
+        # rate-limits (TOOMANYREQUESTS), and a failure here after release.yml
+        # has published to PyPI leaves the release half done.
+        cache="$RUNNER_TEMP/trivy-cache"
+        mkdir -p "$cache"
         for arch in amd64 arm64; do
           echo "::group::linux/$arch"
           docker run --rm "${mounts[@]}" \
+            -v "$cache:/root/.cache/trivy" \
             -v "$RUNNER_TEMP/image-$arch.tar:/image.tar:ro" \
             aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c \
             image --input /image.tar --scanners vuln \
             --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
             "${flags[@]}"
           echo "::endgroup::"
+          flags+=(--skip-db-update)
         done

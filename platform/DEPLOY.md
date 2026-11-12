@@ -700,7 +700,10 @@ both), through `.github/workflows/docker-publish.yml` behind the
 `docker-release` environment's reviewers. Docker Hub needs that environment's
 `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets; GHCR needs none. The
 Docker Hub namespace is the `DOCKERHUB_NAMESPACE` repository variable,
-`hexgate` when unset.
+`hexgate` when unset. The first push creates each GHCR package private: make
+`hexgate-api`, `hexgate-mcp` and `hexgate-collector` public once (Organization →
+Packages → the package → Package settings → Change visibility), or pulls are
+`denied`.
 
 Each image is built from the tag for `linux/amd64` and `linux/arm64`, each
 architecture scanned (a fixable HIGH/CRITICAL finding fails it), pushed as one

@@ -65,7 +65,7 @@ services:
   api:
     # Built locally by compose; pulled if REGISTRY/TAG are set. Serves both the
     # JSON API (/v1) and the dashboard SPA same-origin — no separate edge.
-    image: ${REGISTRY:-hexgate}/hexgate-api:${TAG:-latest}
+    image: ${REGISTRY:-hexgate-local}/hexgate-api:${TAG:-latest}
     build:
       context: ..
       dockerfile: platform/api/Dockerfile
@@ -136,7 +136,7 @@ services:
     # raising on a stale ClickHouse schema, deliberately, so the previous
     # deployment keeps serving — would take the collector down with it,
     # losing spans instead of buffering them in Redpanda.
-    image: ${REGISTRY:-hexgate}/hexgate-api:${TAG:-latest}
+    image: ${REGISTRY:-hexgate-local}/hexgate-api:${TAG:-latest}
     platform: linux/amd64
     restart: "no"
     command:
@@ -245,7 +245,7 @@ services:
         condition: service_healthy
 
   collector:
-    image: ${REGISTRY:-hexgate}/hexgate-collector:${TAG:-latest}
+    image: ${REGISTRY:-hexgate-local}/hexgate-collector:${TAG:-latest}
     build:
       context: ./collector
     restart: unless-stopped
@@ -314,7 +314,7 @@ services:
     # Same image as the api — the job lives inside hexgate_api and reads the
     # same settings, so one image serves both roles and they cannot drift.
     # `command` overrides the image CMD (uvicorn); no ports, outbound only.
-    image: ${REGISTRY:-hexgate}/hexgate-api:${TAG:-latest}
+    image: ${REGISTRY:-hexgate-local}/hexgate-api:${TAG:-latest}
     platform: linux/amd64
     restart: unless-stopped
     command: ["uv", "run", "--no-sync", "python", "-m", "hexgate_api.jobs.enricher"]
@@ -360,7 +360,7 @@ services:
     # api unchanged, so the api's own checks stay the security boundary.
     # Built from the repo root: the image copies docs/policy/ for the
     # policy_reference tool.
-    image: ${REGISTRY:-hexgate}/hexgate-mcp:${TAG:-latest}
+    image: ${REGISTRY:-hexgate-local}/hexgate-mcp:${TAG:-latest}
     build:
       context: ..
       dockerfile: platform/mcp/Dockerfile

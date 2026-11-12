@@ -37,6 +37,11 @@ name: docker-publish
 # Optional repository variable DOCKERHUB_NAMESPACE: the Docker Hub namespace,
 # `hexgate` when unset (a fork sets its own).
 # GHCR needs no secret: the job's GITHUB_TOKEN pushes there.
+#
+# REQUIRED after the first publish: make each GHCR package public. The first
+# push creates hexgate-api, hexgate-mcp and hexgate-collector as private org
+# packages, and `docker compose pull` gets `denied` until then:
+#   Organization → Packages → <package> → Package settings → Change visibility
 # ----------------------------------------------------------------------
 
 on:

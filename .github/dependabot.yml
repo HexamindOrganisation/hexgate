@@ -11,12 +11,22 @@ updates:
       - /evals/policy_writing
     schedule:
       interval: weekly
+    # Digest and patch bumps only. A minor or major tag bump changes the
+    # runtime (python 3.14 has no interpreter under platform/api's
+    # requires-python), fails the build, and would hold back the security
+    # bumps grouped with it. Runtime upgrades are made by hand.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     groups:
       base-images:
         patterns: ["*"]
 
   - package-ecosystem: github-actions
-    directory: /
+    # The composite actions too: their pins must move with the workflows'.
+    directories:
+      - /
+      - /.github/actions/*
     schedule:
       interval: weekly
     groups:
