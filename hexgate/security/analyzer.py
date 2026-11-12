@@ -989,7 +989,7 @@ def _unknown_skill_severity(tier: LayerKind | None, mode: str) -> Severity:
 
 
 # How far each mode restricts a call, loosest first.
-_STRICTNESS = {"allow": 0, "approval_required": 1, "deny": 2}
+MODE_STRICTNESS = {"allow": 0, "approval_required": 1, "deny": 2}
 
 
 def _resolved_unknown_tool_severity(
@@ -1000,7 +1000,7 @@ def _resolved_unknown_tool_severity(
     or a restricted grant over a non-deny default -- the real tool runs looser
     than intended: fail-open, error. Otherwise a deny protects nothing (info) and
     a grant never fires (warning)."""
-    if _STRICTNESS[rule.mode] > _STRICTNESS[default.mode] or (
+    if MODE_STRICTNESS[rule.mode] > MODE_STRICTNESS[default.mode] or (
         rule.mode != "deny" and default.mode != "deny" and _restricts_calls(rule)
     ):
         return "error"

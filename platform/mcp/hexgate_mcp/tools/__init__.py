@@ -17,8 +17,8 @@ from hexgate_mcp.auth import HexgateAccessToken
 RESULT_CAP_BYTES = 256 * 1024
 TRUNCATED_MARKER = '\n{"truncated": true}'
 TRUNCATED_LIST_OPEN = '{"truncated": true, "items": ['
-# The list a page of results keeps its rows in.
-PAGE_LISTS = ("rows", "items")
+# The list a page of results keeps its rows in, or a report its entries.
+PAGE_LISTS = ("rows", "items", "agents")
 
 # What untrusted() keeps: each trusted key, mapped to None (kept as it is) or
 # to the spec its value is walked with.
@@ -124,8 +124,8 @@ def _whole_items(value: list[Any]) -> str | None:
 
 
 def _whole_rows(page: dict[str, Any]) -> str | None:
-    """The page with `"truncated": true` and the leading rows of its `rows` or
-    `items` list that fit, so it still parses and the model still reads
+    """The page with `"truncated": true` and the leading rows of its first
+    PAGE_LISTS list that fit, so it still parses and the model still reads
     `total` and the paging keys, plus `next_offset` when the page has an
     `offset`. None when the page has no such list, or its other keys alone do
     not fit."""

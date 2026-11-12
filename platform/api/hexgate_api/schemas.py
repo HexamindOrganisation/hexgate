@@ -647,6 +647,46 @@ class PolicyTestResponse(BaseModel):
     hint: str | None = None
 
 
+class UncoveredToolOut(BaseModel):
+    """A manifest tool no rule names. Its description is text the agent's code
+    or a library wrote, so it goes out marked untrusted."""
+
+    tool: str
+    untrusted_description: str
+
+
+class UncoveredSubagentOut(BaseModel):
+    """A manifest sub-agent with a reach edge no rule names."""
+
+    agent: str
+
+
+class AgentCoverageOut(BaseModel):
+    """One registered agent's coverage. ``has_policy`` is False when the
+    project policy has no section for it (it enforces the ``"*"`` view) or, in
+    a project without one, when its own stored policy is empty;
+    ``has_manifest`` is False when no usable manifest is registered, so its
+    empty lists mean "unknown", not "covered". An uncovered tool falls to its
+    role's default, at worst ``default_policy``; an uncovered sub-agent is denied when ``reach_gated``
+    and not checked at all otherwise."""
+
+    agent: str
+    has_policy: bool
+    has_manifest: bool
+    # The most permissive default any role applies to an uncovered tool:
+    # "allow" | "approval_required" | "deny".
+    default_policy: str
+    reach_gated: bool
+    uncovered_tools: list[UncoveredToolOut] = Field(default_factory=list)
+    uncovered_subagents: list[UncoveredSubagentOut] = Field(default_factory=list)
+
+
+class PolicyCoverageResponse(BaseModel):
+    """Every registered agent's coverage, by agent name."""
+
+    agents: list[AgentCoverageOut] = Field(default_factory=list)
+
+
 # --- Agent manifest registration ---------------------------------------------
 # These mirror hexgate/manifest/models.py so SDK and platform stay in sync.
 

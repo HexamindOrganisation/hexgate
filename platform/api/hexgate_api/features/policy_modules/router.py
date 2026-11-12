@@ -23,11 +23,12 @@ from hexgate_api.core.db import get_session
 from hexgate_api.core.locks import project_lock
 from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.project import require_project_admin
-from hexgate_api.features.policy_modules import service
+from hexgate_api.features.policy_modules import coverage, service
 from hexgate_api.models import OrganizationMember, PolicyFile, PolicyModule, User
 from hexgate_api.schemas import (
     PolicyCheckRequest,
     PolicyCheckResponse,
+    PolicyCoverageResponse,
     PolicyFileRead,
     PolicyFileWrite,
     PolicyGraphResponse,
@@ -587,6 +588,35 @@ async def api_policy_graph(
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PolicyGraphResponse(**graph)
+
+
+@router.get(
+    "/projects/{project_id}/policy/coverage",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
+async def api_policy_coverage(
+    project_id: str,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> PolicyCoverageResponse:
+    """Per registered agent, the manifest tools and sub-agents no rule in any
+    role names, what decides them instead (for a tool ``default_policy``, the
+    most permissive default any role applies to an uncovered tool; for a
+    sub-agent, a deny when ``reach_gated``, else nothing), and whether the agent
+    has a policy of its own. Judged against the project policy when the project
+    has one, else against each agent's own policy. 422 if the project policy
+    can't be composed, or an agent's own policy doesn't load."""
+    try:
+        agents = await coverage.project_coverage(session, project_id)
+    except coverage.PolicyLoadError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"the stored policy of agent {exc.agent!r} does not load",
+        ) from exc
+    except service.compose_error_types() as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PolicyCoverageResponse(agents=agents)
 
 
 @router.post(
