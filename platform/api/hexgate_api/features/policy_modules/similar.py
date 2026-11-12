@@ -1,18 +1,16 @@
 """Similar agents: which registered agents look most like a given one, by
 keyword, so a new policy can start from the closest agents' policies.
 
-No embeddings. Each pair of agents gets four similarities between 0 and 1,
-one per signal: the tool names both register, the words of those names, the
-words of the tools' descriptions, and the roles both agents' policies define
-(only in a project that has a project policy: without one every agent has the
-same platform roles). A similarity is a weighted Jaccard, shared weight over
-union weight, so an agent with many tools does not outscore a small one just
-by having more chances to overlap. A feature weighs more the fewer agents in
-the project have it, so a word every agent has adds almost nothing. A tool's
-description words share one unit of weight between them, so one long
-description counts as one tool, not hundreds of words. The score is the
-weighted sum of the four. A match reports each signal and what was shared, so
-the caller sees why it ranked, and whether it has a policy to start from.
+No embeddings. Each pair of agents gets three similarities between 0 and 1,
+one per signal: the tool names both register, the words of those names, and
+the roles both agents' policies define (only in a project that has a project
+policy: without one every agent has the same platform roles). A similarity is
+a weighted Jaccard, shared weight over union weight, so an agent with many
+tools does not outscore a small one just by having more chances to overlap. A
+feature weighs more the fewer agents in the project have it, so a word every
+agent has adds almost nothing. The score is the weighted sum of the three. A
+match reports each signal and what was shared, so the caller sees why it
+ranked, and whether it has a policy to start from.
 """
 
 from __future__ import annotations
@@ -20,7 +18,6 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -32,14 +29,12 @@ from hexgate_api.schemas import SimilarAgentOut, SimilarReasonsOut, SimilarSigna
 if TYPE_CHECKING:  # the SDK is imported lazily at run time
     from hexgate.manifest.models import AgentManifest
 
-WEIGHT_TOOLS = 0.6
+WEIGHT_TOOLS = 0.7
 WEIGHT_NAME_WORDS = 0.2
-WEIGHT_DESCRIPTION_WORDS = 0.1
 WEIGHT_ROLES = 0.1
 SIGNAL_WEIGHTS = {
     "tools": WEIGHT_TOOLS,
     "name_words": WEIGHT_NAME_WORDS,
-    "description_words": WEIGHT_DESCRIPTION_WORDS,
     "roles": WEIGHT_ROLES,
 }
 NO_ROLE_WEIGHTS = {k: w for k, w in SIGNAL_WEIGHTS.items() if k != "roles"}
@@ -56,38 +51,26 @@ class UnknownAgentError(Exception):
     """The agent to compare against is not registered in the project (→ 404)."""
 
 
-# One signal's features: feature → how much of it the agent has.
-Features = Mapping[str, float]
-
-
 @dataclass(frozen=True)
 class Profile:
     """What an agent is compared on."""
 
-    tools: Features
-    name_words: Features
-    description_words: Features
-    roles: Features
+    tools: frozenset[str]
+    name_words: frozenset[str]
+    roles: frozenset[str]
 
     @classmethod
     def of(cls, manifest: AgentManifest | None, roles: list[str]) -> Profile:
         """``roles`` are the policy's, ``default`` aside: every policy has it."""
         from hexgate.security import DEFAULT_ROLE_NAME
 
-        tools = manifest.tools if manifest else []
-        description_words: Counter[str] = Counter()
-        for tool in tools:
-            # The tool's words share one unit of weight, however many there are.
-            words = {w for w in _words(tool.description) if _is_content(w)}
-            for word in words:
-                description_words[word] += 1 / len(words)
+        names = [t.name for t in manifest.tools] if manifest else []
         return cls(
-            tools=dict.fromkeys((t.name for t in tools), 1.0),
-            name_words=dict.fromkeys(
-                (w for t in tools for w in _words(t.name) if _is_content(w)), 1.0
+            tools=frozenset(names),
+            name_words=frozenset(
+                w for name in names for w in _words(name) if _is_content(w)
             ),
-            description_words=description_words,
-            roles=dict.fromkeys(set(roles) - {DEFAULT_ROLE_NAME}, 1.0),
+            roles=frozenset(roles) - {DEFAULT_ROLE_NAME},
         )
 
 
@@ -125,7 +108,6 @@ class Corpus:
     agents: int
     tools: Counter[str]
     name_words: Counter[str]
-    description_words: Counter[str]
     roles: Counter[str]
 
     @classmethod
@@ -134,42 +116,34 @@ class Corpus:
             agents=len(profiles),
             tools=Counter(f for p in profiles for f in p.tools),
             name_words=Counter(f for p in profiles for f in p.name_words),
-            description_words=Counter(f for p in profiles for f in p.description_words),
             roles=Counter(f for p in profiles for f in p.roles),
         )
 
 
-def _similarity(a: Features, b: Features, doc_freq: Counter[str], agents: int) -> float:
+def _similarity(
+    a: frozenset[str], b: frozenset[str], doc_freq: Counter[str], agents: int
+) -> float:
     """Weighted Jaccard of two feature sets, each feature weighed by its
     rarity: the weight both have over the weight either has, 0 when neither
     has any."""
-    shared = total = 0.0
-    for feature in a.keys() | b.keys():
-        weight = rarity(doc_freq[feature], agents)
-        shared += weight * min(a.get(feature, 0.0), b.get(feature, 0.0))
-        total += weight * max(a.get(feature, 0.0), b.get(feature, 0.0))
+    shared = sum(rarity(doc_freq[f], agents) for f in a & b)
+    total = sum(rarity(doc_freq[f], agents) for f in a | b)
     return shared / total if total else 0.0
 
 
 def compare(
     target: Profile, other: Profile, corpus: Corpus
 ) -> tuple[float, SimilarSignalsOut, SimilarReasonsOut]:
-    """``other``'s score against ``target`` (0 to 1), the four similarities
+    """``other``'s score against ``target`` (0 to 1), the three similarities
     behind it, and what the two share, each sorted so the answer is stable.
     When the target has no roles (a project without a project policy, or an
     agent it has no section for) no candidate can share one, so the score is
-    the weighted average of the other three for every candidate, not capped at
+    the weighted average of the other two for every candidate, not capped at
     0.9 and not dependent on whether a candidate has roles."""
     signals = SimilarSignalsOut(
         tools=_similarity(target.tools, other.tools, corpus.tools, corpus.agents),
         name_words=_similarity(
             target.name_words, other.name_words, corpus.name_words, corpus.agents
-        ),
-        description_words=_similarity(
-            target.description_words,
-            other.description_words,
-            corpus.description_words,
-            corpus.agents,
         ),
         roles=_similarity(target.roles, other.roles, corpus.roles, corpus.agents),
     )
@@ -178,12 +152,9 @@ def compare(
         used.values()
     )
     reasons = SimilarReasonsOut(
-        shared_tools=sorted(target.tools.keys() & other.tools.keys()),
-        shared_name_words=sorted(target.name_words.keys() & other.name_words.keys()),
-        shared_roles=sorted(target.roles.keys() & other.roles.keys()),
-        untrusted_shared_description_words=sorted(
-            target.description_words.keys() & other.description_words.keys()
-        ),
+        shared_tools=sorted(target.tools & other.tools),
+        shared_name_words=sorted(target.name_words & other.name_words),
+        shared_roles=sorted(target.roles & other.roles),
     )
     return score, signals, reasons
 

@@ -688,14 +688,11 @@ class PolicyCoverageResponse(BaseModel):
 
 
 class SimilarReasonsOut(BaseModel):
-    """What two agents share. Tool names and role names are identifiers; the
-    description words come from text the agent's code or a library wrote, so
-    they go out marked untrusted."""
+    """What two agents share: tool names, words of tool names, and role names."""
 
     shared_tools: list[str] = Field(default_factory=list)
     shared_name_words: list[str] = Field(default_factory=list)
     shared_roles: list[str] = Field(default_factory=list)
-    untrusted_shared_description_words: list[str] = Field(default_factory=list)
 
 
 class SimilarSignalsOut(BaseModel):
@@ -704,7 +701,6 @@ class SimilarSignalsOut(BaseModel):
 
     tools: float
     name_words: float
-    description_words: float
     roles: float
 
 

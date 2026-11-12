@@ -531,17 +531,11 @@ def similar_match(name: str, **extra) -> dict:
         "score": 0.45,
         "has_policy": True,
         "roles": ["support"],
-        "signals": {
-            "tools": 0.5,
-            "name_words": 0.4,
-            "description_words": 0.2,
-            "roles": 1.0,
-        },
+        "signals": {"tools": 0.5, "name_words": 0.4, "roles": 1.0},
         "reasons": {
             "shared_tools": ["issue_refund"],
             "shared_name_words": [],
             "shared_roles": ["support"],
-            "untrusted_shared_description_words": ["ignore"],
         },
         **extra,
     }
