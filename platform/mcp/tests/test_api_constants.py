@@ -57,6 +57,7 @@ def _api_fields(name: str) -> set[str]:
 REQUEST_KEYS = [
     ("PolicyFileDraft", set(PolicyDraft.model_fields)),
     ("PolicyPreviewRequest", {"drafts"}),
+    ("PolicyDiffRequest", {"drafts"}),
     # Every argument set, so every key the tool sends (test_policy asserts it).
     ("PolicyTestRequest", set(FULL_DRY_RUN)),
 ]

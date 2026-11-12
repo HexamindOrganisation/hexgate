@@ -23,11 +23,13 @@ from hexgate_api.core.db import get_session
 from hexgate_api.core.locks import project_lock
 from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.project import require_project_admin
-from hexgate_api.features.policy_modules import service
+from hexgate_api.features.policy_modules import diff, service
 from hexgate_api.models import OrganizationMember, PolicyFile, PolicyModule, User
 from hexgate_api.schemas import (
     PolicyCheckRequest,
     PolicyCheckResponse,
+    PolicyDiffRequest,
+    PolicyDiffResponse,
     PolicyFileRead,
     PolicyFileWrite,
     PolicyGraphResponse,
@@ -587,6 +589,30 @@ async def api_policy_graph(
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PolicyGraphResponse(**graph)
+
+
+@router.post(
+    "/projects/{project_id}/policy/diff",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
+async def api_diff_policy(
+    project_id: str,
+    body: PolicyDiffRequest,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> PolicyDiffResponse:
+    """What saving ``drafts`` would change: every (agent, role, tool) whose grant
+    differs, agent-wide guard and usage changes, and the admission / reach /
+    tool_reach / skills checks the drafts switch on or off (a switch changes
+    every role at once, so it may have no per-tool row). A side that does not compose
+    shows as ``composes`` false (/policy/check says why); 422 when no entry file
+    is stored, since there is then no saved policy file to compare against."""
+    try:
+        out = await diff.diff_project(session, project_id, body.drafts)
+    except service.InvalidModuleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PolicyDiffResponse(**out)
 
 
 @router.post(

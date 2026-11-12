@@ -13,14 +13,12 @@ import asyncio
 import shutil
 
 import pytest
-import pytest_asyncio
 import yaml
 from fastapi.testclient import TestClient
 from sqlmodel import select
 
 from hexgate_api.constants import DEFAULT_USER_ID
 from hexgate_api.core import keystore as keystore_mod
-from hexgate_api.main import app
 from hexgate_api.models import PolicyModule, RoleBinding
 
 # Actor for the service-level store writes below. The store requires one (issue
@@ -36,26 +34,6 @@ BOUNDARY = (
 )
 READ_ONLY = "tools:\n  view_orders: { mode: allow }\n"
 PAYMENTS = "tools:\n  refund_order: { mode: allow }\n"
-
-
-@pytest_asyncio.fixture
-async def client(session_factory, tmp_path) -> TestClient:
-    from hexgate_api.core.db import get_session
-    from hexgate_api.core.keystore import FileKeyStore
-
-    async def override_session():
-        async with session_factory() as session:
-            yield session
-
-    app.dependency_overrides[get_session] = override_session
-    original_keystore = keystore_mod.keystore
-    keystore_mod.keystore = FileKeyStore(base_dir=tmp_path / "keystore")
-    keystore_mod.keystore.ensure_keypair()
-    try:
-        yield TestClient(app)
-    finally:
-        app.dependency_overrides.clear()
-        keystore_mod.keystore = original_keystore
 
 
 def _project(client: TestClient) -> str:
