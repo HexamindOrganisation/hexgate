@@ -19,7 +19,16 @@ from hexgate_api import API_ROOT
 load_dotenv()
 
 DB_PATH = API_ROOT / "hexgate.db"
-_DEFAULT_URL = f"sqlite+aiosqlite:///{DB_PATH}"
+
+
+def _sqlite_url() -> str:
+    """The SQLite fallback's URL, at ``HEXGATE_SQLITE_PATH`` when set.
+
+    The API image sets it to its writable /data volume: the source tree,
+    where the default lives, is read-only to the process there.
+    """
+    path = os.environ.get("HEXGATE_SQLITE_PATH", "").strip() or DB_PATH
+    return f"sqlite+aiosqlite:///{path}"
 
 
 def _url_from_components() -> str | None:
@@ -59,7 +68,7 @@ def _database_url() -> str:
             if url.startswith(prefix):
                 return "postgresql+asyncpg://" + url[len(prefix) :]
         return url
-    return _url_from_components() or _DEFAULT_URL
+    return _url_from_components() or _sqlite_url()
 
 
 _url = _database_url()

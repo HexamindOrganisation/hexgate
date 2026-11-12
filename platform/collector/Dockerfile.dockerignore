@@ -1,2 +1,13 @@
-hexgate-collector
-integration/
+# Build context is platform/collector. An allowlist of what the build needs,
+# so a local binary, the integration module or anything else dropped in this
+# directory never reaches the builder.
+*
+!go.mod
+!go.sum
+!*.go
+!config.yaml
+!extension/hexgatebiscuitauth
+
+# Tests and their fixtures are not part of the binary.
+**/*_test.go
+**/testdata
