@@ -1,10 +1,19 @@
+import ast
 import json
 
 import pytest
 import respx
 
 from hexgate_mcp.tools.policy import NOT_IN_FORCE
-from tests.conftest import API_URL, JWKS_URL, OTHER_PROJECT, PROJECT, call_tool, jwks
+from tests.conftest import (
+    API_SOURCE,
+    API_URL,
+    JWKS_URL,
+    OTHER_PROJECT,
+    PROJECT,
+    call_tool,
+    jwks,
+)
 
 BASE = f"/v1/projects/{PROJECT}"
 STAMP = {"content_hash": "h", "updated_at": "2026-10-22T00:00:00Z"}
@@ -38,7 +47,7 @@ ANSWERS = {
     ("GET", "/policy-roles"): {"roles": {"support": {"*": ["refunds"]}}},
     ("GET", "/policy/check"): {"ok": True, "lints": []},
     ("POST", "/policy/preview"): {"resolved": {}, "lints": []},
-    ("POST", "/policy/test"): {"outcome": "allow"},
+    ("POST", "/policy/test"): {"outcome": "allow", "agent_declared": True},
 }
 # The tools that read the resolved policy, so refuse a project with no store.
 RESOLVED = [
@@ -219,7 +228,7 @@ def error(result: dict) -> str:
             DRY_RUN,
             # Unset fields left out, so the API applies its own defaults.
             [("GET", "/policy-files", {}), ("POST", "/policy/test", DRY_RUN)],
-            {"outcome": "allow"},
+            ANSWERS["POST", "/policy/test"],
             id="dry_run-defaults",
         ),
         pytest.param(
@@ -230,12 +239,13 @@ def error(result: dict) -> str:
                 ("GET", "/policy/graph", {}),
                 ("POST", "/policy/test", FULL_DRY_RUN),
             ],
-            {"outcome": "allow"},
+            ANSWERS["POST", "/policy/test"],
             id="dry_run-every-argument",
         ),
         pytest.param(
             "policy_dry_run",
-            # A draft policy.yaml may declare a new agent: no agent lookup.
+            # A draft policy.yaml may declare a new agent: no graph lookup,
+            # the API's agent_declared answers for the draft.
             {**DRY_RUN, "agent": "triage", "drafts": [NEW_FILE_DRAFT, ENTRY_DRAFT]},
             [
                 (
@@ -248,7 +258,7 @@ def error(result: dict) -> str:
                     },
                 )
             ],
-            {"outcome": "allow"},
+            ANSWERS["POST", "/policy/test"],
             id="dry_run-entry-draft",
         ),
     ],
@@ -467,3 +477,73 @@ def test_when_agent_is_not_declared_then_policy_dry_run_refuses(token):
 
     assert "agent 'biling' is not declared in the policy" in message
     assert {r.method for r in api_requests()} == {"GET"}
+
+
+def test_when_entry_draft_does_not_declare_agent_then_policy_dry_run_refuses(token):
+    # The API evaluated the call under the generic "*" view: an "allow" here
+    # would read as the draft's answer for "triage".
+    mock_api(**{"/policy/test": {"outcome": "allow", "agent_declared": False}})
+
+    message = error(
+        call(token, "policy_dry_run", **DRY_RUN, agent="triage", drafts=[ENTRY_DRAFT])
+    )
+
+    assert "agent 'triage' is not declared in the policy" in message
+    assert 'runs under the generic "*" view' in message
+
+
+# A body key the API model lacks: the request models refuse it (422, failing
+# every call), while a nested draft drops it silently. Either way this catches
+# it before a deploy does. One row per call of a tool
+# in policy.py that sends a body (policy_save is pinned by its own tests): the
+# tool, arguments that make it send every key it can, the route, the API model
+# the body binds to, and the models of its nested objects (a list field: of
+# each item).
+BODIES = [
+    (
+        "policy_check",
+        {"drafts": [DRAFT]},
+        "/policy/preview",
+        "PolicyPreviewRequest",
+        {"drafts": "PolicyFileDraft"},
+    ),
+    (
+        "policy_dry_run",
+        FULL_DRY_RUN,
+        "/policy/test",
+        "PolicyTestRequest",
+        {"drafts": "PolicyFileDraft"},
+    ),
+]
+
+
+def api_model_fields(name: str) -> set[str]:
+    """A schemas.py model's own field names, read from the API's source."""
+    for node in ast.parse((API_SOURCE / "schemas.py").read_text()).body:
+        if isinstance(node, ast.ClassDef) and node.name == name:
+            return {
+                stmt.target.id
+                for stmt in node.body
+                if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name)
+            }
+    raise AssertionError(f"{name} not found in schemas.py")
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "path", "model", "nested"),
+    BODIES,
+    ids=[row[0] for row in BODIES],
+)
+def test_when_a_tool_sends_a_body_then_its_keys_are_api_model_fields(
+    token, name, arguments, path, model, nested
+):
+    mock_api()
+
+    call(token, name, **arguments)
+    [body] = [sent(r)[2] for r in api_requests() if sent(r)[:2] == ("POST", path)]
+
+    assert set(body) <= api_model_fields(model)
+    for field, field_model in nested.items():
+        values = body[field] if isinstance(body[field], list) else [body[field]]
+        for value in values:
+            assert set(value) <= api_model_fields(field_model)
