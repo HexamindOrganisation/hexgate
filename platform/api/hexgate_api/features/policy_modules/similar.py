@@ -207,10 +207,11 @@ async def similar_agents(
                 )
             )
     # A full sort, O(n log n) time and O(n) space for the matches, not a
-    # top-`limit` heap, O(n log limit) time and O(limit) space: a project has
-    # tens of agents, and loading and parsing every agent's policy and manifest,
-    # plus the profiles and rarity counts that need every agent (O(n * features)
-    # space either way), cost far more. If projects reach thousands of agents,
-    # `heapq.nsmallest(limit, matches, key)` with the same key is the drop-in.
+    # top-`limit` heap (`heappushpop` as each agent is scored), O(n log limit)
+    # time and O(limit) space: a project has tens of agents, and loading and
+    # parsing every agent's policy and manifest, plus the profiles and rarity
+    # counts that need every agent (O(n * features) space either way), cost far
+    # more. If projects reach thousands of agents, switch to the heap with the
+    # same key; `nsmallest` over this finished list would save time, not space.
     matches.sort(key=lambda m: (-m.score, m.agent))
     return agent in manifests, matches[:limit]
