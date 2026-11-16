@@ -1,15 +1,6 @@
 import { useMemo, useState } from "react";
 import { isToday, isYesterday } from "date-fns";
-import {
-  Ban,
-  Check,
-  ChevronRight,
-  CircleDashed,
-  Download,
-  List,
-  TriangleAlert,
-  X,
-} from "lucide-react";
+import { Ban, ChevronRight, Download, List, TriangleAlert } from "lucide-react";
 import type {
   AnomalySeverity,
   AuditAnomaly,
@@ -31,11 +22,12 @@ import { Card } from "@/components/ui/card";
 import { ALL, FilterSelect } from "@/components/ui/filter-select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
+import { VerdictIcon } from "@/components/ui/verdict-icon";
 import { BreakdownCardShell } from "@/components/ui/breakdown-card";
 import { BreakdownBar, type BreakdownDatum } from "./charts";
 import { rankAnomalies } from "./anomalies";
 import { argsPreview, fmtClock } from "./fmt";
-import { OUT_LABEL, OUT_SWATCH, OUTCOME_SERIES } from "./chart-tokens";
+import { OUT_LABEL, OUTCOME_SERIES } from "./chart-tokens";
 
 // Map a server breakdown row ({key, all, ...}) to the chart datum ({total, ...}).
 const toDatum = (r: AuditBreakdownRow): BreakdownDatum => ({
@@ -102,21 +94,21 @@ export function FilterBar({
           value="allow"
           className="text-allow data-[state=on]:text-allow"
         >
-          <Check className="size-3" strokeWidth={2} />
+          <VerdictIcon verdict="allow" />
           allow
         </ToggleGroupItem>
         <ToggleGroupItem
           value="deny"
           className="text-deny data-[state=on]:text-deny"
         >
-          <X className="size-3" strokeWidth={2} />
+          <VerdictIcon verdict="deny" />
           deny
         </ToggleGroupItem>
         <ToggleGroupItem
           value="needs_approval"
           className="text-approval data-[state=on]:text-approval"
         >
-          <CircleDashed className="size-3" strokeWidth={2} />
+          <VerdictIcon verdict="needs_approval" />
           approval
         </ToggleGroupItem>
       </ToggleGroup>
@@ -268,16 +260,16 @@ function RolesCell({ roles }: { roles: string[] }) {
 const OUTCOME_TEXT: Record<AuditOutcome, string> = {
   deny: "text-deny",
   needs_approval: "text-approval",
-  allow: "text-muted-foreground",
+  allow: "text-allow",
 };
 
-/** Swatch + label; the log's quiet alternative to the pill badge. */
+/** Icon + label; the log's quiet alternative to the pill badge. */
 export function OutcomeLabel({ d }: { d: AuditOutcome }) {
   return (
     <span
       className={cn("flex items-center gap-1.5 font-semibold", OUTCOME_TEXT[d])}
     >
-      <span className={cn("size-2 shrink-0 rounded-sm", OUT_SWATCH[d])} />
+      <VerdictIcon verdict={d} />
       {OUT_LABEL[d]}
     </span>
   );

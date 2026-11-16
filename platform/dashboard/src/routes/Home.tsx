@@ -557,7 +557,7 @@ export function HomePage() {
                       </span>
                       <span className="block h-1 w-full rounded-full bg-muted">
                         <span
-                          className="block h-1 rounded-full bg-allow-fill"
+                          className="block h-1 rounded-full bg-muted-foreground/40"
                           style={{
                             width: `${((row?.all ?? 0) / maxAgentCalls) * 100}%`,
                           }}
