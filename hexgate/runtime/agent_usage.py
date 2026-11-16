@@ -47,7 +47,7 @@ class UsageMetric(StrEnum):
 class OnUnavailable(StrEnum):
     """What a decision reads when the platform term is missing."""
 
-    ALLOW = "allow"  # ledger-only values: zeros plus this process (G3)
+    ALLOW = "allow"  # ledger-only values: zeros plus this process
     DENY = "deny"  # the value is absent, so its constraints fail closed
 
 

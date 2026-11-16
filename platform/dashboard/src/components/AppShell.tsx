@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { useLocation, useNavigate, NavLink, Outlet } from "react-router-dom";
 import {
   ArrowLeft,
@@ -6,18 +6,19 @@ import {
   BarChart3,
   Building2,
   Bot,
+  ChevronRight,
   CircleUser,
   KeyRound,
   LogOut,
-  MessageSquareCode,
   Monitor,
   Moon,
-  Network,
   PanelLeft,
+  Plug,
   Scale,
   ScrollText,
   Settings2,
   Files,
+  House,
   Sun,
   Users,
   type LucideIcon,
@@ -37,14 +38,28 @@ import { CreateOrgDialog } from "@/components/CreateOrgDialog";
 import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { PreviewBanner } from "@/components/PreviewBanner";
 import { VerifyEmailBanner } from "@/components/VerifyEmailBanner";
-import { useActive } from "@/lib/active";
+import { useQuery } from "@tanstack/react-query";
+
+import { api } from "@/lib/api";
+import { useActive, useProjectScoped } from "@/lib/active";
+import { useActiveBanCount, useCanManageBans } from "@/lib/bans";
 import { useLogout, useUser } from "@/lib/auth";
 import { useOrgs } from "@/lib/orgs";
 import { useProjects } from "@/lib/projects";
 import { useUi } from "@/lib/ui";
-import { isDark, schemeAccent, useTheme, type Scheme } from "@/lib/theme";
+import {
+  type Mode,
+  SCHEMES,
+  schemeAccent,
+  useIsDark,
+  useTheme,
+} from "@/lib/theme";
 import { usePresentMode } from "@/lib/present";
+import { AccentSwatch } from "@/components/ui/accent-swatch";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { EmailAvatar } from "@/components/ui/email-avatar";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 /**
  * Bootstrap effect — runs on every AppShell mount.
@@ -105,26 +120,63 @@ function useActiveBootstrap(): void {
   ]);
 }
 
-// The core product features. Org/account admin lives in the settings space
-// (see `settingsLinks`), reached from the account menu — not this sidebar.
-const workspaceLinks = [
-  { to: "/agents", label: "Agents", icon: Bot },
-  { to: "/policies", label: "Policies", icon: Files },
-  { to: "/graph", label: "Graph", icon: Network },
-  { to: "/playground", label: "Playground", icon: MessageSquareCode },
-  { to: "/audit", label: "Audit", icon: ScrollText },
-  { to: "/usage", label: "Usage", icon: BarChart3 },
-  { to: "/bans", label: "Bans", icon: Ban },
-  // One word, like every other entry here.
-  { to: "/ai-act", label: "Governance", icon: Scale },
-  { to: "/tokens", label: "API keys", icon: KeyRound },
+interface NavLinkDef {
+  to: string;
+  label: string;
+  icon: LucideIcon;
+  end?: boolean;
+}
+
+interface NavGroup {
+  /** Section heading; omitted for the top group (Home). */
+  label?: string;
+  links: NavLinkDef[];
+}
+
+// The core product features, grouped by job. Org/account admin lives in the
+// settings space (see `settingsLinks`), reached from the account menu.
+const workspaceGroups: NavGroup[] = [
+  { links: [{ to: "/", label: "Home", icon: House, end: true }] },
+  {
+    label: "Build",
+    links: [
+      { to: "/agents", label: "Agents", icon: Bot },
+      { to: "/policies", label: "Policies", icon: Files },
+    ],
+  },
+  {
+    label: "Monitor",
+    links: [
+      { to: "/audit", label: "Audit", icon: ScrollText },
+      { to: "/usage", label: "Usage", icon: BarChart3 },
+    ],
+  },
+  {
+    label: "Control",
+    links: [
+      { to: "/bans", label: "Bans", icon: Ban },
+      // One word, like every other entry here.
+      { to: "/ai-act", label: "Governance", icon: Scale },
+      { to: "/tokens", label: "API keys", icon: KeyRound },
+    ],
+  },
 ];
+
+/** The settings-space pages that belong to the signed-in user, not an org. */
+const USER_SETTINGS_PATHS = new Set(["/settings", "/connected-apps"]);
+
+/** `pathname` without a trailing slash, so `/settings/` (a bookmark, a
+ * hand-typed link) is read like the `/settings` the router renders for it. */
+function trimSlash(pathname: string): string {
+  return pathname.replace(/(.)\/+$/, "$1");
+}
 
 /** Whether a path belongs to the settings space (its own sidebar). Uses a
  * segment boundary so a future sibling like `/orgstats` isn't misread. */
-function isSettingsPath(pathname: string): boolean {
+function isSettingsPath(rawPath: string): boolean {
+  const pathname = trimSlash(rawPath);
   return (
-    pathname === "/settings" ||
+    USER_SETTINGS_PATHS.has(pathname) ||
     pathname === "/orgs" ||
     pathname.startsWith("/orgs/")
   );
@@ -132,20 +184,20 @@ function isSettingsPath(pathname: string): boolean {
 
 /** The org the settings sidebar should scope its org links to: the one in the
  * URL (`/orgs/:id/...`) when present, else the active org — so a deep-link or
- * refresh keeps the sidebar pointed at the org being viewed. On the pure
- * account page (`/settings`) there's no org in play, so we return null and the
- * org-scoped links drop out. */
+ * refresh keeps the sidebar pointed at the org being viewed. On a per-user page
+ * there's no org in play, so we return null and the org-scoped links drop out. */
 function settingsOrgId(
-  pathname: string,
+  rawPath: string,
   activeOrgId: string | null,
 ): string | null {
-  if (pathname === "/settings") return null;
+  const pathname = trimSlash(rawPath);
+  if (USER_SETTINGS_PATHS.has(pathname)) return null;
   return pathname.match(/^\/orgs\/([^/]+)(?:\/|$)/)?.[1] ?? activeOrgId;
 }
 
 /** The settings-space sidebar. Member/settings links need the active org, so
  * they're built per-render; omitted when no org is selected. */
-function settingsLinks(activeOrgId: string | null) {
+function settingsLinks(activeOrgId: string | null): NavLinkDef[] {
   return [
     { to: "/orgs", label: "Organizations", icon: Building2, end: true },
     ...(activeOrgId
@@ -163,6 +215,8 @@ function settingsLinks(activeOrgId: string | null) {
         ]
       : []),
     { to: "/settings", label: "Account", icon: CircleUser },
+    // Per user, like Account: the AI clients acting for whoever is signed in.
+    { to: "/connected-apps", label: "Connected apps", icon: Plug },
   ];
 }
 
@@ -172,45 +226,163 @@ function NavItem({
   icon: Icon,
   end,
   badge,
-  status,
   collapsed,
-}: {
-  to: string;
-  label: string;
-  icon: LucideIcon;
-  end?: boolean;
-  badge?: string;
-  status?: string;
+}: NavLinkDef & {
+  /** A count that needs attention, and how to say it ("2 active bans"). */
+  badge?: { value: number; text: string };
   collapsed?: boolean;
 }) {
+  const counted = badge && `${label}, ${badge.text}`;
   return (
     <NavLink
       to={to}
       end={end}
-      title={collapsed ? label : undefined}
+      // Collapsed, the tooltip carries the count the dot stands for.
+      title={collapsed ? (counted ?? label) : undefined}
+      aria-label={counted}
       className={({ isActive }) =>
         cn(
-          "flex h-9 items-center rounded-md text-sm transition-colors",
-          collapsed ? "justify-center px-0" : "justify-between px-2",
+          "flex h-9 items-center rounded-lg text-sm transition-colors",
+          collapsed ? "justify-center px-0" : "justify-between px-2.5",
           isActive
-            ? "bg-primary/15 text-primary font-medium"
-            : "text-muted-foreground hover:bg-accent hover:text-foreground",
+            ? "bg-accent font-semibold text-foreground"
+            : "font-medium text-muted-foreground hover:bg-accent/60 hover:text-foreground",
         )
       }
     >
-      <span className="flex items-center gap-2.5">
-        <Icon className="size-4 shrink-0" />
-        {!collapsed && label}
-      </span>
-      {!collapsed && badge && (
-        <span className="text-[11px] text-muted-foreground">{badge}</span>
-      )}
-      {!collapsed && status && (
-        <span className="rounded-full bg-allow/15 px-1.5 py-0.5 text-[10px] font-medium text-allow">
-          {status}
-        </span>
+      {({ isActive }) => (
+        <>
+          <span className="relative flex items-center gap-2.5">
+            <Icon
+              className={cn("size-4 shrink-0", isActive && "text-primary")}
+            />
+            {!collapsed && label}
+            {/* Collapsed: a dot on the icon keeps the signal visible. */}
+            {collapsed && badge && (
+              <span className="absolute -top-0.5 left-3 size-2 rounded-full bg-deny ring-2 ring-card" />
+            )}
+          </span>
+          {/* The link's aria-label already reads the count. */}
+          {badge && !collapsed && (
+            <Badge
+              variant="deny"
+              aria-hidden
+              className="h-[18px] min-w-[18px] justify-center rounded-full px-1.5 py-0 text-[11px] font-semibold"
+            >
+              {badge.value}
+            </Badge>
+          )}
+        </>
       )}
     </NavLink>
+  );
+}
+
+/** The Agents nav row with an inline, expandable agent list. Hovering the icon
+ * reveals a chevron; clicking it toggles the list (the label still navigates to
+ * /agents). The list is fetched lazily, only once opened. */
+function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
+  const { projectId, status } = useProjectScoped();
+  const [open, setOpen] = useState(false);
+  const agents = useQuery({
+    queryKey: ["agent-manifests", projectId],
+    queryFn: () => api.listAgentManifests(projectId as string),
+    enabled: !!projectId && open && !collapsed,
+  });
+
+  // Collapsed rail: no room for an inline list — just the icon link.
+  if (collapsed) {
+    return <NavItem to="/agents" label="Agents" icon={Bot} collapsed />;
+  }
+
+  const toggle = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setOpen((v) => !v);
+  };
+
+  const rows = agents.data ?? [];
+  return (
+    <div className="group/agents relative flex flex-col gap-0.5">
+      {/* No `end`: the row stays active on every hub page, as on the rail. */}
+      <NavLink
+        to="/agents"
+        className={({ isActive }) =>
+          cn(
+            "flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition-colors",
+            isActive
+              ? "bg-accent font-semibold text-foreground"
+              : "font-medium text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+          )
+        }
+      >
+        {({ isActive }) => (
+          <>
+            <Bot
+              className={cn(
+                "size-4 shrink-0 transition-opacity",
+                isActive && "text-primary",
+                open ? "opacity-0" : "group-hover/agents:opacity-0",
+              )}
+            />
+            Agents
+          </>
+        )}
+      </NavLink>
+      {/* Chevron overlaid on the icon — a sibling, never nested in the anchor. */}
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={open ? "Hide agent list" : "Show agent list"}
+        aria-expanded={open}
+        className={cn(
+          "absolute left-2.5 top-2.5 grid size-4 place-items-center rounded text-muted-foreground transition-opacity hover:text-foreground",
+          open ? "opacity-100" : "opacity-0 group-hover/agents:opacity-100",
+        )}
+      >
+        <ChevronRight
+          className={cn("size-4 transition-transform", open && "rotate-90")}
+        />
+      </button>
+      {open && (
+        <div className="ml-[22px] flex flex-col gap-0.5 border-l border-border pl-1.5">
+          {status === "no-project" ? (
+            <span className="px-2 py-1 text-[11px] text-muted-foreground">
+              No project yet
+            </span>
+          ) : agents.isError && !agents.data ? (
+            <span className="px-2 py-1 text-[11px] text-muted-foreground">
+              Couldn't load agents
+            </span>
+          ) : agents.isPending ? (
+            <span className="px-2 py-1 text-[11px] text-muted-foreground">
+              Loading…
+            </span>
+          ) : rows.length ? (
+            rows.map((a) => (
+              <NavLink
+                key={a.name}
+                to={`/agents/${encodeURIComponent(a.name)}`}
+                className={({ isActive }) =>
+                  cn(
+                    "truncate rounded-md px-2 py-1 font-mono text-[12px] transition-colors",
+                    isActive
+                      ? "bg-accent/70 text-foreground"
+                      : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                  )
+                }
+              >
+                {a.name}
+              </NavLink>
+            ))
+          ) : (
+            <span className="px-2 py-1 text-[11px] text-muted-foreground">
+              No agents yet
+            </span>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -234,9 +406,26 @@ export function AppShell() {
   const activeOrgId = useActive((s) => s.activeOrgId);
   // Scope the settings links to the URL's org (falling back to the active one)
   // so a refresh/deep-link to /orgs/:id/... keeps the sidebar on that org.
-  const links = inSettings
-    ? settingsLinks(settingsOrgId(pathname, activeOrgId))
-    : workspaceLinks;
+  const groups: NavGroup[] = inSettings
+    ? [{ links: settingsLinks(settingsOrgId(pathname, activeOrgId)) }]
+    : workspaceGroups;
+  // Active bans need attention, so the nav shows their count. Admin-only
+  // endpoint, and only once the project scope has resolved.
+  const canManageBans = useCanManageBans();
+  const scope = useProjectScoped();
+  const activeBans = useActiveBanCount(
+    // projectName is set only once the id is found in the projects list, so
+    // an unverified id (the list failed to load) is never polled.
+    !inSettings && canManageBans && scope.projectName !== null
+      ? scope.projectId
+      : null,
+  ).data;
+  const bansBadge = activeBans
+    ? {
+        value: activeBans,
+        text: `${activeBans} active ${activeBans === 1 ? "ban" : "bans"}`,
+      }
+    : undefined;
 
   // The workspace create-dialogs live here, not in OrgProjectSwitcher, so
   // collapsing the sidebar (which unmounts the switcher trigger) can't unmount
@@ -280,11 +469,11 @@ export function AppShell() {
     <div className="flex h-screen bg-background text-foreground">
       <aside
         className={cn(
-          // No hard right border — the card-vs-background shade separates the
-          // sidebar from the content (VSCode "shades, not rules"). The whole
-          // shell lives in the sidebar (switcher on top, account on the
-          // bottom) so the content column reclaims the old header's height.
-          "flex flex-col bg-card transition-[width] duration-200",
+          // A lighter surface than the page (card over the gray content area),
+          // set off by a hairline, so the sidebar reads as its own panel. The
+          // whole shell lives here (switcher on top, account on the bottom),
+          // so the content column reclaims the old header's height.
+          "flex flex-col border-r border-border bg-card transition-[width] duration-200",
           sidebarCollapsed ? "w-14" : "w-[240px]",
         )}
       >
@@ -301,8 +490,8 @@ export function AppShell() {
               {inSettings ? (
                 <button
                   type="button"
-                  onClick={() => navigate("/agents")}
-                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => navigate("/")}
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <ArrowLeft className="size-4" />
                   Back to workspace
@@ -318,7 +507,7 @@ export function AppShell() {
           <Button
             variant="ghost"
             size="icon"
-            className="size-8 shrink-0 text-muted-foreground"
+            className="size-8 shrink-0 text-muted-foreground hover:bg-accent/60"
             title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             aria-label={
               sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"
@@ -335,16 +524,35 @@ export function AppShell() {
           {inSettings && sidebarCollapsed && (
             <div className="mb-0.5 flex flex-col gap-0.5">
               <NavItem
-                to="/agents"
+                to="/"
+                end
                 label="Back to workspace"
                 icon={ArrowLeft}
                 collapsed
               />
             </div>
           )}
-          <div className="flex flex-col gap-0.5">
-            {links.map((l) => (
-              <NavItem key={l.to} {...l} collapsed={sidebarCollapsed} />
+          <div className="flex flex-col gap-4">
+            {groups.map((g, i) => (
+              <div key={g.label ?? i} className="flex flex-col gap-0.5">
+                {g.label && !sidebarCollapsed && (
+                  <div className="px-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    {g.label}
+                  </div>
+                )}
+                {g.links.map((l) =>
+                  l.to === "/agents" ? (
+                    <AgentsNavItem key={l.to} collapsed={sidebarCollapsed} />
+                  ) : (
+                    <NavItem
+                      key={l.to}
+                      {...l}
+                      badge={l.to === "/bans" ? bansBadge : undefined}
+                      collapsed={sidebarCollapsed}
+                    />
+                  ),
+                )}
+              </div>
             ))}
           </div>
         </nav>
@@ -386,7 +594,6 @@ function AccountChip({ collapsed }: { collapsed: boolean }) {
   if (!user) return null;
 
   const username = user.email.split("@")[0] || user.email;
-  const initial = (user.email.slice(0, 1) || "?").toUpperCase();
 
   return (
     <div className="p-2">
@@ -396,14 +603,12 @@ function AccountChip({ collapsed }: { collapsed: boolean }) {
             type="button"
             title={collapsed ? user.email : undefined}
             className={cn(
-              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent",
+              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent/60",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               collapsed && "justify-center",
             )}
           >
-            <span className="grid size-7 shrink-0 place-items-center rounded-full bg-primary/20 text-xs font-medium text-primary">
-              {initial}
-            </span>
+            <EmailAvatar email={user.email} />
             {!collapsed && (
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium">
@@ -455,62 +660,52 @@ const MODES = [
   ["system", Monitor, "System"],
 ] as const;
 
-const SCHEMES: [Scheme, string][] = [
-  ["blue", "Blue"],
-  ["plum", "Plum"],
-];
-
 /** Appearance picker inside the account menu: mode (light/dark/system) + accent
- * scheme (blue/plum). Plain buttons so a pick doesn't close the menu. */
+ * scheme. A toggle group and plain buttons, not menu items, so a pick doesn't
+ * close the menu. */
 function AppearanceControl() {
   const mode = useTheme((s) => s.mode);
   const scheme = useTheme((s) => s.scheme);
   const setMode = useTheme((s) => s.setMode);
   const setScheme = useTheme((s) => s.setScheme);
-  // Resolve the swatch colour for the current palette from theme's single source
-  // so the dots track light/dark like the real --primary token.
-  const dark = isDark(mode);
-
-  const seg =
-    "flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs text-muted-foreground transition-colors hover:text-foreground";
-  const on = "bg-accent text-foreground";
+  // Reactive, so the dots follow an OS light/dark flip while mode is "system".
+  const dark = useIsDark();
 
   return (
-    <div className="px-2 py-1.5">
-      <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">
+    <div className="space-y-3 px-2 py-2">
+      <div className="text-caption font-semibold uppercase tracking-wider text-muted-foreground">
         Appearance
       </div>
-      <div className="flex gap-1">
+      <ToggleGroup
+        type="single"
+        value={mode}
+        // Radix sends "" when the selected item is clicked again: keep it.
+        onValueChange={(v) => v && setMode(v as Mode)}
+        aria-label="Theme"
+        className="grid w-full grid-cols-3"
+      >
         {MODES.map(([m, Icon, label]) => (
-          <button
-            key={m}
-            type="button"
-            title={label}
-            aria-label={label}
-            onClick={() => setMode(m)}
-            className={cn(seg, mode === m && on)}
-          >
-            <Icon className="size-4" />
-          </button>
-        ))}
-      </div>
-      <div className="mt-1 flex gap-1">
-        {SCHEMES.map(([s, label]) => (
-          <button
-            key={s}
-            type="button"
-            title={`${label} accent`}
-            aria-label={`${label} accent`}
-            onClick={() => setScheme(s)}
-            className={cn(seg, scheme === s && on)}
-          >
-            <span
-              className="size-3 rounded-full"
-              style={{ backgroundColor: `hsl(${schemeAccent(s, dark)})` }}
-            />
+          <ToggleGroupItem key={m} value={m} className="px-1">
+            <Icon className="size-3.5" />
             {label}
-          </button>
+          </ToggleGroupItem>
         ))}
+      </ToggleGroup>
+      <div>
+        <div className="mb-1.5 text-xs font-medium text-muted-foreground">
+          Accent
+        </div>
+        <div className="flex gap-2">
+          {SCHEMES.map(({ id, label }) => (
+            <AccentSwatch
+              key={id}
+              label={label}
+              color={schemeAccent(id, dark)}
+              selected={scheme === id}
+              onSelect={() => setScheme(id)}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );

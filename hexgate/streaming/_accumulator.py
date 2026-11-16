@@ -44,7 +44,7 @@ from hexgate.streaming import (
     ToolEndEvent,
     ToolStartEvent,
 )
-from hexgate.streaming.normalize import _tool_end_state
+from hexgate.streaming.normalize import _tool_end_state, _tool_verdict
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +270,7 @@ class StreamAccumulator:
                 tool_name=tool_name,
                 state=state,
                 output_summary=summary,
+                verdict=_tool_verdict(output),
             )
         ]
 

@@ -30,15 +30,31 @@ interface UseBansOptions {
   includeRevoked?: boolean;
 }
 
-/** Bans for a project. Disabled while ``projectId`` is null so pages
- * can pass the resolved scope id directly without a null guard. */
-export function useBans(projectId: string | null, options?: UseBansOptions) {
-  const includeRevoked = options?.includeRevoked ?? false;
-  return useQuery({
+/** The bans query for a project, shared by the Bans page and the nav count
+ * (one cache entry between them). Disabled while ``projectId`` is null so
+ * pages can pass the resolved scope id directly without a null guard. */
+function bansQuery(projectId: string | null, includeRevoked: boolean) {
+  return {
     queryKey: bansKey(projectId, includeRevoked),
     queryFn: () => api.listBans(projectId as string, includeRevoked),
     enabled: !!projectId,
     staleTime: 30_000,
+  };
+}
+
+/** Bans for a project. */
+export function useBans(projectId: string | null, options?: UseBansOptions) {
+  return useQuery(bansQuery(projectId, options?.includeRevoked ?? false));
+}
+
+/** How many bans are active, for the always-mounted nav. The poll and the
+ * focus refetch are this observer's alone. */
+export function useActiveBanCount(projectId: string | null) {
+  return useQuery({
+    ...bansQuery(projectId, false),
+    select: (bans) => bans.length,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   });
 }
 

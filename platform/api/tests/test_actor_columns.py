@@ -81,6 +81,9 @@ COLUMNS_NEEDING_A_MIGRATION: set[tuple[str, str]] = {
     # existed on deployed stacks by the time #160 reached it -- migration 0003.
     ("policy_file", "created_by_user_id"),
     ("policy_file", "updated_by_user_id"),
+    # The oauth tables shipped in #327; the code link and replay mark came with refresh -- 0005.
+    ("oauth_refresh_token", "authorization_code_id"),
+    ("oauth_authorization_code", "replayed_at"),
 }
 
 _ADD_COLUMN = re.compile(
@@ -118,7 +121,7 @@ def test_every_table_carries_a_creation_actor_or_is_explicitly_exempt() -> None:
 
 
 def test_update_actor_lands_only_on_tables_mutated_in_place() -> None:
-    """``updated_by_user_id`` is deliberately NOT on every table (decision D3).
+    """``updated_by_user_id`` is deliberately NOT on every table.
 
     It only means something where a row is edited in place. ``role_binding`` is
     replaced wholesale, ``agent_version`` / ``tool`` / ``skill`` are immutable,

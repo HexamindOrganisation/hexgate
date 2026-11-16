@@ -836,7 +836,7 @@ _MULTI_ROLE_POLICY = {
         (["billing", "support"], "refund", {"amount": 1}, "allow", "billing"),
         # Nobody grants it -> deny, no credited role.
         (["support", "auditor"], "write_file", {}, "deny", None),
-        # ALLOW beats NEEDS_APPROVAL regardless of order (D2).
+        # ALLOW beats NEEDS_APPROVAL regardless of order.
         (["billing", "support"], "read_file", {}, "allow", "support"),
         (["support", "billing"], "read_file", {}, "allow", "support"),
         # Approval only when no role allows outright.
@@ -844,7 +844,7 @@ _MULTI_ROLE_POLICY = {
         (["support", "auditor"], "refund", {"amount": 1}, "needs_approval", "auditor"),
         # The role fact binds per role, so it still grants inside a union.
         (["auditor", "billing"], "refund", {"amount": 1}, "allow", "billing"),
-        # Unrecognised names resolve to the least-privilege default (D13).
+        # Unrecognised names resolve to the least-privilege default.
         (["zzz", "support"], "read_file", {}, "allow", "support"),
         (["zzz", "yyy"], "read_file", {}, "deny", None),
         # No roles -> the default policy.
@@ -883,7 +883,7 @@ def test_multi_role_union_parity(
 def test_single_role_union_matches_direct_evaluation_on_both_engines(
     role: str,
 ) -> None:
-    """D12 across engines: wrapping one role in the union changes nothing."""
+    """Wrapping one role in the union changes nothing."""
     from hexgate.runtime import HexgateContext
     from hexgate.security.enforcer import PolicyEnforcer
 
@@ -1331,7 +1331,7 @@ def test_policy_level_constraint_reaches_reach_keys_parity(
 
 
 # ---------------------------------------------------------------------------
-# skill:* keys — closed-world on both engines (roadmap gate G1)
+# skill:* keys — closed-world on both engines
 #
 # An unlisted skill key denies regardless of default_policy, exactly like the
 # agent.* keys. A permissive default compiled without the Rego catch-all

@@ -9,10 +9,10 @@ const PUBLIC_AUTH_PATHS = [
   "/verify-email",
 ];
 
-/** Thrown by ``request`` when the backend returns 401, after the global
- * "redirect to /sign-in" side-effect has fired. Tests assert against the
- * error type; production code rarely catches it (the redirect already
- * happened). */
+/** Thrown by ``request`` when the backend returns 401, usually after the
+ * global "redirect to /sign-in" side-effect has fired, so production code
+ * rarely catches it. The OAuth consent calls opt out of that redirect and
+ * the consent page catches it, to sign in again without losing its query. */
 export class UnauthenticatedError extends Error {
   constructor(message = "not authenticated") {
     super(message);
@@ -60,11 +60,22 @@ function messageFromDetail(detail: unknown): string | null {
   return null;
 }
 
+/** The global 401 redirect, on an object so tests can watch it. */
+export const authRedirect = {
+  toSignIn(): void {
+    window.location.href = "/sign-in";
+  },
+};
+
 /** Shared transport: fires the request, applies the global 401 redirect and
  * turns every other non-2xx into an ``ApiError``. Returns the raw Response so
  * the JSON callers and the binary ones (the AI Act annex / PDF downloads)
  * go through one auth and error path. */
-async function send(path: string, init?: RequestInit): Promise<Response> {
+async function send(
+  path: string,
+  init?: RequestInit,
+  redirectOn401 = true,
+): Promise<Response> {
   const res = await fetch(path, {
     ...init,
     // ``include`` so the hexgate_session cookie rides on cross-origin
@@ -83,8 +94,8 @@ async function send(path: string, init?: RequestInit): Promise<Response> {
     const onAuthPage = PUBLIC_AUTH_PATHS.some((p) =>
       window.location.pathname.startsWith(p),
     );
-    if (!onAuthPage) {
-      window.location.href = "/sign-in";
+    if (redirectOn401 && !onAuthPage) {
+      authRedirect.toSignIn();
     }
     throw new UnauthenticatedError();
   }
@@ -104,8 +115,12 @@ async function send(path: string, init?: RequestInit): Promise<Response> {
   return res;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await send(path, init);
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  redirectOn401 = true,
+): Promise<T> {
+  const res = await send(path, init, redirectOn401);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
@@ -234,6 +249,12 @@ export interface GuardDefinition {
   plugin_id: string | null;
 }
 
+/** A sub-agent the agent reaches: agent-as-tool or handoff. */
+export interface SubagentRef {
+  name: string;
+  via: "tool" | "handoff";
+}
+
 /**
  * Registered manifest body, mirroring AgentManifest in platform/api/schemas.py.
  */
@@ -244,6 +265,8 @@ export interface AgentManifest {
   model: string | null;
   system_prompt: string | null;
   tools: ToolDefinition[];
+  /** Agents it reaches; null when none were visible, and for older manifests. */
+  subagents?: SubagentRef[] | null;
   /** Null for frameworks with no skill concept, and for pre-skills manifests. */
   skills: SkillDefinition[] | null;
   /** Null when the agent declares no guards, and for pre-guards manifests. */
@@ -350,7 +373,7 @@ export interface PolicyGraph {
   roles: string[];
 }
 
-/** The editor's unsaved edit of one file, overlaid before preview/test. */
+/** An unsaved edit of one file, applied over the stored files before preview/test. */
 export interface PolicyFileDraft {
   name: string;
   content: string;
@@ -359,7 +382,28 @@ export interface PolicyFileDraft {
 export interface PolicyPreviewResponse {
   /** The effective policy per role, or null when the draft doesn't compose. */
   resolved: ResolvedPolicy | null;
+  /** The draft's roles x tools matrix, or null when it doesn't compose. */
+  matrix: PolicyMatrix | null;
   lints: PolicyLint[];
+}
+
+/** One role's standing authorisation for one tool, as the engine decides it.
+ * `constraint` is the composed condition (role-wide fence first); null on a
+ * deny. Mirrors platform/api/schemas.py PolicyMatrixCell. */
+export interface PolicyMatrixCell {
+  mode: "allow" | "approval" | "deny";
+  constraint: string | null;
+}
+
+/** Roles x tools for one agent's resolved policy. `cells[tool][role]` covers
+ * every listed tool; `defaults[role]` is the fallback for an ordinary tool
+ * outside `tools` (reserved `agent.*` keys are always deny). */
+export interface PolicyMatrix {
+  roles: string[];
+  tools: string[];
+  cells: Record<string, Record<string, PolicyMatrixCell>>;
+  defaults: Record<string, PolicyMatrixCell>;
+  aliased_default: string | null;
 }
 
 export type PolicyTestOutcome = "allow" | "deny" | "approval_required";
@@ -371,7 +415,8 @@ export interface PolicyTestRequest {
   tool: string;
   args?: Record<string, unknown>;
   attributes?: Record<string, unknown> | null;
-  draft?: PolicyFileDraft | null;
+  /** Unsaved files; the editor sends its one open file. */
+  drafts?: PolicyFileDraft[];
 }
 
 export interface PolicyTestResponse {
@@ -414,6 +459,8 @@ export interface AuditSummary {
 /** One time bucket; `bucket` is an ISO string. */
 export interface AuditTimeseriesPoint {
   bucket: string;
+  /** Width of every bucket in the series, in minutes. */
+  bucket_minutes: number;
   allow: number;
   deny: number;
   needs_approval: number;
@@ -681,8 +728,7 @@ export const LLM_MESSAGE_PAGE = 50;
 // --- AI Act evidence report -------------------------------------------------
 //
 // Wire shapes for the two slices the tab talks to, pinned field-for-field to
-// what the endpoints serve rather than to the spec's prose, which is looser
-// than both:
+// what the endpoints serve:
 //
 //   classification  hexgate_api/schemas.py: AgentClassificationRead/Write
 //   report          hexgate_api/schemas.py: AiActReportCreate/Summary/Read
@@ -798,18 +844,59 @@ export interface AiActReportCreateBody {
   to?: string;
 }
 
+/** A scope with the sentence the consent page showed for it. */
+export interface OAuthScope {
+  name: string;
+  description: string;
+}
+
+export interface OAuthGrantProject {
+  id: string;
+  name: string;
+  org_id: string;
+  org_name: string;
+}
+
+/** One live login of an MCP client, from ``GET /v1/oauth/grants``. ``id`` is
+ * the login itself, stable across token refreshes. ``client_name`` is the
+ * client's own claim (its metadata document), so the page also shows the
+ * host of ``client_id``. A project deleted since consent is left out. */
+export interface OAuthGrant {
+  id: string;
+  client_name: string;
+  client_id: string;
+  scopes: OAuthScope[];
+  projects: OAuthGrantProject[];
+  created_at: string;
+  /** Null until the client first refreshes its token. */
+  last_used_at: string | null;
+}
+
+/** Per-user, not project-scoped: the grants of whoever holds the session. */
+export const oauthGrantsApi = {
+  list: () => request<OAuthGrant[]>("/v1/oauth/grants"),
+
+  revoke: (grantId: string) =>
+    request<void>(`/v1/oauth/grants/${encodeURIComponent(grantId)}`, {
+      method: "DELETE",
+    }),
+};
+
 /** Percent-encode each path segment but keep the slashes, so a name like
  * `caps/refunds.yaml` reaches the server's `{name:path}` converter intact. */
 function encodePath(path: string): string {
   return path.split("/").map(encodeURIComponent).join("/");
 }
 
-function qs(params: Record<string, string | number | undefined>): string {
+function qs(
+  params: Record<string, string | number | string[] | undefined>,
+): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     // undefined = omit. '' is kept: `role=` (empty value) is meaningful —
-    // it selects the no-role bucket server-side.
-    if (value !== undefined) search.set(key, String(value));
+    // it selects the no-role bucket server-side. A list repeats the key.
+    if (Array.isArray(value)) for (const v of value) search.append(key, v);
+    else if (value !== undefined) search.set(key, String(value));
   }
   const str = search.toString();
   return str ? `?${str}` : "";
@@ -969,6 +1056,13 @@ export const api = {
       `/v1/projects/${projectId}/policy/resolve${qs({ role, agent })}`,
     ).then((r) => r.roles),
 
+  /** `tools` the policy doesn't list come back in `cells` with the engine's
+   * fallback (reserved keys deny), but not in `tools`. */
+  getPolicyMatrix: (projectId: string, agent?: string, tools: string[] = []) =>
+    request<PolicyMatrix>(
+      `/v1/projects/${projectId}/policy/matrix${qs({ agent: agent || undefined, tool: tools })}`,
+    ),
+
   checkPolicy: (projectId: string) =>
     request<{ ok: boolean; lints: PolicyLint[] }>(
       `/v1/projects/${projectId}/policy/check`,
@@ -982,7 +1076,7 @@ export const api = {
   previewPolicy: (projectId: string, draft: PolicyFileDraft, agent?: string) =>
     request<PolicyPreviewResponse>(`/v1/projects/${projectId}/policy/preview`, {
       method: "POST",
-      body: JSON.stringify({ ...draft, agent: agent ?? "*" }),
+      body: JSON.stringify({ drafts: [draft], agent: agent ?? "*" }),
     }),
 
   testPolicy: (projectId: string, body: PolicyTestRequest) =>
@@ -1037,4 +1131,37 @@ export const api = {
    * render failure is a 502 and leaves the signed bytes untouched. */
   downloadAiActReportPdf: (reportId: string, projectId: string) =>
     requestBlob(`/v1/projects/${projectId}/ai-act/reports/${reportId}.pdf`),
+};
+
+/** Mirror of platform/api features/oauth/schemas.py:ConsentInfo. */
+export interface ConsentInfo {
+  /** Written by whoever controls the client_id URL: a claim, not a fact. */
+  client_name: string | null;
+  client_host: string;
+  redirect_host: string;
+  scopes: { name: string; description: string }[];
+  projects: { id: string; name: string; org_id: string; org_name: string }[];
+}
+
+/** The consent routes take the MCP client's authorization request as it
+ * reached the page: ``search`` is the page's own query string. Neither
+ * redirects on a 401: a bare /sign-in would drop that query, so the consent
+ * page signs the user in again itself. */
+export const oauthApi = {
+  consentInfo: (search: string) =>
+    request<ConsentInfo>(`/v1/oauth/consent-info${search}`, undefined, false),
+
+  /** Records the consent; the response is the client's redirect with the code. */
+  consent: (search: string, projects: string[]) =>
+    request<{ redirect_to: string }>(
+      "/v1/oauth/authorize",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ...Object.fromEntries(new URLSearchParams(search)),
+          projects,
+        }),
+      },
+      false,
+    ),
 };

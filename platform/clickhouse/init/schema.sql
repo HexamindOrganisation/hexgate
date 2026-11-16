@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS hexgate_audit.policy_decision
     -- user_roles). Zero UUID / zero counters means "not attributed to a run
     -- scope by the SDK that sent this row" — a truthful default until the
     -- SDK starts stamping the run_ns namespace read once per decision
-    -- (hexgate/security/enforcer.py). See plans/run-state/run-state-schema.md §7.
+    -- (hexgate/security/enforcer.py).
     run_id              UUID     DEFAULT toUUID('00000000-0000-0000-0000-000000000000') COMMENT 'RunFacts.id; zero when the decision was made outside a run scope or by an SDK that does not yet send it',
     run_tool_calls      UInt32   DEFAULT 0 COMMENT 'run.tool_calls at decision time',
     run_llm_calls       UInt32   DEFAULT 0 COMMENT 'run.llm_calls at decision time',

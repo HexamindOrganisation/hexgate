@@ -45,7 +45,7 @@ closed-world check runs once at construction** against the agent's declared guar
   which re-runs after every refresh.
 - A **later** refresh that names an unknown guard MUST NOT crash the running agent: it
   degrades to a safe no-op (the name matches no guard), and the authoring lint
-  (R-GUARD-006/PR4, `hexgate policy validate`) is the guard against the typo.
+  (`hexgate policy validate`) is the guard against the typo.
 - An empty stance MUST NOT change the signed bytes: a guards-free policy's manifest
   and `source_hash` stay byte-identical to before the block existed (omit the
   section), so no stored bundle drifts.
@@ -95,7 +95,7 @@ nobody made.
 - The runner does a per-call `effective_guards(tool)` lookup when an engine is present;
   empty for the guards-only path or an engine without the reader (every guard runs).
 - Authoring lints (a guard rule matching no declared guard, a redundant override) land
-  in PR4 as the ergonomic ahead of the construction stop-cold and the live no-op.
+  in a later change as the ergonomic ahead of the construction stop-cold and the live no-op.
 - A divergent guard stance MUST surface at policy save/validate as a 422, not be swallowed.
   `guard_stance()` is lazy on the `PolicySet`, so `analyze_policy` forces it and reports a
   `guard-divergence` lint, which the single-document save/validate route treats as blocking

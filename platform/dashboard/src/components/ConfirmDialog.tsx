@@ -44,9 +44,8 @@ interface ConfirmDialogProps {
 
 /**
  * Reusable "are you sure?" modal for destructive actions across the
- * dashboard. Step 2 uses it for "Leave organization"; Step 3 will use
- * it for "Remove member" / "Cancel invitation"; Step 5 for "Rename
- * project" (when the new name collides — confirm overwrite).
+ * dashboard, e.g. "Leave organization", "Remove member" / "Cancel
+ * invitation" and "Revoke ban".
  *
  * Kept deliberately simple: title + one-line description + two buttons.
  * Anything richer (custom form, multi-step) lives in a bespoke dialog.

@@ -65,6 +65,18 @@ def test_frontend_route_falls_through_to_index_html(tmp_path, monkeypatch) -> No
     assert "text/html" in resp.headers["content-type"]
 
 
+def test_when_page_then_framing_refused_and_referrer_same_origin_only(
+    tmp_path, monkeypatch
+) -> None:
+    client = TestClient(_with_build(tmp_path, monkeypatch))
+    for path in ("/", "/index.html", "/oauth/consent?client_id=x&state=s"):
+        resp = client.get(path)
+        assert resp.status_code == 200
+        assert resp.headers["x-frame-options"] == "DENY"
+        assert resp.headers["content-security-policy"] == "frame-ancestors 'none'"
+        assert resp.headers["referrer-policy"] == "same-origin"
+
+
 def test_missing_build_api_path_still_json_404(tmp_path, monkeypatch) -> None:
     # Empty dir → no index.html → the _no_build resilience handler.
     monkeypatch.setenv("HEXGATE_DASHBOARD_DIST", str(tmp_path / "nope"))

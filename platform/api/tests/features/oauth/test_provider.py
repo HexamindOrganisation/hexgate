@@ -15,9 +15,11 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.constants import OAUTH_SCOPES
-from hexgate_api.core import spa
+from hexgate_api.core import db, spa
 from hexgate_api.features.oauth import client_cache
 from hexgate_api.features.oauth.client_metadata import ClientMetadataError
 from hexgate_api.features.oauth.provider import build_oauth_provider, oauth_routes
@@ -76,7 +78,15 @@ def _app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
 
 
 @pytest.fixture
-def client(fetches, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def client(
+    fetches, engine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
+    # /token reads codes through the provider's sessions, not FastAPI's.
+    monkeypatch.setattr(
+        db,
+        "async_session_factory",
+        async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False),
+    )
     return TestClient(_app(tmp_path, monkeypatch), follow_redirects=False)
 
 
@@ -219,11 +229,16 @@ def test_when_query_invalid_then_error_redirected_to_verified_client(
 
 
 def test_when_authorize_posted_then_not_handled_by_sdk(
-    client: TestClient, fetches: list[bool]
+    client: TestClient, fetches: list[bool], oauth_keystore
 ) -> None:
-    # The consent POST takes this path later; the MCP SDK's form-POST authorize must not.
-    resp = client.post("/v1/oauth/authorize", data={"client_id": CLIENT_ID})
-    assert resp.status_code == 405
+    # The consent POST has this path, and refuses a caller with no session; the
+    # MCP SDK's form-POST authorize must not take it.
+    resp = client.post(
+        "/v1/oauth/authorize",
+        data={"client_id": CLIENT_ID},
+        headers={"Origin": DASHBOARD_URL},
+    )
+    assert resp.status_code == 401
     assert fetches == []  # The MCP SDK's handler would have loaded the client.
 
 
@@ -335,8 +350,17 @@ def test_oauth_routes_happy_path() -> None:
     # serve its issuer with a trailing slash and advertise client-secret auth.
     assert sorted(route.path for route in oauth_routes(build_oauth_provider())) == [
         "/v1/oauth/authorize",
+        "/v1/oauth/revoke",
         "/v1/oauth/token",
     ]
+
+
+async def test_when_metadata_served_then_its_endpoints_are_the_mounted_routes() -> None:
+    issuer = get_settings().public_url
+    metadata = await authorization_server_metadata()
+    mounted = {route.path for route in oauth_routes(build_oauth_provider())}
+    for key in ("authorization_endpoint", "token_endpoint", "revocation_endpoint"):
+        assert metadata[key].removeprefix(issuer) in mounted
 
 
 def test_when_sdk_routes_mounted_then_no_registration(client: TestClient) -> None:

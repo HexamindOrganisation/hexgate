@@ -84,6 +84,8 @@ export interface ProjectScope {
   /** Resolved active project id, or null when not ready. */
   projectId: string | null;
   status: "loading" | "no-project" | "ready";
+  /** Display name of the active project; null until the list knows it. */
+  projectName: string | null;
 }
 
 export function useProjectScoped(): ProjectScope {
@@ -100,10 +102,20 @@ export function useProjectScoped(): ProjectScope {
     orgsQuery.isLoading ||
     (activeOrgId !== null && projectsQuery.isLoading)
   ) {
-    return { projectId: null, status: "loading" };
+    return { projectId: null, status: "loading", projectName: null };
   }
   if (!activeProjectId) {
-    return { projectId: null, status: "no-project" };
+    return { projectId: null, status: "no-project", projectName: null };
   }
-  return { projectId: activeProjectId, status: "ready" };
+  // A saved id the list doesn't hold (the project was deleted) isn't usable:
+  // loading until the AppShell bootstrap swaps it, so no page requests it.
+  const project = projectsQuery.data?.find((p) => p.id === activeProjectId);
+  if (projectsQuery.data && !project) {
+    return { projectId: null, status: "loading", projectName: null };
+  }
+  return {
+    projectId: activeProjectId,
+    status: "ready",
+    projectName: project?.name ?? null,
+  };
 }

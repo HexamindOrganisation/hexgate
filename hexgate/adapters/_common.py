@@ -99,9 +99,8 @@ async def aprepare_run(
     each usage scope's refresh run concurrently, then the ban decision. Admission
     stays with the caller, after this returns, so it reads the refreshed policy.
 
-    The concurrent usage refreshes ask for the pre-refresh policy's paths (02 §5.5
-    Rule 2); paths the policy refresh adds are refreshed concurrently once it
-    returns."""
+    The concurrent usage refreshes ask for the pre-refresh policy's paths; paths
+    the policy refresh adds are refreshed concurrently once it returns."""
     usages = _usage_refreshes_of(binding, context)
     if ban_gate is None and not usages:
         await refresh_policy

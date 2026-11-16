@@ -230,7 +230,7 @@ def get_usage_executor() -> ThreadPoolExecutor:
     )
 
 
-# User reads get their own pool and memo (README G9): a burst of cold users must
+# User reads get their own pool and memo: a burst of cold users must
 # not queue agent reads behind it, nor evict their memo entries. 4 + 4 workers
 # matches clickhouse-connect's default HTTP pool of 8 (driver/httputil.py).
 USER_USAGE_READ_MAX_WORKERS: Final = 4

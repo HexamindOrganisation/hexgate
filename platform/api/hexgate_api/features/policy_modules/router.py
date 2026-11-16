@@ -15,7 +15,7 @@ import logging
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.constants import OAUTH_SCOPE_KEY
@@ -26,11 +26,13 @@ from hexgate_api.deps.project import require_project_admin
 from hexgate_api.features.policy_modules import service
 from hexgate_api.models import OrganizationMember, PolicyFile, PolicyModule, User
 from hexgate_api.schemas import (
+    PolicyCheckRequest,
     PolicyCheckResponse,
     PolicyFileRead,
     PolicyFileWrite,
     PolicyGraphResponse,
     PolicyLintOut,
+    PolicyMatrixResponse,
     PolicyModuleRead,
     PolicyModuleWrite,
     PolicyPreviewRequest,
@@ -487,13 +489,17 @@ async def api_preview_policy(
     _user: User = Depends(require_org_member),
     session: AsyncSession = Depends(get_session),
 ) -> PolicyPreviewResponse:
-    """Resolve the project with a draft file overlaid, without saving — the
+    """Resolve the project with draft files applied, without saving — the
     editor's live preview. Always 200: a resolution failure returns an error lint,
     not an HTTP error, so the editor can render it inline."""
-    resolved, lints = await service.compose_preview(
-        session, project_id, name=body.name, content=body.content, agent=body.agent
+    resolved, matrix, lints = await service.compose_preview(
+        session, project_id, drafts=body.drafts, agent=body.agent
     )
-    return PolicyPreviewResponse(resolved=resolved, lints=[_lint_out(x) for x in lints])
+    return PolicyPreviewResponse(
+        resolved=resolved,
+        matrix=PolicyMatrixResponse(**matrix) if matrix else None,
+        lints=[_lint_out(x) for x in lints],
+    )
 
 
 @router.get(
@@ -526,6 +532,26 @@ async def api_resolve_policy(
     return ResolvedPolicyResponse(roles=service.roles_json(result, role=role))
 
 
+@router.get("/projects/{project_id}/policy/matrix", tags=["policy"])
+async def api_policy_matrix(
+    project_id: str,
+    agent: str = service.DEFAULT_AGENT,
+    tool: list[str] = Query(default=[]),
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> PolicyMatrixResponse:
+    """Roles x tools for one executing agent (``agent``, default ``"*"``), each
+    cell resolved by the engine's own fallback and constraint composition — the
+    same tabulation the AI Act report evidences. Each ``tool`` the policy
+    doesn't list also gets its fallback cells. 422 if the policy can't be
+    composed."""
+    try:
+        result = await service.resolve_auto(session, project_id, agent=agent)
+    except service.compose_error_types() as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PolicyMatrixResponse(**service.matrix_json(result, tool))
+
+
 @router.get(
     "/projects/{project_id}/policy/check",
     openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
@@ -539,7 +565,28 @@ async def api_check_policy(
     """Lints over the composed project (dead grants, unused capabilities, link
     errors...). Diagnostics-as-data: always 200. ``ok`` is False if any lint is
     an error."""
-    out = [_lint_out(x) for x in await service.check_auto(session, project_id)]
+    return _check_response(await service.check_auto(session, project_id))
+
+
+@router.post(
+    "/projects/{project_id}/policy/check",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
+async def api_check_policy_drafts(
+    project_id: str,
+    body: PolicyCheckRequest,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> PolicyCheckResponse:
+    """The GET's lints with draft files applied, as if they were saved. Drafts on
+    a project without an entry file come back as an error lint, like any other
+    reason the project can't be checked."""
+    return _check_response(await service.check_auto(session, project_id, body.drafts))
+
+
+def _check_response(lints: list[PolicyLint]) -> PolicyCheckResponse:
+    out = [_lint_out(x) for x in lints]
     ok = not any(lint.severity == "error" for lint in out)
     return PolicyCheckResponse(ok=ok, lints=out)
 
@@ -580,9 +627,8 @@ async def api_test_policy(
 ) -> PolicyTestResponse:
     """Evaluate one tool call against the whole resolved policy for a role — the
     'would this be allowed?' probe. Resolves via compose (an entry file) or the
-    tier store, optionally overlaying an unsaved ``draft`` file. 422 if the project
-    doesn't compose; 404 for an unknown role."""
-    draft = (body.draft.name, body.draft.content) if body.draft else None
+    tier store, with unsaved ``drafts`` applied. 422 if the project doesn't
+    compose or drafts can't apply to it; 404 for an unknown role."""
     try:
         verdict = await service.test_policy(
             session,
@@ -592,12 +638,14 @@ async def api_test_policy(
             tool=body.tool,
             args=body.args,
             attributes=body.attributes,
-            draft=draft,
+            drafts=body.drafts,
         )
     except service.compose_error_types() as exc:
         raise HTTPException(
             status_code=422, detail=f"policy does not compose: {exc}"
         ) from exc
+    except service.DraftWithoutEntryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except service.UnknownRoleError as exc:
         raise HTTPException(
             status_code=404, detail=f"role {exc.args[0]!r} not defined"

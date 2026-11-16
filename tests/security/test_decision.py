@@ -320,7 +320,7 @@ def test_combine_approval_plus_deny_needs_approval() -> None:
 
 
 def test_combine_allow_beats_needs_approval() -> None:
-    """D2: approval is NOT sticky. One role granting outright removes another
+    """Approval is NOT sticky. One role granting outright removes another
     role's gate. A reader assuming the opposite lands here."""
     evaluate, _ = _engine({"a": _approval(), "b": _ALLOW})
 
@@ -358,7 +358,7 @@ def test_combine_all_deny_denies_with_no_deciding_role() -> None:
 
 
 def test_combine_single_role_returns_the_verdict_verbatim() -> None:
-    """D12: a one-role caller matches evaluating that role alone."""
+    """A one-role caller matches evaluating that role alone."""
     original = _deny('Policy denied tool "refund"', violations=("args.amount <= 100",))
     evaluate, _ = _engine({"billing": original})
 

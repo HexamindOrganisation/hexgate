@@ -8,7 +8,7 @@ the rest of the route table consumes.
 The two auth surfaces (humans via cookie, machines via biscuit) stay
 separate by design — biscuits live in ``deps/tokens.py``
 (``_validate_sdk_token`` / ``require_project``); this module never touches
-them. See ``m3-platform-auth.md`` for the dual-surface rationale.
+them.
 
 ID type is ``str`` (UUID-formatted) rather than ``uuid.UUID`` so the
 column types stay aligned with the rest of our str-keyed SQLModel
