@@ -2,18 +2,20 @@ import type { PolicyGraph } from "@/lib/api";
 import { delegates, push } from "@/lib/graph-layout";
 
 /** The agent's node, and whose outbound edges stand for it: its own
- * `agent:<name>` when the policy declares it (it has edges out, or roles that
- * admit it), else the generic `agent:*` it resolves like, relabelled to the
- * name. An agent that only appears as another's reach target isn't declared. */
+ * `agent:<name>` when the policy declares it, else the generic `agent:*` it
+ * resolves like, relabelled to the name. Only an agent that appears solely as
+ * another's reach target is undeclared; one with no edges at all is locked
+ * down to nothing (a named cell replaces `*`). */
 function resolveAgent(graph: PolicyGraph, agentName: string) {
   const own = graph.nodes.find((n) => n.id === `agent:${agentName}`);
   const star = graph.nodes.find((n) => n.id === "agent:*");
+  const touching = own
+    ? graph.edges.filter((e) => e.source === own.id || e.target === own.id)
+    : [];
   const declared =
     own &&
-    graph.edges.some(
-      (e) =>
-        e.source === own.id || (e.target === own.id && e.kind === "admission"),
-    );
+    (touching.length === 0 ||
+      touching.some((e) => !(e.target === own.id && e.kind === "reach")));
   const source = declared || !star ? own : star;
   if (!source) return null;
   return { node: { ...(own ?? star!), label: agentName }, sourceId: source.id };

@@ -361,6 +361,30 @@ describe("AgentHub", () => {
     ).toBeInTheDocument();
   });
 
+  it("says a classic project's agent follows its own policy file", async () => {
+    stubFetch("admin", false, false, true);
+    const answer = vi.mocked(window.fetch).getMockImplementation()!;
+    vi.mocked(window.fetch).mockImplementation(async (input, init) =>
+      new URL(String(input), "http://localhost").pathname.endsWith(
+        "/policy-files",
+      )
+        ? new Response("[]", {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          })
+        : answer(input, init),
+    );
+    renderWithProviders(
+      <Routes>
+        <Route path="/agents/:name" element={<AgentHub />} />
+      </Routes>,
+      { initialRoute: "/agents/support_bot" },
+    );
+    expect(
+      await screen.findByText(/governed by its own policy file/),
+    ).toBeInTheDocument();
+  });
+
   it("shows how each role treats the agent's tools (engine matrix)", async () => {
     renderHub("support_bot");
     expect(

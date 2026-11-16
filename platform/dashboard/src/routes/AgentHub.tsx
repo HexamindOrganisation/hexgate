@@ -73,9 +73,10 @@ export function AgentHub() {
   );
 
   // The agent's local graph (its roles, tools and reached agents), filtered
-  // from the project graph — no backend change. Every project has one (a
-  // classic project's comes from its tier store): a 422 means the modules
-  // don't compose, a 404 that the project isn't visible to the user.
+  // from the project graph — no backend change. A classic project's comes
+  // from its tier store, usually empty: its agents follow their own policy
+  // file. A 422 means the modules don't compose, a 404 that the project isn't
+  // visible to the user.
   const graphQuery = usePolicyGraph(scope.projectId, undefined, !!agent);
   const graph = graphQuery.data;
   const status =
@@ -150,6 +151,7 @@ export function AgentHub() {
         // agent's: show it as loading.
         graphLoading={graphQuery.isLoading || graphQuery.isPlaceholderData}
         graphError={graphError}
+        classic={!!policyFiles.data && !modular}
       />
       <ManifestView agent={agent} roleModes={roleModes} />
     </div>
@@ -182,6 +184,7 @@ function AgentOverview({
   subgraph,
   graphLoading,
   graphError,
+  classic,
 }: {
   agent: AgentManifestView;
   activity: { all: number; deny: number; needs_approval: number } | null;
@@ -192,6 +195,8 @@ function AgentOverview({
   subgraph: PolicyGraph | null;
   graphLoading: boolean;
   graphError: GraphError | null;
+  /** No policy.yaml: the agent is governed by its own policy file. */
+  classic: boolean;
 }) {
   const num = (n: number | undefined) => n?.toLocaleString() ?? "—";
   const tools = agent.manifest?.tools?.length ?? 0;
@@ -263,7 +268,7 @@ function AgentOverview({
         </div>
       ) : (
         <Placeholder>
-          {graphPlaceholder(graphLoading, graphError, agent.name)}
+          {graphPlaceholder(graphLoading, graphError, agent.name, classic)}
         </Placeholder>
       )}
     </Card>
@@ -275,6 +280,7 @@ function graphPlaceholder(
   loading: boolean,
   error: GraphError | null,
   name: string,
+  classic: boolean,
 ): string {
   if (loading) return "Loading graph…";
   if (error === "compose")
@@ -282,6 +288,8 @@ function graphPlaceholder(
   if (error === "gone")
     return "You don't have access to this project's policy any more.";
   if (error === "load") return "Couldn't load the graph. Refresh to retry.";
+  if (classic)
+    return `${name} is governed by its own policy file. The graph appears once the project uses policy.yaml or role bindings.`;
   // The graph comes from the policy, not the manifest.
   return `Nothing in the policy maps roles, tools or reach to ${name} yet.`;
 }

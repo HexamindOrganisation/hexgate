@@ -176,4 +176,17 @@ describe("agentSubgraph", () => {
     // Not *'s grants: bot is declared, with none of its own.
     expect(agentReachCounts(agentSubgraph(g, "bot")).tools).toBe(0);
   });
+  it("doesn't give an agent locked down to nothing *'s grants", () => {
+    // support: {"*": [refund], locked: []}: a named cell replaces *.
+    const g: PolicyGraph = {
+      roles: [],
+      nodes: [
+        { id: "agent:*", kind: "agent", label: "*" },
+        { id: "agent:locked", kind: "agent", label: "locked" },
+        { id: "tool:refund", kind: "tool", label: "refund" },
+      ],
+      edges: [edge("agent:*", "tool:refund", "call")],
+    };
+    expect(agentReachCounts(agentSubgraph(g, "locked")).tools).toBe(0);
+  });
 });
