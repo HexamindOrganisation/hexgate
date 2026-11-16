@@ -241,13 +241,6 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
             raise _undeclared(agent, verdict["declared_agents"])
         return result_text(verdict)
 
-
-def _undeclared(agent: str | None, declared: list[str]) -> ToolError:
-    return ToolError(
-        f"agent {agent!r} is not declared in the policy (declared: {declared}); "
-        f"{UNDECLARED}"
-    )
-
     @mcp.tool(annotations=READ_ONLY, structured_output=False)
     async def policy_diff(project_id: str, drafts: list[PolicyDraft]) -> str:
         """What `drafts` (each a whole file by `name`) would change compared with
@@ -270,6 +263,13 @@ def _undeclared(agent: str | None, declared: list[str]) -> ToolError:
         # (422), and its detail reaches the model as the tool error.
         body = {"drafts": _dump(drafts)}
         return result_text(await post(project_id, "/policy/diff", body))
+
+
+def _undeclared(agent: str | None, declared: list[str]) -> ToolError:
+    return ToolError(
+        f"agent {agent!r} is not declared in the policy (declared: {declared}); "
+        f"{UNDECLARED}"
+    )
 
 
 def _has_entry(files: list[dict[str, Any]]) -> bool:
