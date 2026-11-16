@@ -229,6 +229,8 @@ let activeSocket: WebSocket | null = null;
 let activeProjectId: string | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempts = 0;
+// The last agent a serve announced: a different one starts a fresh transcript.
+let lastAgent: string | null = null;
 
 function setStore(updater: (s: PlaygroundState) => PlaygroundState): void {
   cachedState = updater(cachedState);
@@ -251,8 +253,20 @@ function handleFrame(frame: unknown): void {
   const f = frame as { type?: string; event_type?: string };
   if (f.type === "agent_online") {
     const ev = f as AgentOnlineEvent;
+    // A new serve of another agent starts with empty history: drop the
+    // previous agent's transcript rather than show it under this one.
+    const switched = !!ev.agent && !!lastAgent && ev.agent !== lastAgent;
+    if (ev.agent) lastAgent = ev.agent;
     setStore((s) => ({
-      ...s,
+      ...(switched
+        ? {
+            ...s,
+            messages: [],
+            decisions: [],
+            currentTurnId: null,
+            pendingApprovals: [],
+          }
+        : s),
       agentOnline: Boolean(ev.online),
       agentName: ev.agent ?? (ev.online ? s.agentName : null),
     }));
@@ -335,6 +349,7 @@ export function resetPlayground(): void {
   }
   activeProjectId = null;
   reconnectAttempts = 0;
+  lastAgent = null;
   cachedState = INITIAL_STATE;
   listeners.forEach((l) => l());
 }
@@ -348,6 +363,7 @@ function ensureSocketFor(projectId: string): void {
   // wipe it and open a fresh connection.
   if (activeProjectId !== null && activeProjectId !== projectId) {
     activeSocket?.close();
+    lastAgent = null;
     cachedState = INITIAL_STATE;
     listeners.forEach((l) => l());
   }
@@ -363,6 +379,47 @@ function ensureSocketFor(projectId: string): void {
 // ---------------------------------------------------------------------
 // React hook
 // ---------------------------------------------------------------------
+
+/**
+ * Which agent the project's serve relay currently exposes, read without
+ * mounting the full chat surface. Opens the same module-scoped socket, so a
+ * hub can gate its Playground tab on whether THIS agent is the one served.
+ * An empty projectId stays disconnected (reports no agent).
+ *
+ * `agentName` is the stable signal: a transient socket drop leaves it intact
+ * (only a real serve detach/replace clears it), so gating on it doesn't flap
+ * on a reconnect. `online` is for messaging only (a serve is attached but
+ * hasn't yet announced its agent).
+ */
+export interface ServedAgent {
+  agentName: string | null;
+  online: boolean;
+}
+
+// A narrowed snapshot: a fresh object only when the served agent or online flag
+// changes, so a hub subscribing to it doesn't re-render on every streamed token
+// (cachedState churns on each chat event, but these two fields rarely move).
+let servedSnapshot: ServedAgent = { agentName: null, online: false };
+function getServedSnapshot(): ServedAgent {
+  if (
+    servedSnapshot.agentName !== cachedState.agentName ||
+    servedSnapshot.online !== cachedState.agentOnline
+  ) {
+    servedSnapshot = {
+      agentName: cachedState.agentName,
+      online: cachedState.agentOnline,
+    };
+  }
+  return servedSnapshot;
+}
+
+export function usePlaygroundServedAgent({ projectId }: Options): ServedAgent {
+  const served = useSyncExternalStore(subscribe, getServedSnapshot);
+  useEffect(() => {
+    if (projectId) ensureSocketFor(projectId);
+  }, [projectId]);
+  return served;
+}
 
 export function usePlayground({ projectId }: Options) {
   const state = useSyncExternalStore(subscribe, getSnapshot);
