@@ -1,5 +1,6 @@
 import logging
 import runpy
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -152,3 +153,63 @@ def test_when_dir_starts_with_a_tilde_then_it_lands_in_home(monkeypatch, dirs):
 
     assert Settings.from_env().local_policy_dir == dirs / "home" / "policies"
     assert (dirs / "home" / "policies").is_dir() and not (dirs / "~").exists()
+
+
+# Each one used to be created below the cwd, where nobody looks.
+@pytest.mark.parametrize(
+    "raw",
+    ["$HOME/policies", '"~/policies"', "policies"],
+    ids=["unexpanded", "quoted", "relative"],
+)
+def test_when_dir_is_not_absolute_then_start_up_refuses_and_creates_nothing(
+    monkeypatch, dirs, raw
+):
+    monkeypatch.chdir(dirs)
+    monkeypatch.setenv("HEXGATE_MCP_LOCAL_POLICY_DIR", raw)
+    before = sorted(dirs.rglob("*"))
+
+    with pytest.raises(
+        ValueError, match="HEXGATE_MCP_LOCAL_POLICY_DIR.*not an absolute"
+    ):
+        Settings.from_env()
+
+    assert sorted(dirs.rglob("*")) == before
+
+
+def test_when_dir_is_a_dangling_symlink_then_start_up_creates_its_target(
+    monkeypatch, dirs
+):
+    (dirs / "link").symlink_to(dirs / "gone")
+    monkeypatch.setenv("HEXGATE_MCP_LOCAL_POLICY_DIR", str(dirs / "link"))
+
+    assert Settings.from_env().local_policy_dir == dirs / "link"
+    assert (dirs / "gone").is_dir()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["~nosuchuser-hexgate/policies", "{dirs}/file/sub"],
+    ids=["unknown user", "under a file"],
+)
+def test_when_dir_cannot_be_made_then_start_up_names_the_variable(
+    monkeypatch, dirs, raw
+):
+    monkeypatch.setenv("HEXGATE_MCP_LOCAL_POLICY_DIR", raw.format(dirs=dirs))
+
+    with pytest.raises(ValueError, match="HEXGATE_MCP_LOCAL_POLICY_DIR"):
+        Settings.from_env()
+
+
+def test_when_dir_appears_during_start_up_then_start_up_keeps_it(monkeypatch, dirs):
+    # A second server creates it after this one saw it missing.
+    mkdir = Path.mkdir
+
+    def race_then_mkdir(self, *args, **kwargs):
+        if self == dirs / "new":
+            mkdir(self)
+        return mkdir(self, *args, **kwargs)
+
+    monkeypatch.setenv("HEXGATE_MCP_LOCAL_POLICY_DIR", str(dirs / "new"))
+    monkeypatch.setattr(Path, "mkdir", race_then_mkdir)
+
+    assert Settings.from_env().local_policy_dir == dirs / "new"

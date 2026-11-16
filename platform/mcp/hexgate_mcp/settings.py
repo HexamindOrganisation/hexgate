@@ -79,14 +79,37 @@ def read_local_policy_dir(issuer: str) -> Path | None:
         )
     # A .env or compose file passes "~" through unexpanded: without this the
     # server would create a folder literally named "~".
-    path = Path(raw_dir).expanduser()
+    try:
+        path = Path(raw_dir).expanduser()
+    except RuntimeError as exc:  # "~user" for a user that does not exist
+        raise ValueError(
+            f"HEXGATE_MCP_LOCAL_POLICY_DIR={raw_dir!r}: {exc} — "
+            "set it to an absolute path."
+        ) from exc
+    # A relative path lands wherever the server was started, and an
+    # unexpanded "$HOME/..." or a quoted value is relative too: refused, so
+    # none of them is created as a folder nobody looks in.
+    if not path.is_absolute():
+        raise ValueError(
+            f"HEXGATE_MCP_LOCAL_POLICY_DIR={raw_dir!r} is not an absolute "
+            "path — set it to one, e.g. ~/policies."
+        )
     check_local_policy_dir(path)
     if not path.is_dir():
-        # The umask sets the mode, as it does for what policy_write_local
-        # makes below it.
-        path.mkdir(parents=True)
+        # Resolved, as write_atomic recreates it: through a symlink whose
+        # target is gone, mkdir on the link itself would fail.
+        real = path.resolve()
+        try:
+            # The umask sets the mode, as it does for what policy_write_local
+            # makes below it. exist_ok: two servers may start together.
+            real.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ValueError(
+                f"HEXGATE_MCP_LOCAL_POLICY_DIR={raw_dir!r} could not be "
+                f"created: {exc.strerror} — point it at a folder you can write."
+            ) from exc
         # Resolved, so a typo shows where it landed.
-        logger.info("created the local policy directory %s", path.resolve())
+        logger.info("created the local policy directory %s", real)
     return path
 
 
