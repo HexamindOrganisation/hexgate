@@ -145,10 +145,8 @@ export function UsageBreakdownCard({
   );
   const source = dim === "model" ? byModel : dim === "agent" ? byAgent : byUser;
   const data = useMemo(() => {
-    return source
-      .slice()
-      .sort((a, b) => b[metric] - a[metric])
-      .slice(0, 10);
+    // The card shows the first 10 and offers the rest.
+    return source.slice().sort((a, b) => b[metric] - a[metric]);
   }, [source, metric]);
   const max = Math.max(...data.map((d) => d[metric]), 1);
   const fkey = dim;
