@@ -53,6 +53,7 @@ import {
   useTheme,
 } from "@/lib/theme";
 import { usePresentMode } from "@/lib/present";
+import { AccentSwatch } from "@/components/ui/accent-swatch";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -586,19 +587,12 @@ function AppearanceControl() {
         </div>
         <div className="flex gap-2">
           {SCHEMES.map(({ id, label }) => (
-            <button
+            <AccentSwatch
               key={id}
-              type="button"
-              title={label}
-              aria-label={`${label} accent`}
-              aria-pressed={scheme === id}
-              onClick={() => setScheme(id)}
-              className={cn(
-                "size-6 rounded-full transition-shadow",
-                scheme === id &&
-                  "ring-2 ring-foreground ring-offset-2 ring-offset-popover",
-              )}
-              style={{ backgroundColor: `hsl(${schemeAccent(id, dark)})` }}
+              label={label}
+              color={schemeAccent(id, dark)}
+              selected={scheme === id}
+              onSelect={() => setScheme(id)}
             />
           ))}
         </div>
