@@ -34,7 +34,7 @@ interface PlaygroundPrefs {
   /** Acting name per project id (the demo caller identity). */
   names: Record<string, string>;
   /** Applied roles per project id, for the agent they were picked for; unset
-   * = that agent's first role, [] = none. Kept here with the name, so a trip
+   * = that agent's first role, [] = none; agent "" = the next to serve. Kept here with the name, so a trip
    * to Audit or a full-screen tab keeps the role a call ran as. */
   roles: Record<string, { agent: string; roles: string[] }>;
   setAccent: (accent: string) => void;

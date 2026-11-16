@@ -136,11 +136,17 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   // defines, else its first role, unless "no role". While serve is down a
   // queued turn keeps the choice; an online agent with no roles gets none.
   // A choice applies to the agent it was made for, not whatever serves next;
-  // while none is serving (a restart clears the name) it still applies.
+  // while none is serving (a restart clears the name) it still applies. One
+  // made before any agent served (agent "") goes to the first that connects.
   const choice =
-    saved && (!state.agentName || saved.agent === state.agentName)
+    saved &&
+    (!state.agentName || saved.agent === "" || saved.agent === state.agentName)
       ? saved.roles
       : undefined;
+  useEffect(() => {
+    if (state.agentName && saved?.agent === "")
+      setRoles(projectId, state.agentName, saved.roles);
+  }, [state.agentName, saved, setRoles, projectId]);
   const agentOnline = state.agentOnline;
   const activeRoles = useMemo(() => {
     if (roleOptions.length === 0) return agentOnline ? [] : (choice ?? []);
@@ -150,9 +156,10 @@ function PlaygroundLive({ projectId }: { projectId: string }) {
   }, [choice, roleOptions, agentOnline]);
   // null: the roles weren't touched in the dialog, so the choice stands.
   const applyRoles = (roles: string[] | null) => {
-    // With no agent serving (a restart), keep the choice's agent.
-    const agent = state.agentName ?? saved?.agent;
-    if (roles !== null && agent) setRoles(projectId, agent, roles);
+    // With no agent serving (a restart), keep the choice's agent; before any
+    // agent has served, "" stands for the next one to connect.
+    const agent = state.agentName ?? saved?.agent ?? "";
+    if (roles !== null) setRoles(projectId, agent, roles);
   };
 
   // Whether the user was pinned to the bottom BEFORE the latest update — read

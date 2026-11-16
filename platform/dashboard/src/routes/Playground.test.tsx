@@ -259,6 +259,26 @@ describe("PlaygroundPage", () => {
     });
   });
 
+  it("keeps a role picked before any agent served for the first to connect", async () => {
+    // A compose project resolves roles for "*" before serve is up.
+    mockState = baseState({ agentOnline: false, agentName: null });
+    const { rerender } = renderWithProviders(<PlaygroundPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "billing" }));
+    await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    mockState = baseState();
+    rerender(<PlaygroundPage />);
+    await userEvent.type(
+      screen.getByLabelText("Message the agent"),
+      "hi{Enter}",
+    );
+    expect(sendChat).toHaveBeenCalledWith("hi", { roles: [], name: "" });
+    expect(usePlaygroundPrefs.getState().roles.p1).toEqual({
+      agent: "billing-bot",
+      roles: [],
+    });
+  });
+
   it("keeps the role choice while serve restarts", async () => {
     mockState = baseState();
     const { rerender } = renderWithProviders(<PlaygroundPage />);
