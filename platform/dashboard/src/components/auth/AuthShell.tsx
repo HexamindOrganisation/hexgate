@@ -15,13 +15,15 @@ type MarkIcon = LucideIcon | typeof HexgateBrandMark;
 
 type Mark = { box: string; icon: MarkIcon; size?: string; spin?: boolean };
 
-const MARK: Record<Tone, Mark> = {
+const MARK: Record<Tone | "glyph", Mark> = {
   // The app icon itself: the blue keyhole on its dark tile, in either theme.
   brand: {
     box: "rounded-xl bg-[#0b0d12] ring-1 ring-white/10",
     icon: HexgateBrandMark,
     size: "size-7",
   },
+  // A page's own glyph in place of the brand mark (e.g. the reset lock).
+  glyph: { box: "rounded-xl bg-action text-action-foreground", icon: Check },
   success: { box: "rounded-full bg-success/15 text-success", icon: Check },
   error: { box: "rounded-full bg-deny/10 text-deny", icon: X },
   // The "working…" states: a spinner, so it can't show frozen.
@@ -61,12 +63,7 @@ export function AuthShell({
   /** A wider column, for a denser card (the OAuth consent). */
   wide?: boolean;
 }) {
-  // A page's own glyph (e.g. the reset lock) sits on the neutral tile, not
-  // the app icon's dark one.
-  const mark: Mark =
-    icon && tone === "brand"
-      ? { box: "rounded-xl bg-action text-action-foreground", icon }
-      : MARK[tone];
+  const mark = MARK[icon && tone === "brand" ? "glyph" : tone];
   const Icon = icon ?? mark.icon;
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
