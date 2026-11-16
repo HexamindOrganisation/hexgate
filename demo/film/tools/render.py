@@ -196,5 +196,6 @@ for sc in scenes:
     total += len(frames)
     print(f"{sc['id']} {sc['title']}: {span:.1f}s", flush=True)
 enc.stdin.close()
-enc.wait()
+if enc.wait() != 0:
+    sys.exit(f"ffmpeg failed writing {OUT}")
 print(f"total {total / FPS:.1f}s -> {OUT}")

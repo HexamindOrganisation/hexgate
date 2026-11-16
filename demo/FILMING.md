@@ -102,6 +102,8 @@ each scene the state it starts from, and the film command sets it up:
 - `secured`: the take restored (`./demo/run secure <demo> --take
   claude-take`): Claude's `agent.py`, registered, its policy; app state reset.
   After the scene, the take's policy is put back (04 saves an edit).
+- `fresh`: `secured`, after deleting the agent's audit rows, so the decisions a
+  later `after` scene shows are this take's only (05, for 06).
 - `after`: nothing; the scene continues from the one before. Film it right
   after that one.
 - `live`: filmed by hand (below).

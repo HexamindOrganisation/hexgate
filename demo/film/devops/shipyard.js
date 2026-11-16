@@ -84,6 +84,7 @@ async function ask(f, text, { approve = false } = {}) {
     if (i > 2 && (await done())) break;
     await followThread(f, 500);
   }
+  if (!(await done())) throw new Error(`the copilot was still busy after 105 s: ${text}`);
   await sleep(2500); // read the answer
 }
 

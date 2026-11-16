@@ -223,8 +223,9 @@ def _check_ports() -> None:
         owner = procs.port_owner(port)
         ui.warn(f"port {port} is taken by something else: {owner or 'unknown process'}")
         pid = owner.split(" ")[0] if owner else ""
+        # Default no: without a terminal (a script, an agent) nothing is killed.
         if pid.isdigit() and ui.ask(
-            f"stop it (pid {pid}) so the demo can use port {port}?"
+            f"stop it (pid {pid}) so the demo can use port {port}?", default=False
         ):
             procs.kill_tree(int(pid))
             time.sleep(1)

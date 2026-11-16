@@ -18,6 +18,7 @@ import os
 import secrets
 import sys
 import traceback
+import types
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -112,7 +113,14 @@ def load_agent():
 
 
 def is_protected(mod) -> bool:
-    return "HexgateRunner" in vars(mod)
+    """agent.py holds something from hexgate (a runner, its adapter module, an
+    alias), whatever the import style. The badge only says hexgate is in play;
+    the runs themselves are what the policy checks."""
+    for value in vars(mod).values():
+        origin = value.__name__ if isinstance(value, types.ModuleType) else getattr(value, "__module__", None)
+        if isinstance(origin, str) and (origin == "hexgate" or origin.startswith("hexgate.")):
+            return True
+    return False
 
 
 def agent_status() -> dict:

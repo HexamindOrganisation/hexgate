@@ -31,8 +31,14 @@ from openai.types.responses import (
 RC = "v2.4.0-rc1"
 
 
-def _plan(message: str) -> list[tuple[str, dict]]:
+def _plan(message: str, previous: str = "") -> list[tuple[str, dict]]:
     m = message.lower()
+    # A follow-up that only names the other environment ("OK, staging then.")
+    # repeats the previous request there.
+    if previous and not any(w in m for w in ("ship", "deploy", "release", "restart", "scale", "log", "status", "delete")):
+        for env, other in (("staging", "prod"), ("prod", "staging")):
+            if env in m:
+                return _plan(previous.lower().replace(other, env))
     service = next((s for s in ("payments", "checkout", "notifications", "api-gateway") if s in m), "payments")
     version = (re.search(r"v\d+\.\d+\.\d+(?:-\w+)?", message) or [RC])[0]
     if "delete" in m:
@@ -44,6 +50,8 @@ def _plan(message: str) -> list[tuple[str, dict]]:
         if "error" in m or "log" in m:
             steps.append(("get_logs", {"service": service, "env": env}))
         steps.append(("deploy_version", {"service": service, "version": version, "env": env}))
+        if "restart" in m:
+            steps.append(("restart_service", {"service": service, "env": env}))
         return steps
     if "restart" in m:
         return [("restart_service", {"service": service, "env": "staging" if "staging" in m else "prod"})]
@@ -82,27 +90,27 @@ def _summary(steps: list[tuple[str, dict]], outputs: list[str]) -> str:
     return "Done."
 
 
-def _state(input) -> tuple[str, list[str]]:
-    """The latest user message, and the tool outputs since it."""
+def _state(input) -> tuple[str, str, list[str]]:
+    """The latest user message, the one before it, and the tool outputs since the latest."""
     items = [input] if isinstance(input, str) else list(input)
-    message, outputs = "", []
+    message, previous, outputs = "", "", []
     for it in items:
         if isinstance(it, str):
-            message, outputs = it, []
+            message, previous, outputs = it, message, []
         elif isinstance(it, dict):
             if it.get("role") == "user":
                 c = it.get("content")
-                message = c if isinstance(c, str) else json.dumps(c)
+                message, previous = (c if isinstance(c, str) else json.dumps(c)), message
                 outputs = []
             elif it.get("type") == "function_call_output":
                 outputs.append(str(it.get("output", "")))
-    return message, outputs
+    return message, previous, outputs
 
 
 class ScriptedModel(Model):
     def _next(self, input) -> list:
-        message, outputs = _state(input)
-        steps = _plan(message)
+        message, previous, outputs = _state(input)
+        steps = _plan(message, previous)
         if len(outputs) < len(steps):
             # Stop early when the previous step was refused.
             if outputs and "The tool was not executed" in outputs[-1]:

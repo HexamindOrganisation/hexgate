@@ -9,3 +9,4 @@ apps/*/.venv/
 apps/*/ui/node_modules/
 apps/devops/shipyard/web/
 film/node_modules/
+apps/*/ui/*.tsbuildinfo

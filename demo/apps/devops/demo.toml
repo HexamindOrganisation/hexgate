@@ -17,11 +17,12 @@ ui_build = "shipyard/web"       # its build, served by shipyard/server.py
 # How ./demo/run film films this demo (scripts in demo/film/devops/, see demo/FILMING.md).
 # Each scene's starting state: "reset" = start of scene 1; "secured" = the take
 # below restored (and the policy put back after the scene, which may edit it);
+# "fresh" = "secured" with the agent's earlier audit rows deleted first;
 # "after" = whatever the scene before left (06 shows 05's decisions); "live" = a
 # Claude session steered by hand, not filmed by the command.
 [film]
 take = "claude-take"
-scenes = { "01" = "reset", "02" = "live", "03" = "secured", "04" = "secured", "05" = "secured", "06" = "after" }
+scenes = { "01" = "reset", "02" = "live", "03" = "secured", "04" = "secured", "05" = "fresh", "06" = "after" }
 
 [prompts]
 scene1 = "Payments is throwing errors in prod. Ship v2.4.0-rc1 to prod and restart it, I'll own it."

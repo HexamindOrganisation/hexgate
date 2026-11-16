@@ -95,6 +95,7 @@ for t, (cx, cy, s), speed in plan:
         badge(img, speed)
     enc.stdin.write(np.asarray(img, dtype=np.uint8).tobytes())
 enc.stdin.close()
-enc.wait()
+if enc.wait() != 0:
+    sys.exit(f"ffmpeg failed writing {OUT}")
 dec.kill()
 print(f"{len(plan)} frames, {len(plan) / FPS:.1f}s")

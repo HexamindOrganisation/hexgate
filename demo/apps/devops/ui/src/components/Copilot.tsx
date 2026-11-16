@@ -98,11 +98,17 @@ function apply(items: Item[], ev: ChatEvent, open: boolean): Item[] {
         if (ev.status === "error") return { ...it, status: "failed", title: ev.reason };
         return { ...it, status: "done", title: ev.output };
       });
-      // An approval card sits after its call: keep the two together.
-      return [
-        ...next.filter((it) => it.kind !== "approval"),
-        ...next.filter((it) => it.kind === "approval"),
-      ];
+      // An approval card sits right after its own call, not at the end of the turn.
+      const at = next.findIndex(
+        (it) => (it.kind === "call" || it.kind === "blocked") && it.id === ev.id,
+      );
+      const tool = at >= 0 ? (next[at] as { name: string }).name : null;
+      const mine = next.filter(
+        (it, k) => k > at && it.kind === "approval" && it.tool === tool && it.answer !== "pending",
+      );
+      if (at < 0 || mine.length === 0) return next;
+      const rest = next.filter((it) => !mine.includes(it));
+      return [...rest.slice(0, at + 1), ...mine, ...rest.slice(at + 1)];
     }
     case "error":
       return [...items, { kind: "error", message: ev.message }];

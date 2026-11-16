@@ -17,7 +17,7 @@ import subprocess
 from pathlib import Path
 
 from kit import demos, platform, ui
-from kit.api import Api
+from kit.api import Api, forget_agent
 from kit.paths import API, DEMO, RUN
 
 FILM = DEMO / "film"
@@ -45,7 +45,14 @@ def _script(demo: demos.Demo, sid: str) -> Path | None:
 def _set_state(demo: demos.Demo, state: str, take: str | None) -> None:
     if state == "reset":
         demos.reset(demo)
-    elif state == "secured":
+    elif state in ("secured", "fresh"):
+        if state == "fresh":
+            # The decisions the scene makes are the only ones a later "after"
+            # scene shows: drop earlier takes' rows (and the registration,
+            # which secure() makes again).
+            api = Api()
+            forget_agent(api.ensure_project(demo.project), demo.agent)
+            ui.ok(f"{demo.agent} audit rows from earlier takes deleted")
         demos.secure(demo, take)
         if demos.app_post(demo, "/api/admin/reset"):
             ui.ok("app state reset (services, chats)")
@@ -125,10 +132,10 @@ def run(demo: demos.Demo, ids: list[str], out: str | None, raw: str | None = Non
         if r.returncode != 0:
             ui.fail(f"scene {sid} failed:\n{(r.stderr or r.stdout)[-2000:]}")
             raise SystemExit(1)
-        raw = r.stdout.strip().splitlines()[-1]
-        _encode(raw, out_dir / f"{sid}.mp4")
+        take_video = r.stdout.strip().splitlines()[-1]
+        _encode(take_video, out_dir / f"{sid}.mp4")
         ui.ok(f"{sid}.mp4")
-        if state == "secured" and take:
+        if state in ("secured", "fresh") and take:
             # A scene may edit the policy (04 saves one): put the take's back.
             demos.put_policy(demo, demo.ref / take / "policy")
 
