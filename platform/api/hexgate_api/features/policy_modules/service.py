@@ -869,7 +869,7 @@ def _resolve_all_agents_files(files: dict[str, str]) -> dict:
     }
 
 
-def _resolution_for(resolved: dict, agent: str):
+def resolution_for(resolved: dict, agent: str):
     """``agent``'s resolution from :func:`_resolve_all_agents_files`. An agent the
     entry doesn't declare resolves exactly like ``"*"`` (only the top-level scopes
     apply to it), so it reuses that result instead of resolving again."""
@@ -915,7 +915,7 @@ def _compose_lints(resolved: dict, manifests: dict) -> list[PolicyLint]:
     shared = {key(lint) for lint in generic}
     lints = list(generic)
     for agent in sorted((set(resolved) | set(manifests)) - {DEFAULT_AGENT}):
-        policy_set = _resolution_for(resolved, agent).policy_set
+        policy_set = resolution_for(resolved, agent).policy_set
         lints_for_agent = analyze_policy(
             policy_set, manifest=manifests.get(agent), source=ENTRY_FILE
         )
@@ -948,7 +948,7 @@ async def compose_preview(
     try:
         # Every declared agent, so the preview and the save agree.
         resolved, lints = await _resolve_and_lint(session, project_id, files)
-        requested = _resolution_for(resolved, agent)
+        requested = resolution_for(resolved, agent)
     except compose_error_types() as exc:
         return None, [_link_error(str(exc))]
     return roles_json(requested), lints

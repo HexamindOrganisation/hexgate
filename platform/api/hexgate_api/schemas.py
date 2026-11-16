@@ -648,7 +648,8 @@ class PolicyTestResponse(BaseModel):
 
 
 class UncoveredToolOut(BaseModel):
-    """A manifest tool no rule names. Its description is text the agent's code
+    """A manifest tool no rule names, or that a role whose default is looser
+    than deny has no rule for. Its description is text the agent's code
     or a library wrote, so it goes out marked untrusted."""
 
     tool: str
@@ -668,15 +669,18 @@ class AgentCoverageOut(BaseModel):
     ``has_manifest`` is False when no usable manifest is registered, so its
     empty lists mean "unknown", not "covered". An uncovered tool falls to its
     role's default, at worst ``default_policy``; an uncovered sub-agent is denied when ``reach_gated``
-    and not checked at all otherwise."""
+    and not checked at all otherwise. ``policy_error`` is True when the
+    agent's own stored policy does not load: then ``default_policy`` and
+    ``reach_gated`` are None and the empty lists mean "unknown"."""
 
     agent: str
     has_policy: bool
     has_manifest: bool
+    policy_error: bool = False
     # The most permissive default any role applies to an uncovered tool:
     # "allow" | "approval_required" | "deny".
-    default_policy: str
-    reach_gated: bool
+    default_policy: str | None = None
+    reach_gated: bool | None = None
     uncovered_tools: list[UncoveredToolOut] = Field(default_factory=list)
     uncovered_subagents: list[UncoveredSubagentOut] = Field(default_factory=list)
 

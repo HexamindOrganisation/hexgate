@@ -597,23 +597,20 @@ async def api_policy_graph(
 )
 async def api_policy_coverage(
     project_id: str,
+    agent: str | None = None,
     _user: User = Depends(require_org_member),
     session: AsyncSession = Depends(get_session),
 ) -> PolicyCoverageResponse:
-    """Per registered agent, the manifest tools and sub-agents no rule in any
-    role names, what decides them instead (for a tool ``default_policy``, the
-    most permissive default any role applies to an uncovered tool; for a
-    sub-agent, a deny when ``reach_gated``, else nothing), and whether the agent
-    has a policy of its own. Judged against the project policy when the project
-    has one, else against each agent's own policy. 422 if the project policy
-    can't be composed, or an agent's own policy doesn't load."""
+    """Per registered agent (or only ``agent``), the manifest tools the policy
+    leaves to a default and the sub-agents no rule names, what decides them instead (for
+    a tool ``default_policy``, the most permissive default any role applies to
+    an uncovered tool; for a sub-agent, a deny when ``reach_gated``, else
+    nothing), and whether the agent has a policy of its own. Judged against
+    the project policy when the project has one, else against each agent's own
+    policy; one that doesn't load marks that agent's entry ``policy_error``.
+    422 if the project policy can't be composed."""
     try:
-        agents = await coverage.project_coverage(session, project_id)
-    except coverage.PolicyLoadError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"the stored policy of agent {exc.agent!r} does not load",
-        ) from exc
+        agents = await coverage.project_coverage(session, project_id, agent)
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PolicyCoverageResponse(agents=agents)

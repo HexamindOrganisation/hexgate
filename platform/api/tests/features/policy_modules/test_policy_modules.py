@@ -2027,7 +2027,7 @@ async def test_when_a_stored_manifest_no_longer_validates_then_only_its_checks_s
 
 
 def test_when_an_agent_is_not_declared_then_it_resolves_like_the_generic_view():
-    # _resolution_for reuses the "*" result for an undeclared agent; that is only
+    # resolution_for reuses the "*" result for an undeclared agent; that is only
     # sound while the two resolve identically (guards and imports included).
     from hexgate_api.features.policy_modules.service import _resolve_files, roles_json
 
