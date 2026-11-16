@@ -44,6 +44,7 @@ REGISTRY = {
     ("GET", f"{_P}/policy/check"): _READ,
     ("POST", f"{_P}/policy/check"): _READ,
     ("GET", f"{_P}/policy/graph"): _READ,
+    ("POST", f"{_P}/policy/diff"): _READ,
     ("GET", f"{_P}/policy/risk-facts"): _READ,
     ("POST", f"{_P}/policy/test"): _READ,
     ("PUT", f"{_P}/policy-files/{{name:path}}"): {OAUTH_SCOPE_KEY: "policy:write"},

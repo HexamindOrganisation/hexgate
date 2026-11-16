@@ -377,6 +377,22 @@ def _parse_primary(text: str, source: str) -> Node:
     return Cmp(left=left, op=op, right=right, source=source)
 
 
+def conjuncts(source: str) -> list[str]:
+    """The top-level ``and`` parts of a constraint, each without its wrapping
+    parentheses, nested ``and`` groups flattened: ``(a) and (b and c)`` gives
+    ``["a", "b", "c"]``. A top-level ``or`` (which binds looser than ``and``)
+    or a ``not`` group stays one part."""
+    text = source.strip()
+    while _is_wholly_parenthesized(text):
+        text = text[1:-1].strip()
+    if len(_split_bool(text, "or")) > 1:
+        return [text]
+    parts = _split_bool(text, "and")
+    if len(parts) == 1:
+        return [text]
+    return [c for part in parts for c in conjuncts(part)]
+
+
 def _split_bool(text: str, keyword: str) -> list[str]:
     """Split ``text`` on top-level ``keyword`` (``and``/``or``) occurrences.
 

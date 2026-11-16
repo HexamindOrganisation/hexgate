@@ -57,6 +57,13 @@ ANSWERS = {
         "agent_declared": True,
         "declared_agents": ["*", "billing"],
     },
+    ("POST", "/policy/diff"): {
+        "changes": [],
+        "agent_changes": [],
+        "gate_changes": [],
+        "agents_affected": [],
+        "composes": {"before": True, "after": True},
+    },
 }
 # The tools that read the resolved policy, so refuse a project with no store.
 RESOLVED = [
@@ -76,6 +83,7 @@ CALLS = [
     ("policy_check", {}),
     ("policy_risk_facts", {}),
     ("policy_dry_run", DRY_RUN),
+    ("policy_diff", {"drafts": [DRAFT]}),
 ]
 
 
@@ -281,6 +289,13 @@ def error(result: dict) -> str:
             ],
             ANSWERS["POST", "/policy/test"],
             id="dry_run-entry-draft",
+        ),
+        pytest.param(
+            "policy_diff",
+            {"drafts": [DRAFT, ENTRY_DRAFT]},
+            [("POST", "/policy/diff", {"drafts": [DRAFT, ENTRY_DRAFT]})],
+            ANSWERS[("POST", "/policy/diff")],
+            id="diff-two-files",
         ),
     ],
 )
@@ -538,6 +553,13 @@ BODIES = [
         FULL_DRY_RUN,
         "/policy/test",
         "PolicyTestRequest",
+        {"drafts": "PolicyFileDraft"},
+    ),
+    (
+        "policy_diff",
+        {"drafts": [DRAFT]},
+        "/policy/diff",
+        "PolicyDiffRequest",
         {"drafts": "PolicyFileDraft"},
     ),
 ]
