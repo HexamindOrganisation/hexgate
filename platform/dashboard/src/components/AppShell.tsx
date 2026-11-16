@@ -282,7 +282,7 @@ function NavItem({
  * reveals a chevron; clicking it toggles the list (the label still navigates to
  * /agents). The list is fetched lazily, only once opened. */
 function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
-  const { projectId } = useProjectScoped();
+  const { projectId, status } = useProjectScoped();
   const [open, setOpen] = useState(false);
   const agents = useQuery({
     queryKey: ["agent-manifests", projectId],
@@ -304,9 +304,9 @@ function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
   const rows = agents.data ?? [];
   return (
     <div className="group/agents relative flex flex-col gap-0.5">
+      {/* No `end`: the row stays active on every hub page, as on the rail. */}
       <NavLink
         to="/agents"
-        end
         className={({ isActive }) =>
           cn(
             "flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition-colors",
@@ -316,13 +316,18 @@ function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
           )
         }
       >
-        <Bot
-          className={cn(
-            "size-4 shrink-0 transition-opacity",
-            open ? "opacity-0" : "group-hover/agents:opacity-0",
-          )}
-        />
-        Agents
+        {({ isActive }) => (
+          <>
+            <Bot
+              className={cn(
+                "size-4 shrink-0 transition-opacity",
+                isActive && "text-primary",
+                open ? "opacity-0" : "group-hover/agents:opacity-0",
+              )}
+            />
+            Agents
+          </>
+        )}
       </NavLink>
       {/* Chevron overlaid on the icon — a sibling, never nested in the anchor. */}
       <button
@@ -341,7 +346,15 @@ function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
       </button>
       {open && (
         <div className="ml-[22px] flex flex-col gap-0.5 border-l border-border pl-1.5">
-          {agents.isPending ? (
+          {status === "no-project" ? (
+            <span className="px-2 py-1 text-[11px] text-muted-foreground">
+              No project yet
+            </span>
+          ) : agents.isError && !agents.data ? (
+            <span className="px-2 py-1 text-[11px] text-muted-foreground">
+              Couldn't load agents
+            </span>
+          ) : agents.isPending ? (
             <span className="px-2 py-1 text-[11px] text-muted-foreground">
               Loading…
             </span>

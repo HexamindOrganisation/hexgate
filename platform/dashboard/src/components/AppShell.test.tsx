@@ -138,6 +138,35 @@ describe("AppShell", () => {
     expect(screen.getByRole("link", { name: "beta_bot" })).toBeInTheDocument();
   });
 
+  it("says the agent list failed rather than that there are none", async () => {
+    // stubWorkspace has no manifest route: it 404s.
+    renderWithProviders(<AppShell />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: /show agent list/i }),
+    );
+    expect(await screen.findByText("Couldn't load agents")).toBeInTheDocument();
+    expect(screen.queryByText("No agents yet")).toBeNull();
+  });
+
+  it("says there's no project instead of loading forever", async () => {
+    act(() => {
+      useActive.setState({ activeOrgId: ORG_B.id, activeProjectId: null });
+    });
+    renderWithProviders(<AppShell />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: /show agent list/i }),
+    );
+    expect(await screen.findByText("No project yet")).toBeInTheDocument();
+  });
+
+  it("keeps the Agents row active on an agent's hub page", async () => {
+    renderWithProviders(<AppShell />, { initialRoute: "/agents/alpha_bot" });
+    expect(await screen.findByRole("link", { name: "Agents" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
+
   it("counts active bans on the Bans link for admins", async () => {
     vi.restoreAllMocks();
     stubFetch({
