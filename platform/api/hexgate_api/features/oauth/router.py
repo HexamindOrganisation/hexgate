@@ -21,7 +21,6 @@ from hexgate_api.core.db import get_session
 from hexgate_api.deps.identity import require_user
 from hexgate_api.features.oauth.authorization import CheckedAuthorization
 from hexgate_api.features.oauth.grants import (
-    as_utc,
     issue_code,
     live_grants,
     projects_of,
@@ -37,7 +36,7 @@ from hexgate_api.features.oauth.schemas import (
     ConsentScope,
     Grant,
 )
-from hexgate_api.models import Organization, OrganizationMember, Project, User
+from hexgate_api.models import Organization, OrganizationMember, Project, User, as_utc
 from hexgate_api.settings import get_settings
 
 router = APIRouter(prefix="/oauth", tags=["oauth"])

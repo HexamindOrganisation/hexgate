@@ -13,7 +13,8 @@ pnpm dev
 
 ## Routes
 
-- `/agents` — read-only manifest view (tools, model, system prompt) per registered agent
+- `/agents` — every agent in the project, registered or not yet, with its 24h calls, denials and delegation; each row opens its hub
+- `/agents/:name` — one agent's hub: its graph, resources (tools, skills, guards, system prompt), resolved policy and decision log
 - `/policies` — edit each agent's policy (roles × tools × argument constraints)
 - `/graph` — read-only project overview (everyone → agents → tools)
 - `/playground` — chat with a serving agent, watch tool decisions stream live

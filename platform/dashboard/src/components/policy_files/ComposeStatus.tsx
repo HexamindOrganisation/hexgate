@@ -35,7 +35,7 @@ export function ComposeStatusBar({ trailing }: { trailing?: ReactNode }) {
         <Layers className="size-3 text-muted-foreground" />
         <span className="text-foreground/70">Compose</span>
         <span aria-hidden>·</span>
-        <span className="font-medium text-allow">active</span>
+        <span className="font-medium text-success">active</span>
       </span>
       {trailing}
     </div>

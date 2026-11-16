@@ -62,7 +62,7 @@ export function BlockedAttemptsPanel({ projectId }: { projectId: string }) {
   const remaining = Math.max(total - rows.length, 0);
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-card">
+    <div className="overflow-hidden rounded-xl border border-border bg-card">
       <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-3.5">
         <div>
           <div className="text-sm font-medium">Blocked attempts</div>

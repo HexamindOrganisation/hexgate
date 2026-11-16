@@ -1,12 +1,12 @@
 /**
- * Audit-specific chart pieces. The reusable SVG primitives (AreaChart,
- * Donut, Sparkline) live in ``components/ui/charts.tsx``; what stays here
+ * Audit-specific chart pieces. The reusable primitives (StackedBars,
+ * Sparkline) live in ``components/ui/charts.tsx``; what stays here
  * is bound to the allow/deny/needs_approval outcome domain.
  */
 
-import { Check, CircleDashed, X } from "lucide-react";
 import type { AuditOutcome } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { VerdictIcon } from "@/components/ui/verdict-icon";
 import { BarRow } from "@/components/ui/breakdown-card";
 import { OUT_LABEL } from "./chart-tokens";
 
@@ -22,10 +22,9 @@ export interface BreakdownDatum extends Counts {
 }
 
 export function DecisionBadge({ d }: { d: AuditOutcome }) {
-  const OutcomeIcon = d === "allow" ? Check : d === "deny" ? X : CircleDashed;
   return (
     <Badge variant={d === "needs_approval" ? "approval" : d}>
-      <OutcomeIcon className="size-3" strokeWidth={2} />
+      <VerdictIcon verdict={d} />
       {OUT_LABEL[d]}
     </Badge>
   );
@@ -66,7 +65,7 @@ export function BreakdownBar({
         </>
       }
       segments={[
-        { className: "bg-allow", widthPct: seg("allow") },
+        { className: "bg-allow-fill", widthPct: seg("allow") },
         { className: "bg-approval", widthPct: seg("needs_approval") },
         { className: "bg-deny", widthPct: seg("deny") },
       ]}

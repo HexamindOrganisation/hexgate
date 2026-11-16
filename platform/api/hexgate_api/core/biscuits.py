@@ -41,6 +41,8 @@ from biscuit_auth import (
     PublicKey,
 )
 
+from hexgate_api.models import as_utc
+
 
 class TokenError(RuntimeError):
     """Base class for token-related failures."""
@@ -261,7 +263,5 @@ def _escape(value: str) -> str:
 
 def _datalog_datetime(value: datetime) -> str:
     """Render a UTC datetime as a Biscuit-recognized RFC3339 literal."""
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
     # Biscuit accepts RFC3339 with `Z` suffix for UTC.
-    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return as_utc(value).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
