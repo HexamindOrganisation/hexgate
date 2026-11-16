@@ -144,10 +144,12 @@ expect:
 Besides the policy files, a starting project holds the platform's data that the
 Hexgate MCP server would show a real agent. The files keep the API's own field
 names (`GET /agents/manifest`, `GET /audit/decisions`); the MCP tools return the
-same data with each free-text field renamed `untrusted_<field>` (a tool's
-`description`, an audit row's `args`, `attributes` and `reason`, among others),
-so an agent in the MCP server's flow reads those names, not the ones in these
-files:
+same data with every field that the agent's code, the integrator or an end
+user's request supplied renamed `untrusted_<field>`, so an agent in the MCP
+server's flow reads those names, not the ones in these files. In an audit row
+that is `arguments`, `attributes`, `reason`, `violations`, `hint`, `user_id`,
+`session_id`, `user_roles` and `deciding_role`; in a manifest, a tool's
+`description` and the other text the agent's code or its libraries wrote:
 
 - `agents.json` (required): every agent in the project with its manifest, as
   the API returns it (`agents_list` returns it with the renames above). A case's agent knows only
@@ -203,7 +205,7 @@ files it leaves:
 
 1. Log in once: `claude mcp add -s user --transport http hexgate <MCP URL>`
    (`https://app.hexgate.ai/mcp` for Hexgate Cloud; `-s user` so the server is
-   also there in the folder of step 2), start a new Claude Code session, `/mcp`, Authenticate, and tick the project the case should use.
+   also there in the folder of step 2), start a new Claude Code session, `/mcp`, Authenticate, and tick a throwaway project.
    The login lives in Claude Code's own credential store on your machine, and
    the run below uses it: it is your session, not one made for the eval.
 2. Copy the case's starting project (`starting_projects/…`, or the case's own
@@ -213,11 +215,14 @@ files it leaves:
    runs `hexgate policy …` (`--engine wasm` needs `opa`), so `hexgate` and `opa`
    must be on your `PATH` there. Nothing of the sandbox applies:
    there is no proxy, and the agent can read whatever your account can.
-   The server's tools act on the platform project you ticked, not on the case's
-   `agents.json` and `audit.json`, and `policy_save` overwrites that project's
+   The server's tools act on the platform project you ticked, and nothing
+   loads the case's `agents.json` and `audit.json` into it: `agents_list`,
+   `audit_decisions` and `policy_resolve` describe that project, not the case,
+   while `grade` scores against the folder's `agents.json`. Such a run measures
+   the skill with the server connected, not how Claude Code does with the
+   server on the case's data. `policy_save` overwrites the ticked project's
    stored policy file while leaving nothing in the folder, so such a run scores
-   as no change. Tick a throwaway project, and have the agent edit the folder's
-   files; only those are scored. (`policy_write_local` exists only on a server
+   as no change: have the agent edit the folder's files; only those are scored. (`policy_write_local` exists only on a server
    you started yourself with `HEXGATE_MCP_LOCAL_POLICY_DIR`, never on Hexgate
    Cloud.)
 3. Score the folder from the repo root. `grade` is the scorer's own function;

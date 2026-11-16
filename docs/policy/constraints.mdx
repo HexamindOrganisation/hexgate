@@ -818,7 +818,7 @@ on the pydantic engine); across roles a name must map to a single value.
 
 ### Pinning a skill's content
 
-A skill is matched by name, so editing an approved skill does
+A [skill](/concepts/skills) is matched by name, so editing an approved skill does
 not revoke its approval. Every skill decision carries these arguments, so pinning
 needs no new syntax — just a constraint and a constant:
 
@@ -859,7 +859,7 @@ skills:
 The hash covers the `SKILL.md` body at every level, so a pin on a rule whose `via`
 includes `resource` or `script` also stops those when the instructions change —
 but it does not cover the resource and script files themselves. On
-Google ADK, a `script` decision also carries the
+[Google ADK](/adapters/google-adk#skills), a `script` decision also carries the
 script's invocation as `args.script_args`, `args.short_options` and
 `args.positional_args`.
 

@@ -65,14 +65,16 @@ connection lacks. To change what a client may do, revoke it and connect again.
 | `policy_resolve`, `policy_graph`, `policy_list_roles` | `policy:read` | The effective policy per role, as a graph, and the role bindings. |
 | `policy_check` | `policy:read` | Lint the policy, optionally with unsaved draft files. |
 | `policy_dry_run` | `policy:read` | Would this call be allowed, for a role and an agent, optionally against drafts. |
+| `policy_diff` | `policy:read` | What unsaved draft files would change against the saved policy: each agent, role and tool whose grant differs, before and after. |
 | `policy_save` | `policy:write` | Create or replace one policy file. Nothing is saved if the result is invalid. |
 | `policy_reference` | none | The policy documentation, so the client can learn the format. |
 
-Text an agent's code or its users produced (a tool description, a call's
-arguments, a denial reason) comes back in fields named `untrusted_*`. The
+What an agent's code, the integrator or an end user's request supplied (a tool
+description, a call's arguments, the user id and roles a request asserts, a
+denial reason) comes back in fields named `untrusted_*`. The
 server marks it so the client reads it as data and not as instructions.
 
-The policy reference tool serves only the [Policy](/policy/yaml-shape) pages.
+The policy reference tool serves only the [Policy](/policy/yaml-shape) pages; a link in them to any other page comes as its `https://docs.hexgate.ai` address.
 
 On your own machine, a server started with `HEXGATE_MCP_LOCAL_POLICY_DIR` also
 has `policy_write_local`, which writes policy files into that folder instead of
@@ -82,7 +84,7 @@ the platform. It is never on in a deployed server; see
 ## Connected apps
 
 Every login you have approved is listed under **Connected apps** in the
-dashboard's account settings, beside Account: the client's name, the scopes and
+dashboard's sidebar, beside Account: the client's name, the scopes and
 projects it was given, when it connected and when it last renewed its access (not on every call it makes). Check it
 after any consent you are unsure about.
 
