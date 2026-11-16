@@ -1,20 +1,29 @@
 import { useEffect, useState } from "react";
-import { Check, Hexagon, Loader2, type LucideIcon, X } from "lucide-react";
+import { Check, Loader2, type LucideIcon, X } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { HexgateBrandMark } from "@/components/ui/hexgate-mark";
 import { googleOAuthAvailable, startGoogleSignIn } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
-/** The mark's tone: the brand (dark hexagon tile) or a status badge. */
+/** The mark's tone: the brand (the app icon) or a status badge. */
 type Tone = "brand" | "success" | "error" | "muted";
 
-const MARK: Record<Tone, { box: string; icon: LucideIcon; spin?: boolean }> = {
+type MarkIcon = LucideIcon | typeof HexgateBrandMark;
+
+type Mark = { box: string; icon: MarkIcon; size?: string; spin?: boolean };
+
+const MARK: Record<Tone | "glyph", Mark> = {
+  // The app icon itself: the blue keyhole on its dark tile, in either theme.
   brand: {
-    box: "rounded-xl bg-action text-action-foreground",
-    icon: Hexagon,
+    box: "rounded-xl bg-[#0b0d12] ring-1 ring-white/10",
+    icon: HexgateBrandMark,
+    size: "size-7",
   },
+  // A page's own glyph in place of the brand mark (e.g. the reset lock).
+  glyph: { box: "rounded-xl bg-action text-action-foreground", icon: Check },
   success: { box: "rounded-full bg-success/15 text-success", icon: Check },
   error: { box: "rounded-full bg-deny/10 text-deny", icon: X },
   // The "working…" states: a spinner, so it can't show frozen.
@@ -26,7 +35,7 @@ const MARK: Record<Tone, { box: string; icon: LucideIcon; spin?: boolean }> = {
 };
 
 /**
- * The shared pre-login layout: a centred column with the hexagon brand mark
+ * The shared pre-login layout: a centred column with the keyhole brand mark
  * (or a status badge), a title and optional description, then the page's own
  * content in a card. Every /sign-in, onboarding and invite screen uses it, so
  * they read as one surface.
@@ -54,7 +63,7 @@ export function AuthShell({
   /** A wider column, for a denser card (the OAuth consent). */
   wide?: boolean;
 }) {
-  const mark = MARK[tone];
+  const mark = MARK[icon && tone === "brand" ? "glyph" : tone];
   const Icon = icon ?? mark.icon;
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
@@ -62,7 +71,7 @@ export function AuthShell({
         <div className="mb-6 flex flex-col items-center gap-4 text-center">
           <span className={cn("grid size-11 place-items-center", mark.box)}>
             <Icon
-              className={cn("size-5", mark.spin && "animate-spin")}
+              className={cn(mark.size ?? "size-5", mark.spin && "animate-spin")}
               strokeWidth={2}
             />
           </span>

@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { Lock } from "lucide-react";
 import { render, screen } from "@testing-library/react";
 
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
@@ -50,6 +51,17 @@ describe("AuthShell", () => {
   it("spins the mark glyph in a working state", () => {
     const { container } = render(<AuthShell tone="muted" title="Loading…" />);
     expect(container.querySelector(".animate-spin")).not.toBeNull();
+  });
+
+  it("shows the full-colour app icon as the brand mark", () => {
+    const { container } = render(<AuthShell title="Sign in" />);
+    expect(container.querySelector('[stroke="#3b82f6"]')).not.toBeNull();
+  });
+
+  it("puts a page's own glyph on the neutral tile, not the app icon's", () => {
+    const { container } = render(<AuthShell icon={Lock} title="Reset" />);
+    expect(container.querySelector('[stroke="#3b82f6"]')).toBeNull();
+    expect(container.querySelector(".bg-action")).not.toBeNull();
   });
 
   it("carries where the user was headed across a sign-in ↔ sign-up link", async () => {
