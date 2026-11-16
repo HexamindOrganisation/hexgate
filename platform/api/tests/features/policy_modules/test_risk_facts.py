@@ -13,7 +13,6 @@ from tests.features.policy_modules.test_policy_modules import (
     _dummy_sign,
     _project,
     _put_file,
-    client,  # noqa: F401 — the fixture, used by name
 )
 
 
@@ -208,7 +207,7 @@ async def _register(session_factory, project_id: str, manifest: AgentManifest):
 
 
 async def test_api_policy_risk_facts_happy_path(
-    client,  # noqa: F811 — the imported fixture
+    client,
     session_factory,
 ):
     pid = _project(client)
@@ -233,7 +232,7 @@ async def test_api_policy_risk_facts_happy_path(
     assert typo.status_code == 404
 
 
-def test_when_no_agent_is_named_then_the_generic_view_answers(client):  # noqa: F811
+def test_when_no_agent_is_named_then_the_generic_view_answers(client):
     pid = _project(client)
     entry = "tools: { purge_cache: { mode: allow } }\n"
     assert _put_file(client, pid, "policy.yaml", entry).status_code == 200
@@ -244,7 +243,7 @@ def test_when_no_agent_is_named_then_the_generic_view_answers(client):  # noqa: 
 
 
 async def test_when_the_project_has_no_policy_store_then_risk_facts_refuses(
-    client,  # noqa: F811 — the imported fixture
+    client,
     session_factory,
 ):
     """Its agents enforce their own policy_yaml, which this route doesn't read,
