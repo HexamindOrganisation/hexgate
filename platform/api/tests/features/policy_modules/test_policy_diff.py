@@ -42,7 +42,7 @@ def test_diff_files_happy_path() -> None:
     assert by_tool["a"]["after"]["mode"] == "approval_required"
     assert by_tool["b"]["after"] is None  # no longer reachable
     assert by_tool["c"]["before"] is None
-    assert by_tool["c"]["constraints_added"] == ["(args.n <= 5)"]  # SDK-normalized
+    assert by_tool["c"]["constraints_added"] == ["args.n <= 5"]
     assert out["agents_affected"] == ["bot"]
     assert out["composes"] == {"before": True, "after": True}
     assert out["agent_changes"] == []
@@ -66,6 +66,17 @@ def test_when_shared_boundary_tightens_then_both_agents_change() -> None:
         assert (change["role"], change["tool"]) == ("support", "refund")
         assert change["constraints_added"] == ["args.amount <= 50"]
         assert change["constraints_removed"] == []
+
+
+def test_when_constraint_is_added_to_constrained_grant_then_only_it_is_added() -> None:
+    saved = _entry("        tools: { c: { mode: allow, constraint: 'args.n <= 5' } }\n")
+    drafted = _entry(
+        "        tools:\n"
+        "          c: { mode: allow, constraint: ['args.n <= 5', 'args.m > 1'] }\n"
+    )
+    [change] = diff_files(saved, drafted)["changes"]
+    assert change["constraints_added"] == ["args.m > 1"]
+    assert change["constraints_removed"] == []
 
 
 def test_when_two_files_drafted_then_both_apply() -> None:

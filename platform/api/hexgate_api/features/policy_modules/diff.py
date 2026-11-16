@@ -141,9 +141,17 @@ def _wire_keys(before: dict, after: dict) -> dict[str, str]:
     return wire
 
 
+def _conjuncts(grant: dict | None) -> list[str]:
+    """A grant's constraints as single conditions. The resolver joins a grant's
+    list into one ``(a) and (b)`` string, so adding ``b`` to a grant holding
+    ``a`` would otherwise read as ``a`` removed."""
+    from hexgate.security.constraints import conjuncts
+
+    return [c for s in (grant["constraints"] if grant else []) for c in conjuncts(s)]
+
+
 def _change(agent: str, role: str, tool: str, before, after) -> dict:
-    was = before["constraints"] if before else []
-    now = after["constraints"] if after else []
+    was, now = _conjuncts(before), _conjuncts(after)
     return {
         "agent": agent,
         "role": role,
