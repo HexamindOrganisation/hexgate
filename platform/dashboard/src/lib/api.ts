@@ -249,6 +249,12 @@ export interface GuardDefinition {
   plugin_id: string | null;
 }
 
+/** A sub-agent the agent reaches: agent-as-tool or handoff. */
+export interface SubagentRef {
+  name: string;
+  via: "tool" | "handoff";
+}
+
 /**
  * Registered manifest body, mirroring AgentManifest in platform/api/schemas.py.
  */
@@ -259,6 +265,8 @@ export interface AgentManifest {
   model: string | null;
   system_prompt: string | null;
   tools: ToolDefinition[];
+  /** Agents it reaches; null when none were visible, and for older manifests. */
+  subagents?: SubagentRef[] | null;
   /** Null for frameworks with no skill concept, and for pre-skills manifests. */
   skills: SkillDefinition[] | null;
   /** Null when the agent declares no guards, and for pre-guards manifests. */
