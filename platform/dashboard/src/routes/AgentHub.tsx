@@ -76,9 +76,11 @@ function resourceCount(agent: AgentManifestView): number | null {
  * graph, and its own 24h call count (null until the summary lands). */
 type SubAgentRow = SubagentRef & {
   edge: PolicyGraphEdge | null;
-  /** No edge names it: denied once the policy declares any reach (closed
-   * world, R-AGENT-002), else never checked. Null without a graph. */
-  unnamed: "denied" | "ungated" | null;
+  /** No edge names it: denied once the policy declares reach that gates its
+   * via (closed world, R-AGENT-002), else never checked as a reach. An
+   * agent-as-tool is gated only by tool reach; without any, it's checked
+   * under its tool name ("as-tool"). Null without a graph. */
+  unnamed: "denied" | "ungated" | "as-tool" | null;
   /** Registered in this project, so its hub exists. */
   registered: boolean;
   calls: number | null;
@@ -159,12 +161,21 @@ export function AgentHub() {
     const unique = [
       ...new Map(refs.map((r) => [`${r.name}:${r.via}`, r])).values(),
     ];
+    // The SDK gates an as-tool call as a reach only when the policy declares
+    // tool reach; a handoff engages on any reach.
+    const toolReach =
+      !!edges && [...edges.keys()].some((k) => k.endsWith(":tool"));
+    const unnamedOf = (via: SubagentRef["via"]): SubAgentRow["unnamed"] => {
+      if (!edges) return null;
+      if (via === "tool") return toolReach ? "denied" : "as-tool";
+      return edges.size > 0 ? "denied" : "ungated";
+    };
     return unique.map((r) => {
       const edge = edges?.get(`${r.name}:${r.via}`) ?? null;
       return {
         ...r,
         edge,
-        unnamed: !edges || edge ? null : edges.size > 0 ? "denied" : "ungated",
+        unnamed: edge ? null : unnamedOf(r.via),
         registered: names.has(r.name),
         calls: activityOf(r.name)?.all ?? null,
       };
@@ -307,6 +318,9 @@ export function AgentResourcesTab() {
           // agentSubgraph is empty (not null) when the agent isn't in the graph.
           inGraph={!!ctx.subgraph && ctx.subgraph.nodes.length > 0}
           callsError={ctx.activityError}
+          graphLoading={ctx.graphLoading}
+          graphError={ctx.graphError}
+          callsStale={ctx.activityStale}
         />
       }
     />
@@ -326,6 +340,9 @@ function ReachesSection({
   unregistered,
   inGraph,
   callsError,
+  graphLoading,
+  graphError,
+  callsStale,
 }: {
   agent: string;
   subAgents: SubAgentRow[] | null;
@@ -333,7 +350,16 @@ function ReachesSection({
   /** The project's policy graph has this agent, so rows carry verdicts. */
   inGraph: boolean;
   callsError: boolean;
+  graphLoading: boolean;
+  graphError: GraphError | null;
+  /** A later 24h poll failed: the call counts are the last loaded. */
+  callsStale: boolean;
 }) {
+  const notes = [
+    graphLoading && "Loading verdicts…",
+    graphError && reachGraphNote(graphError, inGraph),
+    callsStale && "Couldn't refresh; call counts are the last loaded.",
+  ].filter(Boolean);
   return (
     <section className="rounded-xl border border-border bg-card">
       <div className="px-5 py-4 border-b border-border flex items-center gap-2">
@@ -353,6 +379,11 @@ function ReachesSection({
           </Link>
         )}
       </div>
+      {notes.length > 0 && subAgents && subAgents.length > 0 && (
+        <p className="border-b border-border px-5 py-2 text-meta text-muted-foreground">
+          {notes.join(" ")}
+        </p>
+      )}
       {subAgents === null || subAgents.length === 0 ? (
         <p className="px-5 py-4 text-xs text-muted-foreground">
           {unregistered
@@ -372,6 +403,19 @@ function ReachesSection({
       )}
     </section>
   );
+}
+
+/** Why the reach verdicts are missing or may be stale. */
+function reachGraphNote(error: GraphError, cached: boolean): string {
+  if (cached)
+    return error === "compose"
+      ? "The policy modules don't compose any more; verdicts are from the last graph loaded."
+      : "Couldn't refresh the graph; verdicts are from the last one loaded.";
+  if (error === "compose")
+    return "The policy modules don't compose, so there are no verdicts: fix the lints in Policies.";
+  if (error === "gone")
+    return "You don't have access to this project's policy any more.";
+  return "Couldn't load the graph, so there are no verdicts.";
 }
 
 function SubAgentItem({
@@ -412,6 +456,14 @@ function SubAgentItem({
           title="No reach rule names it, and reach is closed-world once a policy declares any — so it's denied."
         >
           <VerdictTag verdict="deny" />
+        </span>
+      )}
+      {sub.unnamed === "as-tool" && (
+        <span
+          className="ml-auto text-[11px] text-muted-foreground"
+          title="Its policy declares no agent-as-tool reach, so this call is checked under its tool name."
+        >
+          checked as a tool
         </span>
       )}
       {sub.unnamed === "ungated" && (

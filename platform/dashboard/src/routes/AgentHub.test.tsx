@@ -572,12 +572,51 @@ describe("AgentHub", () => {
     expect(screen.queryByTitle("args.amount <= 200")).not.toBeInTheDocument();
   });
 
-  it("marks a sub-agent as not gated when its policy declares no reach", async () => {
+  it("marks a handoff as not gated when its policy declares no reach", async () => {
     // The manifest records billing_bot, but the graph has no reach edges.
-    renderHub("support_bot", { tab: "/resources", subAgent: "tool" });
+    renderHub("support_bot", { tab: "/resources", subAgent: "handoff" });
     expect(await screen.findByText("not gated")).toBeInTheDocument();
     // Unregistered in the project, so no dead-end link to its hub.
     expect(screen.queryByRole("link", { name: "billing_bot" })).toBeNull();
+  });
+
+  it("checks an agent-as-tool by its tool name without tool reach", async () => {
+    // The graph grants only a handoff reach: the as-tool call isn't a reach.
+    stubFetch("admin", false, false, false, false, "default", "tool");
+    answer(`/v1/projects/${PROJECT}/policy/graph`, {
+      roles: [],
+      nodes: [
+        { id: "agent:support_bot", kind: "agent", label: "support_bot" },
+        { id: "agent:triage_bot", kind: "agent", label: "triage_bot" },
+      ],
+      edges: [
+        {
+          source: "agent:support_bot",
+          target: "agent:triage_bot",
+          kind: "reach",
+          via: "handoff",
+          verdict: "allow",
+          constraints: [],
+          roles: [],
+        },
+      ],
+    });
+    renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
+      initialRoute: "/agents/support_bot/resources",
+    });
+    expect(await screen.findByText("checked as a tool")).toBeInTheDocument();
+    expect(screen.queryByTitle(/closed-world/)).toBeNull();
+  });
+
+  it("notes when the reach verdicts can't load", async () => {
+    stubFetch("admin", false, false, false, false, "default", "tool");
+    answer(`/v1/projects/${PROJECT}/policy/graph`, { detail: "x" }, 422);
+    renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
+      initialRoute: "/agents/support_bot/resources",
+    });
+    expect(
+      await screen.findByText(/don't compose, so there are no verdicts/),
+    ).toBeInTheDocument();
   });
 
   it("marks an unnamed sub-agent denied once the policy declares reach", async () => {
