@@ -13,6 +13,7 @@ scenes: demo/FILMING.md.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -35,6 +36,18 @@ def _node_deps() -> None:
             subprocess.run([*platform.pnpm(), "run", "browsers"], cwd=FILM, env=env, check=True,
                            capture_output=True)
         stamp.write_text("ok\n")
+
+
+FONTS = ["/System/Library/Fonts/SFNS.ttf", "/System/Library/Fonts/SFNSMono.ttf", "/System/Library/Fonts/Menlo.ttc"]
+
+
+def _preflight() -> None:
+    """What filming needs besides the kit's own tools: fail before a take, not after."""
+    missing = [t for t in ("ffmpeg", "ffprobe") if not shutil.which(t)]
+    if missing:
+        raise SystemExit(f"filming needs {' and '.join(missing)} (macOS: brew install ffmpeg)")
+    if not all(Path(f).exists() for f in FONTS):
+        raise SystemExit("the subtitles use macOS system fonts (SF, Menlo): film on macOS")
 
 
 def _script(demo: demos.Demo, sid: str) -> Path | None:
@@ -90,7 +103,10 @@ def run(demo: demos.Demo, ids: list[str], out: str | None, raw: str | None = Non
     for sid in todo:
         if sid not in scenes:
             raise SystemExit(f"no scene {sid!r}; scenes: {', '.join(scenes)}")
-    out_dir = Path(out).expanduser().resolve() if out else RUN / "film" / demo.key
+    caller = Path(os.environ.get("DEMO_CALLER_CWD", os.getcwd()))
+    out_dir = (caller / Path(out).expanduser()).resolve() if out else RUN / "film" / demo.key
+    raw = str((caller / Path(raw).expanduser()).resolve()) if raw else None
+    _preflight()
     out_dir.mkdir(parents=True, exist_ok=True)
     cut = FILM / demo.key / "cut.json"
 

@@ -145,8 +145,9 @@ def dashboard_dist() -> Path:
     commit when the working tree doesn't build (someone's half-done edit)."""
     src = REPO / "platform" / "dashboard"
     stamp = _tree_stamp("platform/dashboard")
-    for candidate in (src / "dist", RUN / "dashboard-head" / "dist"):
-        if _stamp_ok("dashboard", stamp, candidate / "index.html"):
+    # Each build has its own stamp: a fallback must not vouch for an old src/dist.
+    for name, candidate in (("dashboard", src / "dist"), ("dashboard-head", RUN / "dashboard-head" / "dist")):
+        if _stamp_ok(name, stamp, candidate / "index.html"):
             return candidate
     cmd = pnpm()
     _run(
@@ -178,7 +179,7 @@ def dashboard_dist() -> Path:
     _run([*cmd, "build"], built, "building the dashboard (last commit)")
     final = head / "dist"
     shutil.move(str(built / "dist"), final)
-    _set_stamp("dashboard", stamp)
+    _set_stamp("dashboard-head", stamp)
     return final
 
 

@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -40,6 +40,11 @@ USERS_FILE = Path(os.environ.get("SHIPYARD_USERS", APP_DIR / "users.yaml"))
 # .env (written by the demo kit) holds the OpenAI and hexgate keys. It never
 # overrides what the shell set.
 load_dotenv(APP_DIR / ".env")
+# Except the hexgate settings: the kit writes this project's key and URL there,
+# and a HEXGATE_API_KEY exported for another project must not win.
+for _k, _v in dotenv_values(APP_DIR / ".env").items():
+    if _k.startswith("HEXGATE_") and _v:
+        os.environ[_k] = _v
 os.environ.setdefault("OPENAI_AGENTS_DISABLE_TRACING", "1")
 try:  # hexgate's tracing uses Langfuse; without Langfuse keys it only warns.
     import langfuse.logger  # noqa: F401  (creates the logger; set its level after)

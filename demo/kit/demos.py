@@ -201,6 +201,10 @@ def app_env(scripted: bool) -> dict[str, str]:
 
 def start_app(demo: Demo, scripted: bool) -> None:
     procs.stop(demo.proc)
+    if procs.port_busy(demo.app_port):
+        owner = procs.port_owner(demo.app_port)
+        raise SystemExit(f"port {demo.app_port} is taken by something else ({owner or 'unknown process'}); "
+                         f"free it and run again")
     platform._run(
         ["uv", "sync", "--python", "3.13"],
         demo.dir,

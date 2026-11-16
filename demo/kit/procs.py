@@ -34,6 +34,12 @@ def _write(pids: dict[str, int]) -> None:
 
 def alive(pid: int) -> bool:
     try:
+        # Reap it if it's our child and has exited: a zombie still answers kill(0).
+        if os.waitpid(pid, os.WNOHANG)[0] == pid:
+            return False
+    except ChildProcessError:
+        pass  # not our child (started by an earlier run)
+    try:
         os.kill(pid, 0)
         return True
     except (ProcessLookupError, PermissionError):
