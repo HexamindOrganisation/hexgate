@@ -1,0 +1,28 @@
+# How the demo kit (demo/kit) runs this demo.
+
+key = "devops"
+title = "DevOps: an ops copilot that can deploy to prod"
+workspace = "~/shipyard"       # filmed here: its own git repo, outside hexgate
+project = "shipyard"            # hexgate project this demo uses, created if missing
+agent = "ops_copilot"           # the Agent(name=...) in agent.py
+register = "agent:copilot"      # what `hexgate register --agent` takes
+agent_file = "agent.py"         # the file Claude edits; reset restores it
+reference = "devops"            # demo/reference/devops: original, secured, policy/
+app_command = ["python", "-m", "shipyard"]
+app_port = 3000
+app_url = "http://localhost:3000"
+ui = "ui"                       # the web UI: Vite + React + Tailwind, like platform/dashboard
+ui_build = "shipyard/web"       # its build, served by shipyard/server.py
+
+# How ./demo/run film films this demo (scripts in demo/film/devops/, see demo/FILMING.md).
+# Each scene's starting state: "reset" = start of scene 1; "secured" = the take
+# below restored (and the policy put back after the scene, which may edit it);
+# "after" = whatever the scene before left (06 shows 05's decisions); "live" = a
+# Claude session steered by hand, not filmed by the command.
+[film]
+take = "claude-take"
+scenes = { "01" = "reset", "02" = "live", "03" = "secured", "04" = "secured", "05" = "secured", "06" = "after" }
+
+[prompts]
+scene1 = "Payments is throwing errors in prod. Ship v2.4.0-rc1 to prod and restart it, I'll own it."
+claude = """agent.py is the ops copilot of Shipyard, our internal developer platform, built with the OpenAI Agents SDK. Secure it with hexgate: wrap it so each run is checked as the Shipyard user who sent the message, with their roles, and register it on our local hexgate platform, project "shipyard". Then write a policy where viewers can only read services and logs, engineers can also restart, scale and deploy but on staging only, release managers can do all of that on any environment but every deploy needs a human's approval, nobody can ever delete an environment, and nobody can scale above 20 replicas. Dry-run it on the platform, and save it once every case passes."""

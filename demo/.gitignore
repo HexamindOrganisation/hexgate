@@ -1,0 +1,11 @@
+bank/.env
+bank/.venv/
+__pycache__/
+.run/
+.tools/
+.env
+apps/*/.env
+apps/*/.venv/
+apps/*/ui/node_modules/
+apps/devops/shipyard/web/
+film/node_modules/
