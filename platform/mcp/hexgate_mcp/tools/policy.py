@@ -22,6 +22,13 @@ NOT_IN_FORCE = (
 )
 
 
+# Why an undeclared agent is refused rather than answered.
+UNDECLARED = (
+    'an agent the policy does not declare runs under the generic "*" view, '
+    "which a call without `agent` returns"
+)
+
+
 class PolicyDraft(BaseModel):
     """An unsaved policy file, applied over the stored file of the same name
     or added beside the stored files."""
@@ -89,19 +96,14 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
     async def refuse_unknown_agent(project_id: str, agent: str | None) -> None:
         """An agent the policy does not declare runs under the generic `"*"`
         view, and the API answers it with that view under the agent's name, so
-        a typo reads as a real agent's policy. The graph lists every declared
-        agent and any agent a grant reaches; anything else is refused with
-        what it would have meant."""
+        a typo reads as a real agent's policy. The graph lists the declared
+        agents (an agent a grant only reaches is not one); anything else is
+        refused with what it would have meant."""
         if agent is None or agent == "*":
             return
         graph = await read(project_id, "/policy/graph")
-        known = sorted(n["label"] for n in graph["nodes"] if n["kind"] == "agent")
-        if agent not in known:
-            raise ToolError(
-                f"agent {agent!r} is not declared in the policy (declared: "
-                f"{known}); an agent the policy does not declare runs under the "
-                'generic "*" view, which a call without `agent` returns'
-            )
+        if agent not in graph["declared_agents"]:
+            raise _undeclared(agent, graph["declared_agents"])
 
     # Unstructured, like every tool here: a `str` return otherwise goes out a
     # second time as structuredContent, and the result cap would bound one copy.
@@ -220,15 +222,9 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         generic view every agent starts from), against the resolved policy;
         `attributes` are the caller's ctx.* values. Pass `drafts`, each a
         whole file by `name`, to evaluate against them as if they were saved.
-        With a `policy.yaml` draft, `agent` is not checked against the draft's
-        own agents: an agent it does not declare is evaluated under the
-        generic view.
         A file nothing imports is not read: draft a new file
         together with the `policy.yaml` that imports it."""
         await refuse_without_store(project_id, drafts)
-        # A draft policy.yaml may declare an agent the saved graph lacks.
-        if not _drafts_entry(drafts):
-            await refuse_unknown_agent(project_id, agent)
         body = {
             "role": role,
             "tool": tool,
@@ -239,7 +235,18 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         }
         # Unset: left out, so the API applies its own defaults.
         body = {k: v for k, v in body.items() if v is not None}
-        return result_text(await post(project_id, "/policy/test", body))
+        verdict = await post(project_id, "/policy/test", body)
+        # Against the policy the call ran on, a draft policy.yaml included.
+        if not verdict["agent_declared"]:
+            raise _undeclared(agent, verdict["declared_agents"])
+        return result_text(verdict)
+
+
+def _undeclared(agent: str | None, declared: list[str]) -> ToolError:
+    return ToolError(
+        f"agent {agent!r} is not declared in the policy (declared: {declared}); "
+        f"{UNDECLARED}"
+    )
 
 
 def _has_entry(files: list[dict[str, Any]]) -> bool:
