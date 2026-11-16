@@ -480,6 +480,7 @@ def coverage_agent(name: str, **extra) -> dict:
         "agent": name,
         "has_policy": True,
         "has_manifest": True,
+        "policy_error": False,
         "default_policy": "deny",
         "reach_gated": True,
         "uncovered_tools": [
@@ -502,10 +503,20 @@ def test_policy_coverage_happy_path(token):
     assert [sent(r) for r in api_requests()] == [("GET", "/policy/coverage", {})]
 
 
-def test_when_an_agent_policy_does_not_load_then_policy_coverage_carries_the_422(
+def test_when_agent_is_given_then_policy_coverage_asks_for_that_agent(token):
+    mock_api(**{"/policy/coverage": {"agents": [coverage_agent("bot")]}})
+
+    call(token, "policy_coverage", agent="bot")
+
+    assert [sent(r) for r in api_requests()] == [
+        ("GET", "/policy/coverage", {"agent": "bot"})
+    ]
+
+
+def test_when_project_policy_does_not_compose_then_policy_coverage_carries_the_422(
     token,
 ):
-    detail = "the stored policy of agent 'bot' does not load"
+    detail = "cannot import nope.yaml"
     mock_api()
     respx.get(f"{API_URL}{BASE}/policy/coverage").respond(422, json={"detail": detail})
 
