@@ -504,6 +504,24 @@ describe("AgentHub", () => {
     expect(screen.getAllByText("not in the policy")).toHaveLength(1);
   });
 
+  it("shows a classic agent's own policy file, not a link to /policies", async () => {
+    stubFetch("admin");
+    answer(`/v1/projects/${PROJECT}/policy-files`, []);
+    answer(`/v1/projects/${PROJECT}/agents/support_bot`, {
+      name: "support_bot",
+      policy_yaml: "tools:\n  refund: allow\n",
+    });
+    renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
+      initialRoute: "/agents/support_bot/policies",
+    });
+    expect(await screen.findByText(/refund: allow/)).toBeInTheDocument();
+    expect(screen.queryByText(/Open in Policies/)).toBeNull();
+    expect(screen.getByRole("link", { name: "Policy" })).toHaveAttribute(
+      "href",
+      "/agents/support_bot/policies",
+    );
+  });
+
   it("says the policy files failed, not that the project is classic", async () => {
     answer(`/v1/projects/${PROJECT}/policy-files`, "boom", 500);
     renderHub("support_bot", { tab: "/policies" });

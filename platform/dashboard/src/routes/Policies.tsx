@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { X } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 
 import { ApiError, type PolicyFileDraft } from "@/lib/api";
@@ -185,8 +186,12 @@ export function PoliciesPage() {
   );
 
   // Which executing agent's column the Resolved tab + preview inspect. "*" is
-  // the generic view; a named agent shows its own composed policy.
-  const [inspectAgent, setInspectAgent] = useState<string>("*");
+  // the generic view; a named agent shows its own composed policy. A hub link
+  // opens on its agent (`?agent=`).
+  const [params] = useSearchParams();
+  const [inspectAgent, setInspectAgent] = useState<string>(
+    () => params.get("agent") || "*",
+  );
 
   // A project switch must not carry another project's tabs/edits over — else a
   // Save could write project A's buffer into B. Reset all local editor state via
@@ -198,7 +203,8 @@ export function PoliciesPage() {
     setSelection(null);
     setOpenTabs([]);
     setDrafts({});
-    setInspectAgent("*");
+    // The first project to resolve keeps the hub link's agent.
+    setInspectAgent(scopedProject == null ? params.get("agent") || "*" : "*");
     setDraft(null);
     setDraftParses(true);
   }

@@ -149,7 +149,11 @@ export function AgentHub() {
   return (
     <div className="mx-auto max-w-[960px] space-y-4">
       <Breadcrumb name={agent.name} />
-      <AgentHeader agent={agent} canManageBans={canManageBans} />
+      <AgentHeader
+        agent={agent}
+        canManageBans={canManageBans}
+        classic={!!policyFiles.data && !modular}
+      />
       <HubTabs resources={resourceCount(agent)} />
       <Outlet
         context={
@@ -392,6 +396,34 @@ function Placeholder({ children }: { children: React.ReactNode }) {
 
 /** Policies: the engine-resolved roles x tools grid for this agent, plus the
  * project's policy files. Read-only here: editing stays on the Policies page. */
+/** A classic agent's own policy file, read-only. */
+function ClassicPolicy({ agent }: { agent: string }) {
+  const { projectId } = useProjectScoped();
+  const q = useQuery({
+    queryKey: ["agent", projectId, agent],
+    queryFn: () => api.getAgent(agent, projectId as string),
+    enabled: !!projectId,
+  });
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="border-b border-border px-4 py-3 text-meta text-muted-foreground">
+        Classic project:{" "}
+        <span className="font-mono text-foreground">{agent}</span> enforces its
+        own policy file, with no composed roles × tools grid.
+      </div>
+      {q.data ? (
+        <pre className="max-h-[440px] overflow-auto px-4 py-3 font-mono text-[12px] text-foreground">
+          {q.data.policy_yaml.trim() || "# empty policy"}
+        </pre>
+      ) : (
+        <p className="px-4 py-6 text-center text-sm text-muted-foreground">
+          {q.isError ? "Couldn't load its policy file." : "Loading policy…"}
+        </p>
+      )}
+    </Card>
+  );
+}
+
 function AgentPolicies({
   agent,
   matrix,
@@ -422,21 +454,9 @@ function AgentPolicies({
   }
 
   // Classic projects don't compose a cross-role grid: each agent enforces its
-  // own policy. Point at the editor rather than show an empty grid.
-  if (kind === "classic") {
-    return (
-      <Card className="grid place-items-center gap-2 p-10 text-center text-sm text-muted-foreground">
-        <span>
-          Classic project —{" "}
-          <span className="font-mono text-foreground">{agent.name}</span>{" "}
-          enforces its own policy, with no composed roles × tools grid.
-        </span>
-        <Link to="/policies" className="text-primary hover:underline">
-          Open in Policies →
-        </Link>
-      </Card>
-    );
-  }
+  // own policy file, which /policies doesn't show (its only action, adding
+  // policy.yaml, flips the project to compose). Show that file here.
+  if (kind === "classic") return <ClassicPolicy agent={agent.name} />;
 
   return (
     <Card className="overflow-hidden p-0">
@@ -556,9 +576,12 @@ function AgentDecisions({ agent }: { agent: AgentManifestView }) {
 function AgentHeader({
   agent,
   canManageBans,
+  classic,
 }: {
   agent: AgentManifestView;
   canManageBans: boolean;
+  /** Its policy is its own file, not in /policies: link to the hub's tab. */
+  classic: boolean;
 }) {
   return (
     <Card className="p-5">
@@ -600,9 +623,15 @@ function AgentHeader({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button asChild variant="outline" size="sm" className="gap-1.5">
-            <Link to={`/policies?agent=${encodeURIComponent(agent.name)}`}>
+            <Link
+              to={
+                classic
+                  ? `/agents/${encodeURIComponent(agent.name)}/policies`
+                  : `/policies?agent=${encodeURIComponent(agent.name)}`
+              }
+            >
               <ShieldCheck className="size-3.5" />
-              Edit policy
+              {classic ? "Policy" : "Edit policy"}
             </Link>
           </Button>
           <Button asChild variant="outline" size="sm" className="gap-1.5">
