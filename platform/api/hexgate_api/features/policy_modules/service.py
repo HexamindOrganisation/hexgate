@@ -1218,10 +1218,10 @@ async def risk_facts(
     ``agent`` alone, else every declared or registered agent, each against its
     latest manifest; the generic ``"*"`` view only when the project has none.
     ``agents_without_manifest`` lists the agents read without one, whose facts
-    can only come from tool names. Raises :class:`NoPolicyStoreError` when
-    the project isn't modular, the SDK's compose errors if it doesn't resolve,
-    and :class:`UnknownAgentError` for an ``agent`` neither declared nor
-    registered."""
+    can only come from tool names and HTTP egress. Raises
+    :class:`NoPolicyStoreError` when the project isn't modular, the SDK's
+    compose errors if it doesn't resolve, and :class:`UnknownAgentError` for
+    an ``agent`` neither declared nor registered."""
     from hexgate.security import DEFAULT_ROLE_NAME
 
     from hexgate_api.features.agents.service import latest_manifests
