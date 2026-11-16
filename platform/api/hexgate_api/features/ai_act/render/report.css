@@ -1,9 +1,9 @@
 /* AI Act evidence report — print stylesheet.
  *
- * The design is the mockup's: a flowing A4 document, restrained rules rather
- * than boxed grids, a mono face for anything an auditor might have to type
- * back (ids, hashes, tool names, arguments), and small-caps article
- * references beside each section heading.
+ * The design: a flowing A4 document, restrained rules rather than boxed
+ * grids, a mono face for anything an auditor might have to type back (ids,
+ * hashes, tool names, arguments), and small-caps article references beside
+ * each section heading.
  *
  * Two rules everything else follows from:
  *

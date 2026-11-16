@@ -7,7 +7,13 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, api } from "./api";
+import {
+  ApiError,
+  UnauthenticatedError,
+  api,
+  authRedirect,
+  oauthApi,
+} from "./api";
 
 function jsonResponse(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
@@ -169,5 +175,27 @@ describe("AI Act downloads", () => {
     expect(err.detail).toMatchObject({
       detail: { renderer: "ValueError: bad length" },
     });
+  });
+});
+
+describe("send() on a 401", () => {
+  it("leaves the consent calls to sign the user in themselves", async () => {
+    const toSignIn = vi
+      .spyOn(authRedirect, "toSignIn")
+      .mockImplementation(() => {});
+    vi.spyOn(window, "fetch").mockImplementation(async () =>
+      jsonResponse({}, 401),
+    );
+
+    await expect(oauthApi.consentInfo("?state=s")).rejects.toBeInstanceOf(
+      UnauthenticatedError,
+    );
+    await expect(oauthApi.consent("?state=s", ["p1"])).rejects.toBeInstanceOf(
+      UnauthenticatedError,
+    );
+    expect(toSignIn).not.toHaveBeenCalled();
+
+    await api.listBans("p1").catch(() => undefined);
+    expect(toSignIn).toHaveBeenCalledOnce();
   });
 });

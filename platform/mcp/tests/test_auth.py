@@ -39,6 +39,25 @@ async def test_verify_token_happy_path(verifier, key):
     assert access.claims["iss"] == ISSUER
 
 
+@respx.mock
+async def test_when_aud_also_names_the_api_then_token_accepted(verifier, key):
+    respx.get(JWKS_URL).respond(json=jwks(key))
+
+    access = await verifier.verify_token(key.mint(aud=[RESOURCE, ISSUER]))
+
+    assert access is not None
+    assert access.resource == RESOURCE
+
+
+@respx.mock
+async def test_when_aud_list_lacks_our_resource_then_token_refused(verifier, key):
+    respx.get(JWKS_URL).respond(json=jwks(key))
+
+    access = await verifier.verify_token(key.mint(aud=[ISSUER, "https://x.example"]))
+
+    assert access is None
+
+
 @pytest.mark.parametrize(
     "overrides",
     [

@@ -545,7 +545,6 @@ def test_pydantic_ai_manifest_static_prompts():
 class TestSkillDefinitions:
     """The manifest's skill contract.
 
-    Nothing populates ``skills`` yet — A2 (ADK) and D3 (deepagents) do that.
     These tests pin the shape so the producers and the platform mirror agree.
     """
 
@@ -687,7 +686,7 @@ class TestSkillDefinitions:
         assert [skill["name"] for skill in dumped["skills"]] == ["pdf"]
 
 
-# --- sub-agent refs (PR 3) -------------------------------------------------
+# --- sub-agent refs --------------------------------------------------------
 
 
 def _graph(name: str):

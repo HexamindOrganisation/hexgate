@@ -16,11 +16,12 @@ names *what* and *where*, never the secret itself.
 
 from __future__ import annotations
 
-import hashlib
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+
+from hexgate.utils.fingerprint import fingerprint
 
 # ---------------------------------------------------------------------------
 # High-confidence provider patterns
@@ -74,10 +75,6 @@ class SecretHit:
     fingerprint: str
 
 
-def _fingerprint(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()[:12]
-
-
 def _spans(s: str) -> list[tuple[int, int, str]]:
     """Return non-overlapping ``(start, end, category)`` provider-pattern matches
     in ``s``, in list order — a match from an earlier (more specific) pattern
@@ -127,7 +124,7 @@ def scan_secrets(value: Any, *, _path: str = "") -> list[SecretHit]:
     hits: list[SecretHit] = []
     if isinstance(value, str):
         for start, end, category in _spans(value):
-            hits.append(SecretHit(category, _path, _fingerprint(value[start:end])))
+            hits.append(SecretHit(category, _path, fingerprint(value[start:end])))
     elif isinstance(value, Mapping):
         for key, sub in value.items():
             key_str = str(key)
@@ -135,7 +132,7 @@ def scan_secrets(value: Any, *, _path: str = "") -> list[SecretHit]:
             for start, end, category in _spans(key_str):
                 hits.append(
                     SecretHit(
-                        category, _join(_path, seg), _fingerprint(key_str[start:end])
+                        category, _join(_path, seg), fingerprint(key_str[start:end])
                     )
                 )
             hits.extend(scan_secrets(sub, _path=_join(_path, seg)))
@@ -165,7 +162,7 @@ def redact_secrets(value: Any, *, _path: str = "") -> tuple[Any, list[SecretHit]
     if isinstance(value, str):
         redacted, spans = _redact_str(value)
         hits = [
-            SecretHit(cat, _path, _fingerprint(value[start:end]))
+            SecretHit(cat, _path, fingerprint(value[start:end]))
             for start, end, cat in spans
         ]
         return redacted, hits
@@ -181,7 +178,7 @@ def redact_secrets(value: Any, *, _path: str = "") -> tuple[Any, list[SecretHit]
             out_key = new_key if key_spans else key
             for start, end, cat in key_spans:
                 hits.append(
-                    SecretHit(cat, _join(_path, seg), _fingerprint(key_str[start:end]))
+                    SecretHit(cat, _join(_path, seg), fingerprint(key_str[start:end]))
                 )
             new_sub, sub_hits = redact_secrets(sub, _path=_join(_path, seg))
             out[out_key] = new_sub

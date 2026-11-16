@@ -28,12 +28,14 @@ from hexgate.security.usage_inputs import NO_USAGE, UsageInputs
 from hexgate.security.usage_source import (
     OnUnavailable,
     PlatformUsageSource,
+    ScopeKindSpec,
     UsageRefreshSettings,
     UsageState,
 )
 from hexgate.tracing import _senders
 
 _AGENT = "billing"
+_USER_ID = "alice"
 _SCOPE = UsageScope.agent(_AGENT)
 _START = 1_000_000.0
 _HOUR = 3_600.0
@@ -301,8 +303,10 @@ class _FakeFetcher:
     def __init__(self, values: Mapping[str, int] | None = None) -> None:
         self.values = dict(values or {})
         self.error: Exception | None = None
+        self.calls: list[str] = []
 
     def get_agent_usage(self, name: str, paths: Sequence[str]) -> Mapping[str, Any]:
+        self.calls.append(name)
         if self.error is not None:
             raise self.error
         return {
@@ -327,11 +331,18 @@ class _Platform:
     def __init__(self, values: Mapping[str, int] | None = None) -> None:
         self.clock = _FakeClock()
         self.fetcher = _FakeFetcher(values)
+        self.user_fetcher = _FakeFetcher(values)
         self.ledgers = _ledgers(self.clock)
         self.source = PlatformUsageSource(
-            {UsageScopeKind.AGENT: self.fetcher.get_agent_usage},
+            {
+                UsageScopeKind.AGENT: ScopeKindSpec(
+                    self.fetcher.get_agent_usage, UsageRefreshSettings()
+                ),
+                UsageScopeKind.USER: ScopeKindSpec(
+                    self.user_fetcher.get_agent_usage, UsageRefreshSettings()
+                ),
+            },
             _InlineExecutor(),
-            UsageRefreshSettings(),
             self.clock,
         )
 
@@ -344,8 +355,7 @@ class _Platform:
         )
 
     def boundary(self, enforcer: PolicyEnforcer) -> None:
-        usage = enforcer.usage_refresh()
-        assert usage is not None
+        (usage,) = enforcer.usage_refreshes(None)
         usage.run()
 
 
@@ -385,8 +395,8 @@ def test_the_platform_term_is_counted() -> None:
 
 
 def test_an_unreachable_platform_reads_ledger_only_and_admits() -> None:
-    """G3: a platform outage never denies by default. A PolicySet has no fail-mode
-    method until 6b, so this also pins the enforcer's allow fallback."""
+    """A platform outage never denies by default: the policy sets no
+    ``on_unavailable``, so it reads as allow."""
     platform = _Platform()
     platform.fetcher.error = RuntimeError("platform down")
     enforcer = platform.enforcer(_admission_cap(2))
@@ -399,7 +409,7 @@ def test_an_unreachable_platform_reads_ledger_only_and_admits() -> None:
 
 
 def test_a_path_added_by_a_policy_swap_reads_partial_and_does_not_deny() -> None:
-    """G4 / F5: the snapshot predates the new path, which must not deny the call."""
+    """The snapshot predates the new path, which must not deny the call."""
     platform = _Platform({_INVOCATIONS: 0})
     enforcer = platform.enforcer(_admission_cap(5))
     platform.boundary(enforcer)
@@ -439,42 +449,56 @@ def test_the_fail_mode_is_read_from_the_engine(
 def test_no_usage_refresh_without_a_source() -> None:
     enforcer = PolicyEnforcer(_admission_cap(2), agent_name=_AGENT, ledgers=_ledgers())
 
-    assert enforcer.usage_refresh() is None
+    assert enforcer.usage_refreshes(None) == ()
 
 
 def test_no_usage_refresh_for_a_usage_free_policy() -> None:
-    assert _Platform().enforcer(_usage_free()).usage_refresh() is None
+    assert _Platform().enforcer(_usage_free()).usage_refreshes(None) == ()
 
 
 def test_the_usage_refresh_follows_the_bound_policy() -> None:
     platform = _Platform()
     enforcer = platform.enforcer(_admission_cap(2))
 
-    assert enforcer.usage_refresh() == UsageRefresh(
-        platform.source, _SCOPE, _ADMISSION_PATHS
+    assert enforcer.usage_refreshes(None) == (
+        UsageRefresh(platform.source, _SCOPE, _ADMISSION_PATHS),
     )
 
     enforcer.policy = _tool_cap(2)
 
-    assert enforcer.usage_refresh() == UsageRefresh(
-        platform.source, _SCOPE, frozenset({"tool_calls_5m"})
+    assert enforcer.usage_refreshes(None) == (
+        UsageRefresh(platform.source, _SCOPE, frozenset({"tool_calls_5m"})),
+    )
+
+
+@pytest.mark.parametrize(
+    "context", [None, HexgateContext(user_id=""), HexgateContext(user_id="alice")]
+)
+def test_usage_refreshes_holds_the_agent_refresh(
+    context: HexgateContext | None,
+) -> None:
+    platform = _Platform()
+    enforcer = platform.enforcer(_admission_cap(2))
+
+    assert enforcer.usage_refreshes(context) == (
+        UsageRefresh(platform.source, _SCOPE, _ADMISSION_PATHS),
     )
 
 
 def test_an_agent_usage_policy_enables_only_the_agent_scope() -> None:
-    """G3: an agent quota never turns on user ledgers or user fetches."""
+    """An agent quota never turns on user ledgers or user fetches."""
     platform = _Platform({_INVOCATIONS: 0})
     enforcer = platform.enforcer(_admission_cap(2))
 
     assert platform.ledgers.is_enabled(UsageScopeKind.AGENT)
     assert not platform.ledgers.is_enabled(UsageScopeKind.USER)
 
-    platform.boundary(enforcer)
-    assert enforcer.decide(AGENT_RUN_TOOL, _ADMISSION_ARGS).allowed
+    with HexgateContext(user_id=_USER_ID).sync_scope():
+        platform.boundary(enforcer)
+        assert enforcer.decide(AGENT_RUN_TOOL, _ADMISSION_ARGS).allowed
 
-    assert {scope.kind for scope in platform.source._snapshots} == {
-        UsageScopeKind.AGENT
-    }
+    assert platform.fetcher.calls == [_AGENT]
+    assert platform.user_fetcher.calls == []
 
 
 def test_the_own_run_is_left_out_through_the_source() -> None:

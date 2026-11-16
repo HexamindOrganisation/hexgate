@@ -12,9 +12,10 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Final
 from uuid import UUID, uuid4
 
+from hexgate.runtime.agent_usage import UsageScopeKind
 from hexgate.tracing import semconv
 from hexgate.tracing._senders import AuditSender, get_or_create_sender
 from hexgate.tracing._senders import get_sender as _get_sender
@@ -51,6 +52,9 @@ MAX_HINT_BYTES = 4 * 1024
 # lose the audit record for a *denied* call — the outcome most worth keeping.
 MAX_VIOLATIONS = 64
 MAX_VIOLATION_CHARS = 1024
+
+# The only identity tier until a verified user_id exists (R-USAGE-002).
+_ASSERTED_IDENTITY: Final = "asserted"
 
 # Caps for LLM message content (scope ``hexgate.messages``), measured on the
 # serialized JSON like the decision caps above and enforced twice: here before
@@ -407,8 +411,14 @@ class AuditEvent:
             # Spread so the wire names live in one place.
             **d.run.as_span_attributes(),
         }
-        if d.usage_state is not None:
-            attrs[semconv.USAGE_STATE] = d.usage_state
+        agent_state = d.usage_state
+        if agent_state is not None:
+            attrs[semconv.USAGE_STATE] = agent_state
+        user_state = d.usage_states.get(UsageScopeKind.USER)
+        if user_state is not None:
+            attrs[semconv.USER_USAGE_STATE] = user_state
+            if self.user_id:
+                attrs[semconv.USAGE_IDENTITY] = _ASSERTED_IDENTITY
         if d.arguments is not None:
             attrs[semconv.ARGUMENTS] = json.dumps(
                 _truncate_json(

@@ -14,7 +14,8 @@ from typing import Final
 USAGE_LOGGER: Final = "hexgate_api.features.usage"
 _LOG_FORMAT: Final = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 USAGE_STATS_INTERVAL_SECONDS: Final = 60.0
-# 01 §4.8 guardrail 2: past this, start the near-limit watchlist (README DP3).
+# User-scope usage reads per second, all users together, past which to start
+# the near-limit watchlist.
 USER_READ_ALERT_PER_SECOND: Final = 200.0
 USAGE_STATS_MAX_SAMPLES: Final = 65_536
 AGENT_SCOPE: Final = "agent"
@@ -53,7 +54,7 @@ class UsageReadSummary:
 
 class UsageReadStats:
     """One scope's reads since the last summary. Event-loop only, like UsageMemo.
-    Never sees the key being read: it can't log a user_id (README G10)."""
+    Never sees the key being read: it can't log a user_id."""
 
     def __init__(
         self,
@@ -135,7 +136,7 @@ class UsageReadStats:
 def configure_usage_logging() -> None:
     """uvicorn configures only its own loggers, so hexgate_api INFO records are
     dropped by the root's last-resort handler. The usage read stats must reach
-    the log (DP2 reads them)."""
+    the log."""
     logger = logging.getLogger(USAGE_LOGGER)
     if logger.handlers:
         return

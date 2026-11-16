@@ -29,6 +29,9 @@ import { DOC_PATHS } from "@/lib/docs";
 import { api, type TokenListItem, type TokenMintResponse } from "@/lib/api";
 import { useProjectScoped } from "@/lib/active";
 import { cn } from "@/lib/utils";
+import { PageHeader } from "@/components/ui/page-header";
+import { isStaleKey } from "@/lib/keys";
+import { pluralise } from "@/lib/format";
 
 function formatRelative(iso: string | null): string {
   if (!iso) return "Never";
@@ -137,7 +140,7 @@ function JustMintedBanner({
         </span>
         <span className="flex items-center gap-1.5">
           <KeyRound className="size-3.5" />
-          {token.scopes.length} scope{token.scopes.length === 1 ? "" : "s"}
+          {pluralise(token.scopes.length, "scope")}
         </span>
         <button
           onClick={onDismiss}
@@ -269,6 +272,8 @@ export function TokensPage() {
     queryFn: () => api.listTokens(scope.projectId as string),
     enabled: !!scope.projectId,
   });
+  // "Now" is when the list was fetched, so render stays pure.
+  const keysFetchedAt = tokens.dataUpdatedAt;
   const qc = useQueryClient();
   const revoke = useMutation({
     mutationFn: (tokenId: string) =>
@@ -280,7 +285,7 @@ export function TokensPage() {
   if (scope.status === "no-project") {
     return (
       <div className="max-w-[1400px] mx-auto">
-        <h1 className="text-2xl font-semibold tracking-tight">API keys</h1>
+        <PageHeader title="API keys" />
         <NoProjectEmptyState resource="API keys" />
       </div>
     );
@@ -288,21 +293,22 @@ export function TokensPage() {
 
   return (
     <div className="max-w-[1400px] mx-auto">
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">API keys</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Long-lived API keys for backend services. Never commit to source
-            control.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <DocsLink path={DOC_PATHS.tokens} label="API key docs" />
-          {scope.projectId && (
-            <MintDialog projectId={scope.projectId} onSuccess={setJustMinted} />
-          )}
-        </div>
-      </div>
+      <PageHeader
+        align="start"
+        title="API keys"
+        description="Long-lived API keys for backend services. Never commit to source control."
+        actions={
+          <>
+            <DocsLink path={DOC_PATHS.tokens} label="API key docs" />
+            {scope.projectId && (
+              <MintDialog
+                projectId={scope.projectId}
+                onSuccess={setJustMinted}
+              />
+            )}
+          </>
+        }
+      />
 
       {justMinted && (
         <div className="mt-6">
@@ -351,6 +357,7 @@ export function TokensPage() {
             </thead>
             <tbody>
               {tokens.data.map((t) => {
+                const stale = isStaleKey(t, keysFetchedAt);
                 const isTest = t.masked.startsWith("fty_test_");
                 return (
                   <tr
@@ -362,9 +369,9 @@ export function TokensPage() {
                         <KeyRound className="size-3.5 text-muted-foreground" />
                         <span className="font-medium">{t.name}</span>
                         {isTest && <Badge variant="approval">test</Badge>}
-                        {!t.last_used_at && (
-                          <Badge variant="outline">stale</Badge>
-                        )}
+                        {/* Unused for 30+ days, a never-used key counted
+                            from its creation (Last used says "Never"). */}
+                        {stale && <Badge variant="outline">stale</Badge>}
                       </span>
                     </td>
                     <td className="px-5 py-3">
@@ -401,9 +408,7 @@ export function TokensPage() {
                     <td
                       className={cn(
                         "px-5 py-3",
-                        t.last_used_at
-                          ? "text-muted-foreground"
-                          : "text-approval",
+                        stale ? "text-approval" : "text-muted-foreground",
                       )}
                     >
                       {formatRelative(t.last_used_at)}

@@ -277,7 +277,7 @@ def test_enforcer_warns_once_per_process_about_the_role_cap(
 
 
 def test_enforcer_single_role_matches_the_pre_multi_role_verdict() -> None:
-    """D12: one role produces exactly the verdict it produces alone, structured
+    """One role produces exactly the verdict it produces alone, structured
     detail included."""
     from hexgate.runtime.context import HexgateContext
 

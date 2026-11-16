@@ -7,10 +7,12 @@ stub evaluator rather than an engine.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
 
 import pytest
 
+from hexgate.runtime.agent_usage import UsageScopeKind
 from hexgate.runtime.roles import MAX_EVALUATED_ROLES
 from hexgate.runtime.run_facts import RunFacts
 from hexgate.security.decision import (
@@ -318,7 +320,7 @@ def test_combine_approval_plus_deny_needs_approval() -> None:
 
 
 def test_combine_allow_beats_needs_approval() -> None:
-    """D2: approval is NOT sticky. One role granting outright removes another
+    """Approval is NOT sticky. One role granting outright removes another
     role's gate. A reader assuming the opposite lands here."""
     evaluate, _ = _engine({"a": _approval(), "b": _ALLOW})
 
@@ -356,7 +358,7 @@ def test_combine_all_deny_denies_with_no_deciding_role() -> None:
 
 
 def test_combine_single_role_returns_the_verdict_verbatim() -> None:
-    """D12: a one-role caller matches evaluating that role alone."""
+    """A one-role caller matches evaluating that role alone."""
     original = _deny('Policy denied tool "refund"', violations=("args.amount <= 100",))
     evaluate, _ = _engine({"billing": original})
 
@@ -613,3 +615,68 @@ def test_error_payload_withholds_the_run_from_the_model() -> None:
     rendered = repr(payload) + decision.as_error_message()
     assert "run-secret" not in rendered
     assert "4321" not in rendered
+
+
+# ---------------------------------------------------------------------------
+# Usage states, quota scopes and failed constraints
+# ---------------------------------------------------------------------------
+
+
+def test_merged_denials_union_failed_constraints() -> None:
+    evaluate, _ = _engine(
+        {
+            "a": _deny("a", failed_constraints=("user_usage.invocations_1h < 5",)),
+            "b": _deny(
+                "b",
+                failed_constraints=(
+                    "user_usage.invocations_1h < 5",
+                    "agent_usage.invocations_1h < 50",
+                ),
+            ),
+        }
+    )
+
+    verdict, _ = combine_role_verdicts(["a", "b"], evaluate)
+
+    assert verdict.failed_constraints == (
+        "user_usage.invocations_1h < 5",
+        "agent_usage.invocations_1h < 50",
+    )
+
+
+def test_quota_scopes_never_reach_the_model() -> None:
+    plain = _deny_decision()
+    with_usage = dataclasses.replace(
+        plain,
+        quota_scopes=frozenset({UsageScopeKind.USER}),
+        usage_states={UsageScopeKind.USER: "fresh"},
+    )
+
+    assert with_usage.as_error_payload() == plain.as_error_payload()
+    assert with_usage.as_error_message() == plain.as_error_message()
+
+
+def test_usage_state_is_the_agent_state() -> None:
+    decision = Decision.from_verdict(
+        _deny(),
+        agent_name="a",
+        tool_name="t",
+        usage_states={UsageScopeKind.AGENT: "stale", UsageScopeKind.USER: "fresh"},
+    )
+
+    assert decision.usage_state == "stale"
+    assert (
+        Decision.from_verdict(_deny(), agent_name="a", tool_name="t").usage_state
+        is None
+    )
+
+
+def test_from_verdict_carries_the_quota_scopes() -> None:
+    decision = Decision.from_verdict(
+        _deny(),
+        agent_name="a",
+        tool_name="t",
+        quota_scopes=frozenset({UsageScopeKind.USER}),
+    )
+
+    assert decision.quota_scopes == {UsageScopeKind.USER}

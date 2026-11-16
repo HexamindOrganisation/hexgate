@@ -127,7 +127,7 @@ async def test_e2e_allow_executes(probe_context):
     assert _probe.was_executed(ALLOWED_TOOL)
 
 
-# --- ADK skills contract (PR A4) -------------------------------------------
+# --- ADK skills contract ---------------------------------------------------
 #
 # The skills feature is @experimental upstream and the discovery/gating work
 # reaches into internals that carry no stability promise. These names are the

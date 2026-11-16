@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from langchain_core.messages import AIMessageChunk
@@ -118,6 +119,37 @@ def _coerce_tool_output(output: Any) -> Any:
         return _coerce_tool_output(artifact)
 
     return output
+
+
+# The string adapters (OpenAI Agents, Google ADK) return a stopped call as
+# "[<marker>] <body>": a tool (`Decision.as_error_message()`), a reach to a
+# sub-agent or a skill. The body's wording says held from denied.
+_STOPPED_TEXT = re.compile(
+    r"^\[[a-z0-9_-]+\] (?:Tool|reach to agent|skill) '[^']*' "
+    r"(requires human approval"
+    r"|is denied by the agent policy|is not permitted by this agent's policy)"
+)
+
+
+def _tool_verdict(output: Any) -> Literal["denied", "held"] | None:
+    """Return "denied" or "held" when the policy stopped the call, read from
+    the full output (before the summary is cut); None when the tool ran."""
+    # ADK wraps a tool's string result as {"result": "..."}; a message object
+    # carries it as .content.
+    if isinstance(output, dict) and set(output) == {"result"}:
+        output = output["result"]
+    output = _coerce_tool_output(output)
+    if isinstance(output, str):
+        m = _STOPPED_TEXT.match(output.lstrip())
+        if m:
+            return "held" if m.group(1) == "requires human approval" else "denied"
+    if isinstance(output, dict) and output.get("ok") is False:
+        error = output.get("error")
+        # `Decision.as_error_payload()`: a tool's own error has no agent_name.
+        if isinstance(error, dict) and "agent_name" in error and "retryable" in error:
+            held = error.get("type") in ("approval_required", "needs_approval")
+            return "held" if held else "denied"
+    return None
 
 
 def _tool_end_state(output: Any) -> tuple[ToolCallState, str | None]:
@@ -328,6 +360,7 @@ class _RunAccumulator:
         if event_name == "on_tool_end":
             data = raw_event.get("data", {})
             state, output_summary = _tool_end_state(data.get("output"))
+            verdict = _tool_verdict(data.get("output"))
             emitted.append(
                 ToolEndEvent(
                     run_id=run_id,
@@ -339,6 +372,7 @@ class _RunAccumulator:
                     tool_name=raw_event.get("name", "tool"),
                     state=state,
                     output_summary=output_summary,
+                    verdict=verdict,
                 )
             )
             self.steps.append(

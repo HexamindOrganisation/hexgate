@@ -76,7 +76,7 @@ _USER_ID_NOT_UTF8: Final = "user_id is not valid UTF-8"
 @dataclass(frozen=True, slots=True)
 class UsageScope:
     """One rollup with its own memo, pool and stats, so a burst on one scope
-    cannot queue or evict the other's reads (README G9)."""
+    cannot queue or evict the other's reads."""
 
     rollup: UsageRollup
     memo: UsageMemo
@@ -116,8 +116,8 @@ class TopUsersRead(BaseModel):
 
 
 class UserUsageQuery(BaseModel):
-    """``POST /v1/usage/users:read`` body. user_id goes in the body, never the URL
-    (README G10). An object, so a batch or a verified flag can be added later."""
+    """``POST /v1/usage/users:read`` body. user_id goes in the body, never the
+    URL. An object, so a batch or a verified flag can be added later."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -199,7 +199,7 @@ async def api_top_users(
     get_client: Callable[[], Client] = Depends(clickhouse_getter),
 ) -> TopUsersRead:
     """Dashboard ranking of the project's end users across every agent. Runs on
-    the default thread pool, never the SDK user-read pool (README G9)."""
+    the default thread pool, never the SDK user-read pool."""
     try:
         users = await asyncio.to_thread(
             _connect_and_rank,
@@ -216,7 +216,7 @@ async def api_top_users(
 
 
 def _check_user_id(user_id: str) -> None:
-    """Never echo the value: it is personal data (README G10). Not a pydantic
+    """Never echo the value: it is personal data. Not a pydantic
     Field constraint, because its 422 echoes the input. The length cap is ingest's
     (AuditEnvelope.user_id), so every id the rollup counts can be read back."""
     if not user_id:
@@ -246,7 +246,7 @@ def _unprocessable(detail: str) -> HTTPException:
 
 def _usage_unavailable(exc: Exception, subject: str) -> HTTPException:
     """Logs the class and the numeric server code only: a ClickHouse message can
-    quote a bound value (README G10)."""
+    quote a bound value."""
     _log.warning(
         "usage read failed for %s: %s (clickhouse code %s)",
         subject,

@@ -10,11 +10,19 @@ import json
 import secrets
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass
+from typing import Annotated
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from jwt.utils import base64url_encode
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    ValidationError,
+    field_validator,
+)
 
 ACCESS_TOKEN_TTL_SECONDS = 600
 # The JWS ``alg`` every access token carries. The OAuth JWKS
@@ -31,18 +39,33 @@ class InvalidAccessTokenError(Exception):
     """The bearer is not an access token this API issued for this audience."""
 
 
-@dataclass(frozen=True)
-class AccessTokenClaims:
-    """The verified claims of an access token."""
+class AccessTokenClaims(BaseModel):
+    """The verified claims of an access token, the whole set. Validating a
+    decoded payload against it refuses any claim of the wrong type, so a bad
+    shape is a 401, never a 500 or a set of characters. PyJWT has already
+    checked the values of iss, aud, exp and iat."""
 
+    model_config = ConfigDict(frozen=True)
+
+    iss: str
+    aud: str | list[str]  # RFC 7519 allows a list
     sub: str
     client_id: str
-    scopes: frozenset[str]
-    # The projects this grant covers. Empty means the token reaches no
-    # project — never every project.
-    projects: frozenset[str]
+    # The `scope` claim, a space-separated string.
+    scopes: frozenset[str] = Field(validation_alias="scope")
+    # The projects this grant covers. Never empty, as in the MCP verifier: a
+    # grant naming no project can do nothing, and must never read as every one.
+    projects: Annotated[frozenset[str], Field(min_length=1)]
     jti: str
-    exp: int
+    iat: StrictInt
+    exp: StrictInt  # "123" is refused, not coerced
+
+    @field_validator("scopes", mode="before")
+    @classmethod
+    def _split_scope(cls, scope: object) -> list[str]:
+        if not isinstance(scope, str):
+            raise ValueError("scope is not a string")
+        return scope.split()
 
 
 def mint_access_token(
@@ -52,7 +75,7 @@ def mint_access_token(
     scopes: Iterable[str],
     projects: Iterable[str],
     issuer: str,
-    audience: str,
+    audience: str | list[str],
     now: int | None = None,
 ) -> str:
     """Return a signed access token valid for ``ACCESS_TOKEN_TTL_SECONDS``.
@@ -60,6 +83,8 @@ def mint_access_token(
     A token naming no project (``[]``, or ``[""]`` from ``"".split(",")``)
     means the caller lost the grant's projects, so it is refused rather than
     minted dead; so is a bare csv string, which would iterate as characters.
+    ``audience`` may list several resources: a token the MCP server forwards
+    to the API names both.
     """
     if isinstance(projects, str) or isinstance(scopes, str):
         raise TypeError("pass projects and scopes as lists, not a csv string")
@@ -83,18 +108,16 @@ def mint_access_token(
 
 def verify_access_token(token: str, *, issuer: str, audience: str) -> AccessTokenClaims:
     """Return the claims of ``token`` (typ, kid, EdDSA signature, iss, aud, exp
-    checked), or raise ``InvalidAccessTokenError``."""
+    checked, and every claim's type), or raise ``InvalidAccessTokenError``."""
     from hexgate_api.core.keystore import keystore
 
+    public_key = Ed25519PublicKey.from_public_bytes(keystore.oauth_public_key_bytes())
     try:
         header = jwt.get_unverified_header(token)
         if header.get("typ") != ACCESS_TOKEN_TYPE:
             raise InvalidAccessTokenError("not an access token (typ)")
         if header.get("kid") != keystore.oauth_fingerprint():
             raise InvalidAccessTokenError("access token signed by an unknown key")
-        public_key = Ed25519PublicKey.from_public_bytes(
-            keystore.oauth_public_key_bytes()
-        )
         claims = jwt.decode(
             token,
             public_key,
@@ -103,16 +126,19 @@ def verify_access_token(token: str, *, issuer: str, audience: str) -> AccessToke
             audience=audience,
             options={"require": ["iss", "sub", "aud", "exp", "iat", "jti"]},
         )
-    except jwt.PyJWTError as exc:
+    except jwt.DecodeError as exc:
+        # The type only: the message can quote the undecodable input.
+        raise InvalidAccessTokenError(type(exc).__name__) from exc
+    # TypeError: PyJWT calls int() on exp/iat and lets it escape for, say, an
+    # object, which would otherwise be a 500.
+    except (jwt.PyJWTError, TypeError) as exc:
         raise InvalidAccessTokenError(str(exc)) from exc
-    return AccessTokenClaims(
-        sub=claims["sub"],
-        client_id=claims["client_id"],
-        scopes=frozenset(claims["scope"].split()),
-        projects=frozenset(claims.get("projects") or ()),
-        jti=claims["jti"],
-        exp=claims["exp"],
-    )
+    try:
+        return AccessTokenClaims.model_validate(claims)
+    except ValidationError as exc:
+        raise InvalidAccessTokenError(
+            f"claims: {exc.errors(include_input=False)}"
+        ) from exc
 
 
 def _sign_compact(claims: dict) -> str:

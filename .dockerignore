@@ -1,7 +1,6 @@
-# Build context for platform/api/Dockerfile is the repo root. Keep it lean
-# and free of secrets/state. Anything the Dockerfile COPYs (root
-# pyproject.toml / README.md / LICENSE, hexgate/, platform/api/ source) is
-# preserved; everything below is excluded.
+# Fallback for any repo-root build without its own <Dockerfile>.dockerignore.
+# Every Dockerfile in the repo has one (an allowlist), which BuildKit uses
+# INSTEAD of this file; this keeps an ad-hoc root build free of secrets/state.
 
 # Virtualenvs — never copy a host venv over the container's (wrong arch).
 **/.venv
@@ -19,8 +18,13 @@ dist/
 **/*.db*
 platform/api/data/
 
-# Env files — config is provided at runtime, not via the image
-**/.env
+# Env files and keys — config and secrets are provided at runtime, never via
+# the image. **/.env alone misses .env.prod, .env.local, …
+**/.env*
+!**/.env.sample
+**/*.priv
+**/*.pem
+**/*.private
 
 # VCS / CI / tooling
 .git

@@ -1,6 +1,6 @@
 """Tests for the AI Act evidence report slice.
 
-Three things the spec asks to be pinned: a golden annex over a seeded slice of
+Three things pinned here: a golden annex over a seeded slice of
 the event tables, the generated gap list, and tenant isolation. The golden
 lives in ``golden_annex.json``; each fixed paragraph is collapsed to a
 ``<copy:NAME>`` marker before comparing, so the file pins the document's shape,
@@ -840,7 +840,7 @@ def test_no_aliased_default_note_when_the_policy_declares_one() -> None:
 
 
 def test_build_gaps_happy_path() -> None:
-    """All four gaps, in the order the spec fixes them."""
+    """All four gaps, in their fixed order."""
     gaps = sections.build_gaps(
         approvals_required=2,
         decisions_without_run=5,

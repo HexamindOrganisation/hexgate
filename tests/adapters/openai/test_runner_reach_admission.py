@@ -1,4 +1,4 @@
-"""Agent-level reach + admission wiring for the OpenAI runner (A3).
+"""Agent-level reach + admission wiring for the OpenAI runner.
 
 Reach is enforced at the SDK handoff seam via ``_HexgateReachHooks.on_handoff``
 (governed by the *source* agent's policy); admission is enforced at run entry via
@@ -101,7 +101,7 @@ async def test_reach_hook_noop_without_reach_policy() -> None:
         await hook.on_handoff(None, _agent("orchestrator"), _agent("anyone"))
 
 
-# --- handoff depth cap (A4) ------------------------------------------------
+# --- handoff depth cap -----------------------------------------------------
 
 
 @pytest.mark.asyncio

@@ -188,6 +188,12 @@ function stubFetch({
               name: "demo-project",
               created_at: "2026-01-01T00:00:00Z",
             },
+            {
+              id: "p2",
+              org_id: "org-1",
+              name: "other-project",
+              created_at: "2026-01-01T00:00:00Z",
+            },
           ]);
         case !!classification && method === "PUT":
           return json({

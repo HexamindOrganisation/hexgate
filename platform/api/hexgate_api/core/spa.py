@@ -33,7 +33,23 @@ _log = logging.getLogger(__name__)
 # treats a not-found endpoint as success and then chokes on HTML-as-JSON.
 # These match the first path segment, so e.g. ``v1/agentz`` and ``health/x``
 # are excluded while real SPA routes like ``playground`` fall through.
-_API_PATH_HEADS = frozenset({"v1", "health", "ready", "docs", "redoc", "openapi.json"})
+_API_PATH_HEADS = frozenset(
+    {"v1", "health", "ready", "docs", "redoc", "openapi.json", ".well-known"}
+)
+
+
+# On every page, not only /oauth/consent: the router moves between pages in
+# the browser (back from Google sign-in, say), so the consent page often runs
+# in a document served for another path. Framing it would let another site
+# overlay its Approve button, and its URL carries the MCP client's state and
+# PKCE challenge, which no Referer to another site may leak. Not no-referrer:
+# under it a browser sends ``Origin: null`` on same-origin POSTs, and the
+# consent POST's dashboard-origin check refuses that (test_consent.py).
+_PAGE_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    "Referrer-Policy": "same-origin",
+}
 
 
 def _is_api_path(full_path: str) -> bool:
@@ -136,5 +152,7 @@ def mount_spa(app: FastAPI) -> None:
             and candidate.is_file()
             and candidate.is_relative_to(dist_resolved)
         ):
-            return FileResponse(candidate)
-        return FileResponse(dist / "index.html")
+            # /index.html asked for by name is a page too.
+            page = candidate.suffix == ".html"
+            return FileResponse(candidate, headers=_PAGE_HEADERS if page else None)
+        return FileResponse(dist / "index.html", headers=_PAGE_HEADERS)

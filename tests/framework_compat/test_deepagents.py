@@ -174,7 +174,7 @@ def test_contract_deepagents_skills(tmp_path: Path) -> None:
 
     graph, backend = _build_graph_with_skills(tmp_path)
 
-    # D3 discover_skills_middlewares: create_deep_agent returns no handle to its
+    # discover_skills_middlewares: create_deep_agent returns no handle to its
     # SkillsMiddleware, so it is recovered from a compiled hook's bound method.
     middlewares = _recover_skills_middlewares(graph)
     assert middlewares, (
@@ -183,12 +183,12 @@ def test_contract_deepagents_skills(tmp_path: Path) -> None:
     )
     middleware = middlewares[0]
 
-    # D3 _skill_sources: the three middleware attributes read by name.
+    # _skill_sources: the three middleware attributes read by name.
     assert middleware._backend is backend
     assert middleware.sources == [SKILLS_SOURCE]
     assert len(middleware.source_labels) == len(middleware.sources)
 
-    # D3 _iter_listed_skills: the private lister and the metadata keys read.
+    # _iter_listed_skills: the private lister and the metadata keys read.
     metadata = _list_skills(backend, SKILLS_SOURCE)
     assert [meta["name"] for meta in metadata] == [SKILL_NAME]
     assert SKILL_METADATA_KEYS <= metadata[0].keys()
@@ -196,7 +196,7 @@ def test_contract_deepagents_skills(tmp_path: Path) -> None:
     # become single characters.
     assert metadata[0]["allowed_tools"] == SKILL_ALLOWED_TOOLS
 
-    # D3/D4 _content_hashes: the backend download surface. If this breaks, the
+    # _content_hashes: the backend download surface. If this breaks, the
     # hash is silently null and content-pinned skills start denying.
     for attr in ("ls", "download_files", "adownload_files"):
         assert callable(getattr(backend, attr, None)), f"backend lost {attr}"
@@ -205,7 +205,7 @@ def test_contract_deepagents_skills(tmp_path: Path) -> None:
     assert response.error is None
     assert isinstance(response.content, bytes)
 
-    # D4 SkillPathIndex: the path deepagents shows the model must resolve through
+    # SkillPathIndex: the path deepagents shows the model must resolve through
     # hexgate's index, or reads fall through to plain read_file gating.
     index = SkillPathIndex.from_locations(locate_skills(middlewares))
     rendered = middleware._format_skills_list(metadata)
@@ -220,7 +220,7 @@ def test_contract_deepagents_skills(tmp_path: Path) -> None:
     assert via == "instructions"
     assert location.skill_md_path == metadata[0]["path"]
 
-    # D4 SkillKeyResolver: activation is recognised by tool name and path arg.
+    # SkillKeyResolver: activation is recognised by tool name and path arg.
     read_file = _bound_tools(graph).get(_FILE_READ_TOOL)
     assert read_file is not None, (
         f"deepagents no longer binds {_FILE_READ_TOOL!r} — skill gating is silently inert"

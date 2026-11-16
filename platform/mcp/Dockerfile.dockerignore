@@ -1,0 +1,10 @@
+# Build context is the repo ROOT. BuildKit uses this file INSTEAD of the
+# repo-root .dockerignore, which excludes docs/. An allowlist of what the
+# Dockerfile COPYs, so nothing else in the repo is ever sent.
+*
+!platform/mcp/pyproject.toml
+!platform/mcp/uv.lock
+!platform/mcp/hexgate_mcp
+!docs/policy
+**/__pycache__
+**/*.py[cod]

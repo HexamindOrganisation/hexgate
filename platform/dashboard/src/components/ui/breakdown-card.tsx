@@ -7,7 +7,7 @@
  * it isn't reimplemented (and can't drift) per caller.
  */
 
-import { Fragment, type ReactNode } from "react";
+import { Fragment, type ReactNode, useState } from "react";
 import { Card } from "@/components/ui/card";
 import {
   Select,
@@ -37,9 +37,7 @@ export function BarRow({
       onClick={onClick}
       className={`mb-[11px] transition-opacity ${onClick ? "cursor-pointer" : ""} ${active === false ? "opacity-45" : ""}`}
     >
-      <div className="mb-1 flex justify-between gap-2 text-[12.5px]">
-        {header}
-      </div>
+      <div className="mb-1 flex justify-between gap-2 text-meta">{header}</div>
       <div
         className="flex h-1.5 min-w-6 overflow-hidden rounded-[3px] bg-secondary"
         style={{ width: `${Math.max(widthPct, 4)}%` }}
@@ -73,6 +71,8 @@ export function BreakdownCardShell<
   onFilterChange,
   emptyMessage,
   legend,
+  columns = 2,
+  collapseAt = 10,
 }: {
   dims: { id: Dim; label: string }[];
   dim: Dim;
@@ -89,7 +89,21 @@ export function BreakdownCardShell<
   onFilterChange: (next: string) => void;
   emptyMessage: string;
   legend: ReactNode;
+  /** Bar grid columns; 1 when the card sits in a narrow column. */
+  columns?: 1 | 2;
+  /** Show the first N rows (10 by default, so no caller silently cuts the
+   * list), then a "Show all" that scrolls the rest. */
+  collapseAt?: number;
 }) {
+  // Expanded for one dimension only: a tab change (a new row set) collapses
+  // it; a metric change only re-sorts the same rows, so it's kept.
+  const [expandedFor, setExpandedFor] = useState<Dim | null>(null);
+  const expanded = expandedFor === dim;
+  const overflowing = rows.length > collapseAt;
+  const shown = overflowing && !expanded ? rows.slice(0, collapseAt) : rows;
+  // Expanded, the list scrolls past half again the collapsed rows (a bar row
+  // is about 2.5rem), so "Show all" never shows fewer than it did collapsed.
+  const maxRows = Math.ceil((collapseAt * 1.5) / columns);
   return (
     <Card className="flex flex-col p-6">
       <div className="mb-4 flex items-center justify-between">
@@ -118,9 +132,16 @@ export function BreakdownCardShell<
           </SelectContent>
         </Select>
       </div>
-      <div className="grid flex-1 grid-cols-2 gap-x-8">
+      <div
+        className={`grid flex-1 gap-x-8 ${columns === 2 ? "grid-cols-2" : "grid-cols-1 content-start"} ${overflowing && expanded ? "overflow-y-auto scrollbar-thin" : ""}`}
+        style={
+          overflowing && expanded
+            ? { maxHeight: `${maxRows * 2.5}rem` }
+            : undefined
+        }
+      >
         {rows.length ? (
-          rows.map((row) => {
+          shown.map((row) => {
             const active = !activeFilterValue || activeFilterValue === row.key;
             const onClick = () =>
               onFilterChange(activeFilterValue === row.key ? "" : row.key);
@@ -131,14 +152,28 @@ export function BreakdownCardShell<
             );
           })
         ) : (
-          <div className="py-2 text-[12.5px] text-muted-foreground">
+          <div className="py-2 text-meta text-muted-foreground">
             {emptyMessage}
           </div>
         )}
       </div>
       <div className="mt-1 flex gap-3.5 border-t border-border pt-3 text-[11px] text-muted-foreground">
         {legend}
-        <span className="ml-auto">click a bar to filter →</span>
+        {overflowing && (
+          <button
+            type="button"
+            aria-expanded={expanded}
+            onClick={() => setExpandedFor(expanded ? null : dim)}
+            className="ml-auto font-medium text-primary underline-offset-2 hover:underline"
+          >
+            {expanded
+              ? "Show fewer"
+              : `Show all ${rows.length} · +${rows.length - collapseAt}`}
+          </button>
+        )}
+        <span className={overflowing ? "" : "ml-auto"}>
+          click a bar to filter →
+        </span>
       </div>
     </Card>
   );

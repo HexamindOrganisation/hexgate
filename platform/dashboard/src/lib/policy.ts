@@ -3,6 +3,10 @@ import type { AgentRead } from "./api";
 
 export type Mode = "allow" | "deny" | "approval_required";
 
+/** A verdict's short name in the UI: `approval_required` reads "approval". */
+export const verdictLabel = (v: string) =>
+  v === "approval_required" ? "approval" : v;
+
 export interface ToolPolicy {
   mode: Mode;
   file_scope?: {

@@ -107,13 +107,13 @@ hexgate policy validate policy.yaml --max-severity warning   # non-zero on eithe
 runtime builds one guard pipeline per agent.
 
 It flags a constraint path no call ever sets (`unknown-root`): one that doesn't
-start with `args.`, `ctx.`, `run.` or `agent_usage.`, such as
+start with `args.`, `ctx.`, `run.`, `agent_usage.` or `user_usage.`, such as
 `user.department == "finance"`, or one that dots into `role` or `tool`, which are
 plain strings. The path is always
 missing, so the comparison is always false: a `warning`, or an `error` under an
 odd number of `not`, where it is always true and the fence never fires.
 
-It also flags an `agent_usage.*` cap under an odd number of `not`
+It also flags an `agent_usage.*` or `user_usage.*` cap under an odd number of `not`
 (`negated-usage-cap`), such as `not (agent_usage.denials_5m >= 5)` or a boundary
 deny on `agent_usage.denials_5m >= 5`, which the linker wraps in `not`. Under
 `usage: {on_unavailable: deny}` a value the platform can't supply is missing, so
@@ -161,12 +161,14 @@ hexgate policy test policy.yaml --role billing --tool refund_order \
 A `ctx.*` key you don't pass is treated as missing and fails closed, exactly as
 at runtime when the request scope omits it.
 
-## Testing `run.*` and `agent_usage.*` rules
+## Testing `run.*` and usage rules
 
-`--run-facts` feeds `run.*` constraints (this run's counters) and
-`--agent-usage` feeds `agent_usage.*` constraints (this agent across runs). Both
-take a JSON object, and a path you don't pass reads zero, as on a run's first
-call or in a fresh process. That is how you dry-run a limit at its threshold:
+`--run-facts` feeds `run.*` constraints (this run's counters),
+`--agent-usage` feeds `agent_usage.*` constraints (this agent across runs) and
+`--user-usage` feeds `user_usage.*` constraints (one end user across agents).
+Each takes a JSON object, and a path you don't pass reads zero, as on a run's
+first call or in a fresh process. That is how you dry-run a limit at its
+threshold:
 
 ```bash
 hexgate policy test policy.yaml --role default --tool send_email \
@@ -174,6 +176,9 @@ hexgate policy test policy.yaml --role default --tool send_email \
 
 hexgate policy test policy.yaml --role default --tool agent.run \
     --args '{"agent": "billing"}' --agent-usage '{"invocations_1h": 100}'
+
+hexgate policy test policy.yaml --role default --tool agent.run \
+    --args '{"agent": "billing"}' --user-usage '{"invocations_1h": 50}'
 ```
 
 See [constraints](/policy/constraints) for the paths each one exposes.

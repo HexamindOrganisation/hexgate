@@ -409,7 +409,7 @@ def is_module_tree(paths: Iterable[str]) -> bool:
 
 
 def score(case: dict, ws: Path, before: dict[str, str], answer: str) -> list[Check]:
-    """Every check for `case`, as the case loader returns it (PR 2), which has
+    """Every check for `case`, as the case loader returns it, which has
     already validated its shape: calls are mappings, outcomes and mention lists
     well-formed. `before` is the starting project's `snapshot`; its layout, not
     the workspace's, says whether the policy is `policy.yaml` or a module tree,

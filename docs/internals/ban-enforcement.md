@@ -212,7 +212,7 @@ would 403.
 
 **Cross-page tie-ins.** `Bans.tsx` reads `?ban_user=` / `?ban_agent=` query params to pre-fill and
 auto-open the dialog (clearing the params on close), so the Audit page's "Ban user" affordance and
-the Agents page's "Ban agent" affordance can deep-link here.
+the agent hub's "Ban agent" affordance can deep-link here.
 
 **Server side** (`features/bans/router.py:53`, `service.py:47`):
 
@@ -578,10 +578,6 @@ in follow-up PRs:
 - `hexgate/cloud/client.py:194` — `get_bans` (feed fetch)
 - `hexgate/agents/loader.py:488`, `hexgate/agents/factory.py` — native-factory wiring
 - `hexgate/adapters/{openai,google,langchain,pydantic_ai}/…` — per-adapter enforcement call sites
-
-**Design plans (rationale):**
-- `plans/kill-switch.md` (master design), `kill-switch-phase1.md` (API), `kill-switch-phase2.md`
-  (SDK enforcement), `kill-switch-phase3.md` (dashboard)
 
 **Tests:**
 - `platform/api/tests/features/bans/test_bans.py`, `tests/features/audit/test_audit.py`

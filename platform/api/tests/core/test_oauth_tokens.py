@@ -122,21 +122,46 @@ def test_when_a_csv_string_is_passed_then_mint_refuses(field) -> None:
         _mint(**{field: "p1,p2"})
 
 
-@pytest.mark.parametrize("projects", [None, []])
-def test_when_projects_claim_absent_or_empty_then_verify_yields_no_projects(
-    oauth_keystore: FileKeyStore, projects
+_ABSENT = object()
+
+
+@pytest.mark.parametrize(
+    "claims",
+    [
+        {"projects": _ABSENT},
+        {"projects": []},
+        {"projects": "p1"},
+        {"projects": 3},
+        {"projects": ["p1", 3]},
+        {"scope": ["policy:read"]},
+        {"scope": _ABSENT},
+        {"client_id": _ABSENT},
+        {"client_id": 3},
+        {"exp": str(int(time.time()) + 600)},
+        {"exp": {}},
+        {"iat": str(int(time.time()))},
+    ],
+    ids=lambda c: "-".join(
+        f"{k}={'absent' if v is _ABSENT else v!r}" for k, v in c.items()
+    ),
+)
+def test_when_a_claim_is_absent_or_has_the_wrong_type_then_refused(
+    oauth_keystore: FileKeyStore, claims: dict
 ) -> None:
-    """Absent or empty means no project, never every project."""
-    claims = _claims(projects=projects)
-    if projects is None:
-        del claims["projects"]
+    """Never coerced, never a 500, and no project never means every project."""
+    claims = {k: v for k, v in _claims(**claims).items() if v is not _ABSENT}
     token = _jws(_oauth_header(oauth_keystore), claims, oauth_keystore.oauth_sign)
-    assert _verify(token).projects == frozenset()
+    with pytest.raises(InvalidAccessTokenError):
+        _verify(token)
 
 
 def test_when_expired_then_refused() -> None:
     with pytest.raises(InvalidAccessTokenError):
         _verify(_mint(now=int(time.time()) - ACCESS_TOKEN_TTL_SECONDS - 5))
+
+
+def test_when_audience_is_a_list_naming_ours_then_accepted() -> None:
+    assert _verify(_mint(audience=["https://other.example/mcp", AUDIENCE]))
 
 
 def test_when_audience_differs_then_refused() -> None:
