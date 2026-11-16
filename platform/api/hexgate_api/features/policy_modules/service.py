@@ -14,6 +14,7 @@ import json
 import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from functools import cache
 from typing import TYPE_CHECKING
 
 import yaml
@@ -22,7 +23,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.ids import new_id
-from hexgate_api.models import PolicyFile, PolicyModule, RoleBinding, utcnow
+from hexgate_api.models import Agent, PolicyFile, PolicyModule, RoleBinding, utcnow
 
 if TYPE_CHECKING:  # the SDK is imported lazily at run time
     from hexgate.security import PolicyLint, Verdict
@@ -54,6 +55,15 @@ class DraftWithoutEntryError(Exception):
     Such a project enforces from the module store or from each agent's own
     policy, and neither reads policy files, so the drafts would change nothing.
     """
+
+
+class NoPolicyStoreError(Exception):
+    """A project with neither an entry file nor a role binding: its agents
+    enforce their own ``policy_yaml``, which the store's reads don't see."""
+
+
+class UnknownAgentError(Exception):
+    """An agent the project neither declares nor has registered (→ 404)."""
 
 
 class UnknownRoleError(Exception):
@@ -970,7 +980,7 @@ def _compose_lints(resolved: dict, manifests: dict) -> list[PolicyLint]:
     generic = analyze_policy(resolved[DEFAULT_AGENT].policy_set, source=ENTRY_FILE)
     shared = {key(lint) for lint in generic}
     lints = list(generic)
-    for agent in sorted((set(resolved) | set(manifests)) - {DEFAULT_AGENT}):
+    for agent in _named_agents(resolved, manifests):
         policy_set = _resolution_for(resolved, agent).policy_set
         lints_for_agent = analyze_policy(
             policy_set, manifest=manifests.get(agent), source=ENTRY_FILE
@@ -1193,6 +1203,54 @@ class DryRun:
     verdict: Verdict
     agent_declared: bool
     declared_agents: list[str]
+
+
+def _named_agents(declared: Iterable[str], registered: Iterable[str]) -> list[str]:
+    """Every agent a project-wide read covers: declared in the policy or
+    registered with a manifest, without the generic ``"*"`` view."""
+    return sorted((set(declared) | set(registered)) - {DEFAULT_AGENT})
+
+
+async def risk_facts(
+    session: AsyncSession, project_id: str, agent: str | None = None
+) -> dict:
+    """The project's risk facts per agent and role (see :mod:`.risk_facts`):
+    ``agent`` alone, else every declared or registered agent, each against its
+    latest manifest; the generic ``"*"`` view only when the project has none.
+    ``agents_without_manifest`` lists the agents read without one, whose facts
+    can only come from tool names. Raises :class:`NoPolicyStoreError` when
+    the project isn't modular, the SDK's compose errors if it doesn't resolve,
+    and :class:`UnknownAgentError` for an ``agent`` neither declared nor
+    registered."""
+    from hexgate.security import DEFAULT_ROLE_NAME
+
+    from hexgate_api.features.agents.service import latest_manifests
+    from hexgate_api.features.policy_modules.risk_facts import facts_for
+
+    files = await _files_map(session, project_id)
+    declared, resolve_for_agent, modular = await _agent_resolver(
+        session, project_id, files
+    )
+    if not modular:
+        raise NoPolicyStoreError(project_id)
+    # Every registered agent, not only those whose manifest still loads.
+    stmt = select(Agent.name).where(Agent.project_id == project_id)
+    registered = (await session.exec(stmt)).all()
+    if agent is not None and agent not in {*declared, *registered}:
+        raise UnknownAgentError(agent)
+    agents = [agent] if agent is not None else _named_agents(declared, registered)
+    agents = agents or [DEFAULT_AGENT]
+    manifests = await latest_manifests(session, project_id, agents)
+    resolve = cache(resolve_for_agent)
+    facts: list[dict] = []
+    for name in agents:
+        # An agent the policy doesn't declare resolves exactly like "*".
+        by_role = resolve(name if name in declared else DEFAULT_AGENT).by_role
+        for role in sorted(by_role):
+            policy = by_role[role].effective[DEFAULT_ROLE_NAME]
+            facts.extend(facts_for(name, role, policy, manifests.get(name), by_role))
+    missing = [name for name in agents if name not in manifests]
+    return {"agents_without_manifest": missing, "facts": facts}
 
 
 async def test_policy(
