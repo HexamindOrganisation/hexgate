@@ -27,6 +27,7 @@ from hexgate_api.core.clickhouse import (
     insert_batch,
     verify_written_columns,
 )
+from hexgate_api.models import as_utc
 from hexgate_api.query_scope import scope_filters
 from hexgate_api.schemas import (
     AnomalySeverity,
@@ -606,7 +607,7 @@ def timeseries(
         # The driver returns DateTime64(3, 'UTC') as a NAIVE datetime holding
         # UTC; stamp it, or timestamp() reads it in the host's local zone and
         # the JSON carries no offset.
-        t = _as_utc(t)
+        t = as_utc(t)
         point = points.setdefault(int(t.timestamp()), {"bucket": t, **_zero_outcomes()})
         if outcome in point:
             point[outcome] = int(n)
@@ -625,7 +626,7 @@ def _fill_buckets(
     the query found nothing. Stops at now: a bucket that hasn't started is not
     a quiet one. Points outside the grid are kept, never dropped."""
     step = bucket_minutes * 60
-    start, end = _as_utc(start), _as_utc(end)
+    start, end = as_utc(start), as_utc(end)
     t = int(start.timestamp()) // step * step
     last = int(min(end, datetime.now(timezone.utc)).timestamp())
     while t <= last:
@@ -635,11 +636,6 @@ def _fill_buckets(
         )
         t += step
     return [{**points[k], "bucket_minutes": bucket_minutes} for k in sorted(points)]
-
-
-def _as_utc(d: datetime) -> datetime:
-    """``d``, read as UTC when it carries no zone."""
-    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
 
 
 # run_id rides along so the detail drawer can scope the transcript read for

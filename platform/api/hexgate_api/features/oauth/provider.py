@@ -55,7 +55,6 @@ from hexgate_api.features.oauth.authorization import (
 from hexgate_api.features.oauth.client_cache import ClientMetadataCache
 from hexgate_api.features.oauth.client_metadata import ClientMetadataError
 from hexgate_api.features.oauth.grants import (
-    as_utc,
     find_refresh_token,
     issue_tokens,
     projects_of,
@@ -66,7 +65,7 @@ from hexgate_api.features.oauth.grants import (
     rotated_moments_ago,
     scopes_of,
 )
-from hexgate_api.models import OAuthRefreshToken
+from hexgate_api.models import OAuthRefreshToken, as_utc
 from hexgate_api.settings import get_settings
 
 CONSENT_PATH = "/oauth/consent"
