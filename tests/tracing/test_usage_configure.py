@@ -69,7 +69,7 @@ def test_local_mode_suppresses_usage_sender_too(
 
 async def test_either_modules_shutdown_drains_both() -> None:
     """A single shutdown() call — from either module — drains both event
-    types' senders, per the Design C decision."""
+    types' senders."""
     audit_mod.configure("k1")
     usage_mod.configure_usage_sender("k1")
     await usage_mod.shutdown()

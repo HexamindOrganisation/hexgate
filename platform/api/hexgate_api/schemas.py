@@ -4,6 +4,7 @@ from typing import Annotated, Any, Final, Literal, Optional
 from uuid import UUID
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     EmailStr,
@@ -505,6 +506,29 @@ class ResolvedPolicyResponse(BaseModel):
     roles: dict[str, dict] = Field(default_factory=dict)
 
 
+class PolicyMatrixCell(BaseModel):
+    """One role's standing authorisation for one tool, as the engine decides
+    it (``hexgate.security.matrix.MatrixCell``). ``constraint`` is the composed
+    condition, role-wide fence first; always null on a deny."""
+
+    mode: Literal["allow", "approval", "deny"]
+    constraint: str | None = None
+
+
+class PolicyMatrixResponse(BaseModel):
+    """Roles x tools for one agent's resolved policy. ``cells[tool][role]`` is
+    complete for every listed tool; ``defaults[role]`` is the fallback for an
+    ordinary tool outside ``tools`` (never for reserved ``agent.*`` keys, which
+    are closed-world deny). ``aliased_default`` names the role copied into an
+    undeclared ``default`` slot."""
+
+    roles: list[str]
+    tools: list[str]
+    cells: dict[str, dict[str, PolicyMatrixCell]]
+    defaults: dict[str, PolicyMatrixCell]
+    aliased_default: str | None = None
+
+
 class PolicyLintOut(BaseModel):
     """One analyzer lint, tagged with the role and the named agent it fired in
     (None if project-wide; ``agent`` is also None for the generic ``"*"`` view).
@@ -544,19 +568,51 @@ class PolicyFileWrite(BaseModel):
     content: str
 
 
-class PolicyPreviewRequest(BaseModel):
-    """A draft file to resolve without saving — the editor's live preview. The
-    draft is overlaid on the project's stored files for ``name``."""
+class PolicyFileDraft(BaseModel):
+    """An unsaved policy file, applied over the stored file of the same name, or
+    beside the stored files when no file has that name yet."""
 
     name: str
     content: str
+
+
+def _unique_draft_names(drafts: list[PolicyFileDraft]) -> list[PolicyFileDraft]:
+    names = [d.name for d in drafts]
+    if len(set(names)) != len(names):
+        raise ValueError(f"each draft names a different file (got {names})")
+    return drafts
+
+
+# Several drafts at once, so a role change and the file it imports are checked
+# together. Two drafts of one file would leave which one applies to list order.
+PolicyFileDrafts = Annotated[list[PolicyFileDraft], AfterValidator(_unique_draft_names)]
+
+
+# The request models below refuse unknown keys: a client still sending the
+# old single-file body would otherwise have its draft dropped and be answered
+# for the saved policy.
+class PolicyPreviewRequest(BaseModel):
+    """Draft files to resolve without saving — the editor's live preview."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    drafts: PolicyFileDrafts = Field(default_factory=list)
     agent: str = "*"
+
+
+class PolicyCheckRequest(BaseModel):
+    """Draft files to lint as if they were saved."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    drafts: PolicyFileDrafts = Field(default_factory=list)
 
 
 class PolicyPreviewResponse(BaseModel):
     """The effective policy per role for the draft, plus any resolution lints."""
 
     resolved: dict[str, dict] | None = None
+    matrix: PolicyMatrixResponse | None = None
     lints: list[PolicyLintOut] = Field(default_factory=list)
 
 
@@ -591,15 +647,10 @@ class PolicyGraphResponse(BaseModel):
     roles: list[str] = Field(default_factory=list)
 
 
-class PolicyFileDraft(BaseModel):
-    """An unsaved compose file edit, overlaid before test (like the preview draft)."""
-
-    name: str
-    content: str
-
-
 class PolicyTestRequest(BaseModel):
     """A tool call to evaluate against the resolved policy for ``role`` + ``agent``."""
+
+    model_config = ConfigDict(extra="forbid")
 
     role: str
     # The executing agent, "*" (the generic column) by default — matches
@@ -608,7 +659,7 @@ class PolicyTestRequest(BaseModel):
     tool: str
     args: dict = Field(default_factory=dict)
     attributes: dict | None = None
-    draft: PolicyFileDraft | None = None  # reflect an unsaved edit, like preview
+    drafts: PolicyFileDrafts = Field(default_factory=list)  # unsaved edits
 
 
 class PolicyTestResponse(BaseModel):
@@ -868,10 +919,9 @@ class LlmMessageEvent(AuditEnvelope):
     model: str = Field(min_length=1, max_length=256)
     # Identifies the message list this event appends to. One session can hold
     # several: the main run, each sub-agent and each handoff keeps its own, and
-    # message_seq restarts at 0 in each. The design has the SDK derive it from
-    # the framework's own run identity plus the agent name (see the LLM message
-    # logging spec), which keeps it under agent_name's cap plus an id prefix;
-    # the bound is sized for that, not for a session-wide path.
+    # message_seq restarts at 0 in each. Each adapter builds it from a run id,
+    # mostly plus the agent name, so it stays under agent_name's cap plus an id
+    # prefix; the bound is sized for that, not for a session-wide path.
     turn_key: str = Field(min_length=1, max_length=512)
     # Counter within ``turn_key``; UInt32 column, same reasoning as the token
     # bounds on LlmInvocationEvent.
@@ -989,6 +1039,8 @@ class AuditTimeseriesPoint(BaseModel):
     """One time bucket of the outcome-over-time chart."""
 
     bucket: datetime
+    # Width of every bucket in the series, so the client never guesses it.
+    bucket_minutes: int
     allow: int = 0
     deny: int = 0
     needs_approval: int = 0
@@ -1111,7 +1163,7 @@ class AuditAnomaly(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# AI Act evidence report (https://app.notion.com/p/3e2fb45dbae281f794fefa40ff4a1a8d)
+# AI Act evidence report
 # ---------------------------------------------------------------------------
 
 
@@ -1120,7 +1172,7 @@ class AiActReportCreate(BaseModel):
     full retention window ending now, and clamps whatever is supplied to what
     the store can actually hold.
 
-    Field names are ``from``/``to`` on the wire (the spec's body shape) and
+    Field names are ``from``/``to`` on the wire and
     ``period_start``/``period_end`` in Python, where ``from`` is a keyword.
     """
 

@@ -98,3 +98,16 @@ def rpc(token: str, method: str, params: dict[str, Any]) -> dict[str, Any]:
         if line.startswith("data: ")
     )
     return json.loads(data)["result"]
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Skip integration tests unless they were asked for with `-m integration`,
+    as platform/api does."""
+    if "integration" in config.getoption("-m"):
+        return
+    skip = pytest.mark.skip(reason="opt-in: run with `pytest -m integration`")
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(skip)

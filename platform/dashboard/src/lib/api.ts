@@ -249,6 +249,12 @@ export interface GuardDefinition {
   plugin_id: string | null;
 }
 
+/** A sub-agent the agent reaches: agent-as-tool or handoff. */
+export interface SubagentRef {
+  name: string;
+  via: "tool" | "handoff";
+}
+
 /**
  * Registered manifest body, mirroring AgentManifest in platform/api/schemas.py.
  */
@@ -259,6 +265,8 @@ export interface AgentManifest {
   model: string | null;
   system_prompt: string | null;
   tools: ToolDefinition[];
+  /** Agents it reaches; null when none were visible, and for older manifests. */
+  subagents?: SubagentRef[] | null;
   /** Null for frameworks with no skill concept, and for pre-skills manifests. */
   skills: SkillDefinition[] | null;
   /** Null when the agent declares no guards, and for pre-guards manifests. */
@@ -365,7 +373,7 @@ export interface PolicyGraph {
   roles: string[];
 }
 
-/** The editor's unsaved edit of one file, overlaid before preview/test. */
+/** An unsaved edit of one file, applied over the stored files before preview/test. */
 export interface PolicyFileDraft {
   name: string;
   content: string;
@@ -374,7 +382,28 @@ export interface PolicyFileDraft {
 export interface PolicyPreviewResponse {
   /** The effective policy per role, or null when the draft doesn't compose. */
   resolved: ResolvedPolicy | null;
+  /** The draft's roles x tools matrix, or null when it doesn't compose. */
+  matrix: PolicyMatrix | null;
   lints: PolicyLint[];
+}
+
+/** One role's standing authorisation for one tool, as the engine decides it.
+ * `constraint` is the composed condition (role-wide fence first); null on a
+ * deny. Mirrors platform/api/schemas.py PolicyMatrixCell. */
+export interface PolicyMatrixCell {
+  mode: "allow" | "approval" | "deny";
+  constraint: string | null;
+}
+
+/** Roles x tools for one agent's resolved policy. `cells[tool][role]` covers
+ * every listed tool; `defaults[role]` is the fallback for an ordinary tool
+ * outside `tools` (reserved `agent.*` keys are always deny). */
+export interface PolicyMatrix {
+  roles: string[];
+  tools: string[];
+  cells: Record<string, Record<string, PolicyMatrixCell>>;
+  defaults: Record<string, PolicyMatrixCell>;
+  aliased_default: string | null;
 }
 
 export type PolicyTestOutcome = "allow" | "deny" | "approval_required";
@@ -386,7 +415,8 @@ export interface PolicyTestRequest {
   tool: string;
   args?: Record<string, unknown>;
   attributes?: Record<string, unknown> | null;
-  draft?: PolicyFileDraft | null;
+  /** Unsaved files; the editor sends its one open file. */
+  drafts?: PolicyFileDraft[];
 }
 
 export interface PolicyTestResponse {
@@ -429,6 +459,8 @@ export interface AuditSummary {
 /** One time bucket; `bucket` is an ISO string. */
 export interface AuditTimeseriesPoint {
   bucket: string;
+  /** Width of every bucket in the series, in minutes. */
+  bucket_minutes: number;
   allow: number;
   deny: number;
   needs_approval: number;
@@ -696,8 +728,7 @@ export const LLM_MESSAGE_PAGE = 50;
 // --- AI Act evidence report -------------------------------------------------
 //
 // Wire shapes for the two slices the tab talks to, pinned field-for-field to
-// what the endpoints serve rather than to the spec's prose, which is looser
-// than both:
+// what the endpoints serve:
 //
 //   classification  hexgate_api/schemas.py: AgentClassificationRead/Write
 //   report          hexgate_api/schemas.py: AiActReportCreate/Summary/Read
@@ -857,12 +888,15 @@ function encodePath(path: string): string {
   return path.split("/").map(encodeURIComponent).join("/");
 }
 
-function qs(params: Record<string, string | number | undefined>): string {
+function qs(
+  params: Record<string, string | number | string[] | undefined>,
+): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     // undefined = omit. '' is kept: `role=` (empty value) is meaningful —
-    // it selects the no-role bucket server-side.
-    if (value !== undefined) search.set(key, String(value));
+    // it selects the no-role bucket server-side. A list repeats the key.
+    if (Array.isArray(value)) for (const v of value) search.append(key, v);
+    else if (value !== undefined) search.set(key, String(value));
   }
   const str = search.toString();
   return str ? `?${str}` : "";
@@ -1022,6 +1056,13 @@ export const api = {
       `/v1/projects/${projectId}/policy/resolve${qs({ role, agent })}`,
     ).then((r) => r.roles),
 
+  /** `tools` the policy doesn't list come back in `cells` with the engine's
+   * fallback (reserved keys deny), but not in `tools`. */
+  getPolicyMatrix: (projectId: string, agent?: string, tools: string[] = []) =>
+    request<PolicyMatrix>(
+      `/v1/projects/${projectId}/policy/matrix${qs({ agent: agent || undefined, tool: tools })}`,
+    ),
+
   checkPolicy: (projectId: string) =>
     request<{ ok: boolean; lints: PolicyLint[] }>(
       `/v1/projects/${projectId}/policy/check`,
@@ -1035,7 +1076,7 @@ export const api = {
   previewPolicy: (projectId: string, draft: PolicyFileDraft, agent?: string) =>
     request<PolicyPreviewResponse>(`/v1/projects/${projectId}/policy/preview`, {
       method: "POST",
-      body: JSON.stringify({ ...draft, agent: agent ?? "*" }),
+      body: JSON.stringify({ drafts: [draft], agent: agent ?? "*" }),
     }),
 
   testPolicy: (projectId: string, body: PolicyTestRequest) =>

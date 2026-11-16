@@ -1,7 +1,7 @@
 /**
  * App theme: two independent axes.
  *   - `mode`   — light / dark / system (system follows prefers-color-scheme).
- *   - `scheme` — blue (default) / plum accent.
+ *   - `scheme` — accent: blue (default), indigo, violet, plum or teal.
  *
  * Persisted per-device (localStorage) and applied to <html> as the `.dark`
  * class + a `data-scheme` attribute, which the token blocks in index.css key
@@ -14,19 +14,32 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 export type Mode = "light" | "dark" | "system";
-export type Scheme = "blue" | "plum";
 
 /**
- * The two built-in accent schemes as `--primary` HSL channels, per palette —
- * the single source of truth mirroring the token blocks in index.css. Both the
- * sidebar scheme swatches and the Playground's Blue/Plum accent presets read
- * from here, so they agree with the real CSS token in light AND dark (a preset
- * that hardcoded one mode's value wouldn't match the built-in in the other).
+ * The built-in accent schemes, in picker order, as `--primary` HSL channels
+ * per palette: the one source the token blocks in index.css mirror. The
+ * appearance swatches and the Playground's presets read from here, so they
+ * agree with the real token in light AND dark.
  */
-export const SCHEME_ACCENTS: Record<Scheme, { light: string; dark: string }> = {
-  blue: { light: "226 70% 52%", dark: "226 78% 65%" },
-  plum: { light: "313 62% 48%", dark: "313 75% 68%" },
-};
+export const SCHEMES = [
+  { id: "blue", label: "Blue", light: "226 70% 52%", dark: "225 81% 69%" },
+  { id: "indigo", label: "Indigo", light: "236 48% 42%", dark: "234 70% 76%" },
+  { id: "violet", label: "Violet", light: "254 71% 59%", dark: "252 85% 74%" },
+  { id: "plum", label: "Plum", light: "313 62% 48%", dark: "313 75% 68%" },
+  { id: "teal", label: "Teal", light: "180 81% 29%", dark: "179 52% 50%" },
+] as const satisfies readonly {
+  id: string;
+  label: string;
+  light: string;
+  dark: string;
+}[];
+
+/** A scheme id; derived from SCHEMES, so every scheme has its colours. */
+export type Scheme = (typeof SCHEMES)[number]["id"];
+
+export const SCHEME_ACCENTS = Object.fromEntries(
+  SCHEMES.map(({ id, light, dark }) => [id, { light, dark }]),
+) as Record<Scheme, { light: string; dark: string }>;
 
 /** The `--primary` channels for a scheme in the currently-resolved palette. */
 export function schemeAccent(scheme: Scheme, dark: boolean): string {
@@ -45,7 +58,7 @@ export const useTheme = create<ThemeState>()(
   persist(
     (set) => ({
       // Default to dark/blue — the app's established look — so existing users
-      // see no change until they opt into light or plum.
+      // see no change until they opt into light or another accent.
       mode: "dark",
       scheme: "blue",
       setMode: (mode) => set({ mode }),

@@ -1,9 +1,8 @@
 """The framework-agnostic half of every adapter's ``messages.py``: the item
 shapes each one converts differ, the normalisation around them does not.
 
-Hoisted here when the LangChain adapter was about to copy both verbatim, the
-point the design doc named for it (§III SDK). Internal, like
-``adapters/_common.py``.
+Hoisted here when the LangChain adapter was about to copy both verbatim.
+Internal, like ``adapters/_common.py``.
 """
 
 from __future__ import annotations

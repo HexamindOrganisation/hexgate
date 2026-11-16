@@ -176,6 +176,9 @@ class ToolEndEvent(BaseStreamEvent):
     tool_name: str
     state: ToolCallState = ToolCallState.COMPLETED
     output_summary: str | None = None
+    # Set when the policy stopped the call ("denied", or "held" for approval),
+    # whatever shape the adapter gave the verdict; None when the tool ran.
+    verdict: Literal["denied", "held"] | None = None
 
 
 class RunEndEvent(BaseStreamEvent):

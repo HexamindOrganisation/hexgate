@@ -20,16 +20,17 @@ from hexgate_api.features.agents.service import missing_fields
 from hexgate_api.features.ai_act import copy
 from hexgate_api.models import Agent
 
-# The mode strings PR 2's matrix cells carry, in the order a reader expects
+# The mode strings the matrix cells carry, in the order a reader expects
 # them; kept here so the annex is explicit about its own vocabulary rather
 # than passing a bare value through.
 MODE_LABELS = {"allow": "Allow", "approval": "Approval", "deny": "Deny"}
 
-# Completeness is PR 1's rule, imported rather than restated: the same agent
-# must not read as complete on the classification endpoint and incomplete in
-# the signed report. The two disagreed while this slice had its own copy — for
-# an agent with no entry at all, the copy here counted the Annex III reference
-# as missing, which presumes a high-risk tier nobody has asserted yet.
+# Completeness is the classification endpoint's rule, imported rather than
+# restated: the same agent must not read as complete on the classification
+# endpoint and incomplete in the signed report. The two disagreed while this
+# slice had its own copy — for an agent with no entry at all, the copy here
+# counted the Annex III reference as missing, which presumes a high-risk tier
+# nobody has asserted yet.
 #
 # What stays local is presentation: the endpoint returns field names, and the
 # document wants a phrase an auditor reads.
@@ -46,7 +47,8 @@ _FIELD_LABELS = {
 class AgentRecord:
     """One agent's inputs to sections 1 and 2, gathered by the service.
 
-    ``classification`` is PR 1's row or None (None = no entry recorded).
+    ``classification`` is the agent's classification row, or None (no entry
+    recorded).
     ``matrix`` is the SDK's Matrix or None, in which case ``matrix_unavailable``
     says why — the two always arrive together.
     """
@@ -211,7 +213,7 @@ def build_controls(records: list[AgentRecord]) -> dict[str, Any]:
     """Section 2 — per-agent authorisation matrix, oversight, Art. 15 table.
 
     ``inventory_entry_complete`` travels with each agent so a renderer can
-    apply the spec's rule (an incomplete agent's matrix is omitted from the
+    apply the rule (an incomplete agent's matrix is omitted from the
     PDF) without re-deriving completeness. The matrix stays in the annex
     either way — the annex is the signed record, not the presentation.
     """
@@ -253,9 +255,9 @@ def _call_counts(breakdown: list[dict[str, Any]]) -> list[dict[str, Any]]:
     deduplicate a ``sum``, which needs one row per event and so a different
     query. Emitting them here would put a figure that double-counts a retried
     send next to a deduplicated one in the same table, under a coverage
-    statement that says every count is over distinct event ids. The spec asks
-    section 3 for model calls by agent and model, not for tokens, so the
-    honest shape is to drop them.
+    statement that says every count is over distinct event ids. Section 3 reports
+    model calls by agent and model, not tokens, so the honest shape is to drop
+    them.
 
     Re-sorted by ``calls`` as well: the upstream breakdown is ranked by
     ``total_tokens``, so keeping that order would rank the rows by the very
@@ -367,7 +369,7 @@ def build_gaps(
     decisions_without_run: int,
     incomplete_agents: list[str],
 ) -> list[dict[str, Any]]:
-    """The gaps whose condition holds, in the order the spec fixes."""
+    """The gaps whose condition holds, in their fixed order."""
     gaps: list[dict[str, Any]] = []
     if approvals_required > 0:
         gaps.append(

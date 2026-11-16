@@ -18,7 +18,7 @@ function dedupById(rows: BanEnforcementRow[]): BanEnforcementRow[] {
 }
 
 /**
- * Region C (§9.3) — the secondary panel. A feed of runs refused by a
+ * Region C — the secondary panel. A feed of runs refused by a
  * ban, before the model ran, from the dedicated `ban_enforcement` table.
  *
  * Paged by OFFSET (not a growing limit): the endpoint hard-caps limit at
@@ -62,7 +62,7 @@ export function BlockedAttemptsPanel({ projectId }: { projectId: string }) {
   const remaining = Math.max(total - rows.length, 0);
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-card">
+    <div className="overflow-hidden rounded-xl border border-border bg-card">
       <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-3.5">
         <div>
           <div className="text-sm font-medium">Blocked attempts</div>

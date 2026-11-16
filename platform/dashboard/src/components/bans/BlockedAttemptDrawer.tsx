@@ -20,7 +20,7 @@ function KV({
   muted?: boolean;
 }) {
   return (
-    <div className="grid grid-cols-[116px_1fr] items-baseline gap-2.5 py-[5px] text-[12.5px]">
+    <div className="grid grid-cols-[116px_1fr] items-baseline gap-2.5 py-[5px] text-meta">
       <div className="text-muted-foreground">{k}</div>
       <div
         className={`break-words ${mono ? "font-mono text-xs" : ""} ${
