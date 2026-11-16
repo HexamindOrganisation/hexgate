@@ -657,6 +657,29 @@ class PolicyGraphResponse(BaseModel):
     declared_agents: list[str]
 
 
+class RiskFactOut(BaseModel):
+    """One allowed call whose risky ``argument`` (None for a destructive tool)
+    the policy leaves open; see ``policy_modules.risk_facts``."""
+
+    agent: str
+    role: str
+    tool: str
+    kind: Literal[
+        "unbounded_number", "host_without_allowlist", "destructive_without_approval"
+    ]
+    argument: str | None
+    constraints_present: list[str]
+
+
+class RiskFactsResponse(BaseModel):
+    """Risk facts, plus the agents read without a registered manifest, whose
+    facts can only come from tool names and HTTP egress."""
+
+    # First, so a client that cuts a long answer keeps it.
+    agents_without_manifest: list[str] = Field(default_factory=list)
+    facts: list[RiskFactOut] = Field(default_factory=list)
+
+
 class PolicyTestRequest(BaseModel):
     """A tool call to evaluate against the resolved policy for ``role`` + ``agent``."""
 
