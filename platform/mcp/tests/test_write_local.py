@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import logging
 import os
 import shutil
 import stat
@@ -276,13 +277,41 @@ def test_when_local_policy_dir_is_set_then_policy_write_local_is_listed(key, roo
     assert tools["policy_write_local"]["annotations"]["destructiveHint"] is True
 
 
-def test_when_root_is_gone_then_policy_write_local_does_not_recreate_it(root):
+async def test_when_root_is_gone_then_policy_write_local_recreates_it(tmp_path, caplog):
+    root = tmp_path / "parent" / "policies"
+    root.mkdir(parents=True)
+    shutil.rmtree(tmp_path / "parent")
+
+    with caplog.at_level(logging.INFO, logger="hexgate_mcp.tools.write_local"):
+        await write(root, "team/agent.yaml")
+
+    assert (root / "team" / "agent.yaml").read_text() == POLICY
+    assert "recreated the local policy directory" in caplog.text
+
+
+async def test_when_root_fails_its_checks_mid_run_then_policy_write_local_refuses(
+    root,
+):
     shutil.rmtree(root)
+    root.write_text("")
 
-    with pytest.raises(ToolError, match="no longer exists"):
-        write_local.write_atomic(root, root / "team" / "x.yaml", b"x", 0o644)
+    with pytest.raises(ToolError, match="not a directory"):
+        await write(root, "agent.yaml")
 
-    assert not root.exists()
+    assert root.read_text() == ""
+
+
+async def test_when_a_write_into_a_recreated_root_fails_then_none_is_left(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "parent" / "policies"
+    full = Mock(side_effect=OSError(28, "No space left on device"))
+    monkeypatch.setattr(write_local.os, "replace", full)
+
+    with pytest.raises(ToolError, match="No space left"):
+        await write(root, "team/agent.yaml")
+
+    assert os.listdir(tmp_path) == []
 
 
 async def test_when_a_nested_write_fails_then_no_new_directory_is_left(
@@ -312,17 +341,6 @@ def test_when_writes_race_into_a_new_directory_then_both_land(root):
         [t.join() for t in threads]
 
         assert all(t.read_bytes() == b"x" for t in targets)
-
-
-def test_when_root_vanishes_after_the_check_then_it_is_not_recreated(root, monkeypatch):
-    shutil.rmtree(root)
-    # The developer deletes the folder between the check and the mkdir.
-    monkeypatch.setattr(write_local.Path, "is_dir", lambda self: True)
-
-    with pytest.raises(FileNotFoundError):
-        write_local.write_atomic(root, root / "team" / "x.yaml", b"x", 0o644)
-
-    assert not root.exists()
 
 
 async def test_policy_write_local_fsyncs_the_directory_entry(root, monkeypatch):
