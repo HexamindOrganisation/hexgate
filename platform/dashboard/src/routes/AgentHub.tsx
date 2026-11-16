@@ -11,6 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Ban,
   ChevronRight,
+  Maximize2,
   Network,
   ScrollText,
   ShieldCheck,
@@ -45,6 +46,7 @@ import {
 import { formatDate, pluralise } from "@/lib/format";
 import {
   PolicyFlow,
+  PolicyGraphDialog,
   VerdictTag,
 } from "@/components/policy_files/PolicyGraphDialog";
 import { ResolvedGrid } from "@/components/policy_files/InspectorTabs";
@@ -131,6 +133,7 @@ export function AgentHub() {
   // file. A 422 means the modules don't compose, a 404 that the project isn't
   // visible to the user.
   const graphQuery = usePolicyGraph(scope.projectId, undefined, !!agent);
+  const [graphOpen, setGraphOpen] = useState(false);
   // Not a prior project's graph, kept while this one loads.
   const graph = graphQuery.isPlaceholderData ? undefined : graphQuery.data;
   const status =
@@ -256,6 +259,12 @@ export function AgentHub() {
             activityStale: summary.isError && !!summary.data,
             subgraph,
             subAgents,
+            // One dialog for every entry point; only when there's more than
+            // the agent's own node to draw.
+            openGraph:
+              scope.projectId && subgraph && subgraph.nodes.length > 1
+                ? () => setGraphOpen(true)
+                : null,
             // The previous project's graph, kept while this one loads, isn't
             // this agent's: show it as loading.
             graphLoading: graphQuery.isLoading || graphQuery.isPlaceholderData,
@@ -267,6 +276,15 @@ export function AgentHub() {
           } satisfies HubContext
         }
       />
+      {graphOpen && scope.projectId && (
+        <PolicyGraphDialog
+          open
+          onOpenChange={setGraphOpen}
+          projectId={scope.projectId}
+          roleNames={graph?.roles ?? []}
+          agent={agent.name}
+        />
+      )}
     </div>
   );
 }
@@ -286,6 +304,8 @@ export interface HubContext {
   subgraph: PolicyGraph | null;
   /** The manifest's sub-agents; null when it records none. */
   subAgents: SubAgentRow[] | null;
+  /** Opens the agent's graph dialog; null when there's no graph to show. */
+  openGraph: (() => void) | null;
   graphLoading: boolean;
   graphError: GraphError | null;
   /** No policy.yaml: the agent is governed by its own policy file. */
@@ -312,9 +332,9 @@ export function AgentResourcesTab() {
       roleModes={ctx.roleModes}
       reaches={
         <ReachesSection
-          agent={ctx.agent.name}
           subAgents={ctx.subAgents}
           unregistered={ctx.agent.manifest === null}
+          onOpenGraph={ctx.openGraph}
           // agentSubgraph is empty (not null) when the agent isn't in the graph.
           inGraph={!!ctx.subgraph && ctx.subgraph.nodes.length > 0}
           callsError={ctx.activityError}
@@ -335,18 +355,19 @@ const VIA_LABEL: Record<SubagentRef["via"], string> = {
 /** Sub-agents count as resources: what they can call is reachable from here.
  * One row per (sub-agent, via), as the manifest records them. */
 function ReachesSection({
-  agent,
   subAgents,
   unregistered,
+  onOpenGraph,
   inGraph,
   callsError,
   graphLoading,
   graphError,
   callsStale,
 }: {
-  agent: string;
   subAgents: SubAgentRow[] | null;
   unregistered: boolean;
+  /** Opens the agent's graph dialog; null when there's no graph to show. */
+  onOpenGraph: (() => void) | null;
   /** The project's policy graph has this agent, so rows carry verdicts. */
   inGraph: boolean;
   callsError: boolean;
@@ -370,13 +391,14 @@ function ReachesSection({
             {subAgents.length}
           </Badge>
         )}
-        {inGraph && (
-          <Link
-            to={`/agents/${encodeURIComponent(agent)}`}
+        {onOpenGraph && (
+          <button
+            type="button"
+            onClick={onOpenGraph}
             className="ml-auto text-xs text-muted-foreground hover:text-foreground"
           >
             Open graph →
-          </Link>
+          </button>
         )}
       </div>
       {notes.length > 0 && subAgents && subAgents.length > 0 && (
@@ -649,6 +671,7 @@ function AgentOverview({
   graphLoading,
   graphError,
   classic,
+  openGraph,
 }: Omit<HubContext, "roleModes">) {
   const num = (n: number | null | undefined) => n?.toLocaleString() ?? "—";
   const kpis: { label: string; value: string; className?: string }[] = [
@@ -699,9 +722,22 @@ function AgentOverview({
             : "Couldn't refresh; these are the last counts loaded."}
         </div>
       )}
-      <div className="px-4 py-2.5 text-meta text-muted-foreground">
-        What <span className="font-mono text-foreground">{agent.name}</span> can
-        reach{hasGraph && ` — ${caption || "nothing it may use yet"}`}
+      <div className="flex items-center gap-2 px-4 py-2.5 text-meta text-muted-foreground">
+        <span>
+          What <span className="font-mono text-foreground">{agent.name}</span>{" "}
+          can reach{hasGraph && ` — ${caption || "nothing it may use yet"}`}
+        </span>
+        {hasGraph && openGraph && (
+          <button
+            type="button"
+            onClick={openGraph}
+            title="Open the graph in a larger view"
+            className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            <Maximize2 className="size-3" />
+            Expand
+          </button>
+        )}
       </div>
       {hasGraph && graphError && (
         // A refetch failed over the cached graph: it may predate the policy.

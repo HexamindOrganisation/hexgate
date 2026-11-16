@@ -9,12 +9,12 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { PolicyGraph } from "@/lib/api";
 import { PolicyGraphDialog } from "./PolicyGraphDialog";
-import { renderWithProviders } from "@/test/render";
+import { makeQueryClient, renderWithProviders } from "@/test/render";
 
 // --- @xyflow/react stub -----------------------------------------------------
 // A minimal ReactFlow that renders the caller's node/edge components (so their
@@ -334,6 +334,79 @@ describe("PolicyGraphDialog", () => {
     ).toBeInTheDocument();
   });
 
+  it("narrows to one agent's neighbourhood when given an agent", async () => {
+    stubGraph(GRAPH);
+    renderDialog({ agent: "worker" });
+    await screen.findByTestId("node-agent:worker");
+    // Its caller, its tool and its MCP reach stay; the caller's role drops.
+    expect(screen.getByTestId("node-agent:supervisor")).toBeInTheDocument();
+    expect(screen.getByTestId("node-tool:refund")).toBeInTheDocument();
+    expect(screen.getByTestId("node-mcp:search")).toBeInTheDocument();
+    expect(screen.queryByTestId("node-role:admin")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "worker policy graph" }),
+    ).toBeInTheDocument();
+  });
+
+  it("offers only the roles that touch the agent in agent mode", async () => {
+    stubGraph({ ...GRAPH, roles: ["admin", "support", "guest"] });
+    renderDialog({ agent: "supervisor" });
+    await screen.findByTestId("node-agent:supervisor");
+    const options = within(screen.getByRole("combobox"))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+    expect(options).toEqual(["all roles", "admin"]);
+  });
+
+  it("offers the roles on the agent's edges without an admission block", async () => {
+    // No role nodes: the policy declares no `admission:`, but edges carry roles.
+    stubGraph({
+      nodes: [
+        { id: "agent:bot", kind: "agent", label: "bot" },
+        { id: "tool:refund", kind: "tool", label: "refund" },
+      ],
+      edges: [
+        {
+          source: "agent:bot",
+          target: "tool:refund",
+          kind: "call",
+          via: null,
+          verdict: "allow",
+          constraints: [],
+          roles: ["support", "billing"],
+        },
+      ],
+      roles: ["billing", "support"],
+    });
+    renderDialog({ agent: "bot" });
+    await screen.findByTestId("node-agent:bot");
+    const options = within(screen.getByRole("combobox"))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+    expect(options).toEqual(["all roles", "billing", "support"]);
+  });
+
+  it("shows the empty state for an agent with no edges", async () => {
+    stubGraph({
+      nodes: [{ id: "agent:lone", kind: "agent", label: "lone" }],
+      edges: [],
+      roles: [],
+    });
+    renderDialog({ agent: "lone" });
+    expect(
+      await screen.findByText(/no roles, tools or reach for lone/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("node-agent:lone")).not.toBeInTheDocument();
+  });
+
+  it("says so when the agent isn't in the graph", async () => {
+    stubGraph(GRAPH);
+    renderDialog({ agent: "ghost" });
+    expect(
+      await screen.findByText(/no roles, tools or reach for ghost/i),
+    ).toBeInTheDocument();
+  });
+
   it("refetches with a role filter when the role select changes", async () => {
     const spy = stubGraph(GRAPH);
     renderDialog();
@@ -350,6 +423,26 @@ describe("PolicyGraphDialog", () => {
     await waitFor(() =>
       expect(screen.getByText(/don't compose/i)).toBeInTheDocument(),
     );
+  });
+
+  it("keeps a cached graph with a banner when a refresh fails", async () => {
+    const client = makeQueryClient();
+    client.setQueryData(["policy-graph", "p1", null], GRAPH, { updatedAt: 0 });
+    stubGraph({ detail: "boom" }, 500);
+    renderWithProviders(
+      <PolicyGraphDialog
+        open
+        onOpenChange={() => undefined}
+        projectId="p1"
+        roleNames={[]}
+      />,
+      { client },
+    );
+    expect(
+      await screen.findByText(/showing the last graph loaded/),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("node-agent:worker")).toBeInTheDocument();
+    expect(screen.queryByText(/don't compose/)).toBeNull();
   });
 
   it("shows the empty state when no agents are bound", async () => {
