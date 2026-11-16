@@ -78,7 +78,7 @@ describe("InspectorTabs", () => {
     expect(refund).toHaveAttribute("title", "args.amount <= 100");
     // Tools the policy doesn't list fall back per role.
     expect(
-      screen.getByText(/Tools not listed: support deny/),
+      screen.getByText(/Any tool not shown: support deny/),
     ).toBeInTheDocument();
   });
 

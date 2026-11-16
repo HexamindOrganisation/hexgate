@@ -121,6 +121,19 @@ describe("PoliciesPage", () => {
     expect(screen.getAllByText("policy.yaml").length).toBeGreaterThan(0);
   });
 
+  it("opens on the agent a hub link names", async () => {
+    renderWithProviders(<PoliciesPage />, {
+      initialRoute: "/policies?agent=support_bot",
+    });
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(window.fetch)
+          .mock.calls.some(([u]) => String(u).includes("agent=support_bot")),
+      ).toBe(true),
+    );
+  });
+
   it("renders the resolved policy for the entry file's grant", async () => {
     renderWithProviders(<PoliciesPage />);
     await waitFor(() =>

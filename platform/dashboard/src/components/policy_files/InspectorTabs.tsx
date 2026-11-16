@@ -469,18 +469,18 @@ function ViewSwitch({
 /** Tools x roles, as the engine tabulates them (server-side
  * `hexgate.security.matrix`), so a cell never reads a grant the engine won't
  * enforce: reserved keys deny when unlisted, role-wide constraints count. */
-function ResolvedGrid({
+export function ResolvedGrid({
   matrix,
   onPick,
+  errorText = "Couldn't load the grid. The table and YAML views still work.",
 }: {
   matrix: PolicyMatrix | undefined | null;
   onPick: (role: string) => void;
+  errorText?: string;
 }) {
   if (matrix === null) {
     return (
-      <p className="px-3 py-4 text-xs text-muted-foreground">
-        Couldn't load the grid. The table and YAML views still work.
-      </p>
+      <p className="px-3 py-4 text-xs text-muted-foreground">{errorText}</p>
     );
   }
   if (!matrix) {
@@ -488,7 +488,16 @@ function ResolvedGrid({
       <p className="px-3 py-4 text-xs text-muted-foreground">Loading grid…</p>
     );
   }
-  const rows = sortToolRows(matrix.tools);
+  // Tools the matrix was asked about but the policy doesn't list get the
+  // engine's fallback cells: show them too, marked, when complete.
+  const listed = new Set(matrix.tools);
+  const fallback = Object.keys(matrix.cells).filter(
+    (t) =>
+      !listed.has(t) &&
+      matrix.roles.length > 0 &&
+      matrix.roles.every((r) => matrix.cells[t][r]),
+  );
+  const rows = sortToolRows([...matrix.tools, ...fallback]);
   return (
     <div className="flex-1 overflow-auto scrollbar-thin">
       <table className="w-full border-separate border-spacing-0 text-xs">
@@ -515,6 +524,11 @@ function ResolvedGrid({
                 className="sticky left-0 border-b border-border/50 bg-card px-3 py-1.5 text-left font-normal"
               >
                 <ToolLabel label={label} tag={tag} kind={kind} />
+                {!listed.has(name) && (
+                  <span className="ml-1.5 text-[10px] text-muted-foreground">
+                    not in the policy
+                  </span>
+                )}
               </th>
               {matrix.roles.map((r) => {
                 // Complete for every listed tool (server contract).
@@ -549,7 +563,7 @@ function ResolvedGrid({
         </tbody>
       </table>
       <p className="px-3 py-2 text-[11px] text-muted-foreground">
-        * constrained (hover for the condition). Tools not listed:{" "}
+        * constrained (hover for the condition). Any tool not shown:{" "}
         {matrix.roles
           .map((r) => {
             const d = matrix.defaults[r];
