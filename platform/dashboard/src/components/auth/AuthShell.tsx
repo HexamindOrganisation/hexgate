@@ -4,19 +4,23 @@ import { Link, useLocation } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { HexgateMark } from "@/components/ui/hexgate-mark";
+import { HexgateBrandMark } from "@/components/ui/hexgate-mark";
 import { googleOAuthAvailable, startGoogleSignIn } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
-/** The mark's tone: the brand (keyhole tile) or a status badge. */
+/** The mark's tone: the brand (the app icon) or a status badge. */
 type Tone = "brand" | "success" | "error" | "muted";
 
-type MarkIcon = LucideIcon | typeof HexgateMark;
+type MarkIcon = LucideIcon | typeof HexgateBrandMark;
 
-const MARK: Record<Tone, { box: string; icon: MarkIcon; spin?: boolean }> = {
+type Mark = { box: string; icon: MarkIcon; size?: string; spin?: boolean };
+
+const MARK: Record<Tone, Mark> = {
+  // The app icon itself: the blue keyhole on its dark tile, in either theme.
   brand: {
-    box: "rounded-xl bg-action text-action-foreground",
-    icon: HexgateMark,
+    box: "rounded-xl bg-[#0b0d12] ring-1 ring-white/10",
+    icon: HexgateBrandMark,
+    size: "size-7",
   },
   success: { box: "rounded-full bg-success/15 text-success", icon: Check },
   error: { box: "rounded-full bg-deny/10 text-deny", icon: X },
@@ -57,7 +61,12 @@ export function AuthShell({
   /** A wider column, for a denser card (the OAuth consent). */
   wide?: boolean;
 }) {
-  const mark = MARK[tone];
+  // A page's own glyph (e.g. the reset lock) sits on the neutral tile, not
+  // the app icon's dark one.
+  const mark: Mark =
+    icon && tone === "brand"
+      ? { box: "rounded-xl bg-action text-action-foreground", icon }
+      : MARK[tone];
   const Icon = icon ?? mark.icon;
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
@@ -65,7 +74,7 @@ export function AuthShell({
         <div className="mb-6 flex flex-col items-center gap-4 text-center">
           <span className={cn("grid size-11 place-items-center", mark.box)}>
             <Icon
-              className={cn("size-5", mark.spin && "animate-spin")}
+              className={cn(mark.size ?? "size-5", mark.spin && "animate-spin")}
               strokeWidth={2}
             />
           </span>
