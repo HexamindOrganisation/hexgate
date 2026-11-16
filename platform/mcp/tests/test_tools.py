@@ -197,3 +197,14 @@ def test_when_first_row_exceeds_the_cap_then_the_page_keeps_no_rows():
         "offset": 7,
         "next_offset": 7,
     }
+
+
+def test_when_risk_facts_exceed_the_cap_then_whole_facts_are_kept():
+    fact = {"agent": "bot", "tool": "delete_user", "constraints_present": ["x" * 999]}
+    page = {"agents_without_manifest": ["ops"], "facts": [fact] * 300}
+
+    sent = json.loads(result_text(page))
+
+    assert sent["truncated"] is True
+    assert sent["agents_without_manifest"] == ["ops"]
+    assert 0 < len(sent["facts"]) < 300

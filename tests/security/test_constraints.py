@@ -37,6 +37,7 @@ from hexgate.security.constraints import (
     Quant,
     Ref,
     check_constraints,
+    conjuncts,
     evaluate_constraint,
     iter_cmp_operands,
     parse_constraint,
@@ -378,6 +379,16 @@ def test_parse_rejects_empty_field_path(src: str) -> None:
         ('matches(args.v, "[0-9]+")', {"v": "abc"}, False),
         ('matches(args.v, "^inv_[0-9]+$")', {"v": "inv_9"}, True),
         ('matches(args.v, "^inv_[0-9]+$")', {"v": "xinv_9"}, False),  # anchored
+        # `$` is end-of-text only (RE2), not "before a trailing newline" (Python)
+        ('matches(args.v, "^inv_[0-9]+$")', {"v": "inv_9\n"}, False),
+        (r'matches(args.v, "^a\\$$")', {"v": "a$"}, True),  # escaped `$` stays literal
+        (
+            'matches(args.v, "^[$]+$")',
+            {"v": "$$"},
+            True,
+        ),  # `$` in a class stays literal
+        ('matches(args.v, "^[$]+$")', {"v": "$$\n"}, False),
+        ('matches(args.v, "(?m)^a$")', {"v": "a\n"}, True),  # multiline opts out
     ],
 )
 def test_evaluate_functions(src: str, args: dict, expected: bool) -> None:
@@ -1066,3 +1077,24 @@ def test_usage_scope_kinds_of_names_the_referenced_kinds(
     sources: list[str], kinds: set[UsageScopeKind]
 ) -> None:
     assert usage_scope_kinds_of(sources) == kinds
+
+
+def test_conjuncts_happy_path() -> None:
+    assert conjuncts("(args.n <= 5) and (args.m > 1 and args.k == 2)") == [
+        "args.n <= 5",
+        "args.m > 1",
+        "args.k == 2",
+    ]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "(args.a == 1 or args.b == 2)",
+        "args.a == 1 or args.b == 2 and args.c == 3",
+        "not (args.a == 1 and args.b == 2)",
+        'args.brand == "salt and pepper"',
+    ],
+)
+def test_when_constraint_has_no_top_level_and_then_one_conjunct(source) -> None:
+    assert len(conjuncts(source)) == 1
