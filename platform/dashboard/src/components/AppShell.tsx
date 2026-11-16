@@ -12,7 +12,6 @@ import {
   MessageSquareCode,
   Monitor,
   Moon,
-  Network,
   PanelLeft,
   Plug,
   Scale,
@@ -140,7 +139,6 @@ const workspaceGroups: NavGroup[] = [
     links: [
       { to: "/agents", label: "Agents", icon: Bot },
       { to: "/policies", label: "Policies", icon: Files },
-      { to: "/graph", label: "Graph", icon: Network },
       { to: "/playground", label: "Playground", icon: MessageSquareCode },
     ],
   },

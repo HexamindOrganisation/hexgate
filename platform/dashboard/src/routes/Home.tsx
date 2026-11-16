@@ -29,7 +29,8 @@ import {
   type TokenListItem,
 } from "@/lib/api";
 import { auditUrl } from "@/lib/audit-filters";
-import { useAgentActivity24h } from "@/lib/audit-summary";
+import { agentHubPath } from "@/lib/agent-paths";
+import { denyRatePct, useAgentActivity24h } from "@/lib/audit-summary";
 import { fmtTokens, formatRelative, pluralise } from "@/lib/format";
 import { isStaleKey, STALE_KEY_DAYS } from "@/lib/keys";
 import { useNow } from "@/lib/use-now";
@@ -231,8 +232,7 @@ export function HomePage() {
   });
 
   const totals = summaryQ.data?.totals;
-  const denyRate =
-    totals && totals.all ? ((totals.deny / totals.all) * 100).toFixed(1) : null;
+  const denyRate = totals ? denyRatePct(totals.deny, totals.all) : null;
   const agents = useMemo(() => agentsQ.data ?? [], [agentsQ.data]);
 
   // Relative times keep counting while the data stays the same; ticks with
@@ -528,7 +528,7 @@ export function HomePage() {
                 return (
                   <Link
                     key={a.name}
-                    to={`/agents?agent=${encodeURIComponent(a.name)}`}
+                    to={agentHubPath(a.name)}
                     className="grid grid-cols-[minmax(0,1fr)_170px] items-center gap-3 border-t border-border/60 px-5 py-3 first:border-t-0 hover:bg-accent/50"
                   >
                     <span className="min-w-0">

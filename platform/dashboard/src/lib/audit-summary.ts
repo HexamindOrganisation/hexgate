@@ -34,3 +34,8 @@ export function useAgentActivity24h(projectId: string | null) {
   );
   return { summary, activityOf };
 }
+
+/** The share of `all` calls denied, as "12.5", or null with no calls: "—"
+ * reads apart from a real 0.0%. */
+export const denyRatePct = (deny: number, all: number) =>
+  all > 0 ? ((deny / all) * 100).toFixed(1) : null;

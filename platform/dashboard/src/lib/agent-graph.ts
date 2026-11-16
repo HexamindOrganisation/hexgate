@@ -100,3 +100,62 @@ export function agentReachCounts(sub: PolicyGraph) {
     agents: count("agent"),
   };
 }
+
+export type AgentReach = { reaches: string[]; calledBy: string[] };
+
+/** The delegation neighbours of every agent the graph names, plus `names`
+ * (e.g. registered agents it doesn't), resolved as the hub does: an agent's
+ * own edges when the policy declares it, else the generic `*` agent's. Only
+ * a permitted reach delegates (a call edge never targets an agent), and a
+ * reach to itself is none. A reach to `*` is none either: the engine has no
+ * wildcard reach, so it denies every real target. Labels are deduped, in graph order. */
+export function agentReachMap(
+  graph: PolicyGraph,
+  names: string[] = [],
+): Map<string, AgentReach> {
+  const STAR = "agent:*";
+  const label = new Map(
+    graph.nodes.filter((n) => n.kind === "agent").map((n) => [n.id, n.label]),
+  );
+  const all = new Set([
+    ...[...label].filter(([id]) => id !== STAR).map(([, l]) => l),
+    ...names,
+  ]);
+  // Declared, by resolveAgent's rule: any edge but an inbound reach, or none
+  // at all (locked down to nothing).
+  const touched = new Set<string>();
+  const declared = new Set<string>();
+  const out = new Map<string, PolicyGraph["edges"]>();
+  for (const e of graph.edges) {
+    touched.add(e.source).add(e.target);
+    declared.add(e.source);
+    if (e.kind !== "reach") declared.add(e.target);
+    if (delegates(e)) push(out, e.source, e);
+  }
+  const hasStar = label.has(STAR);
+  const reaches = new Map<string, Set<string>>();
+  const calledBy = new Map<string, Set<string>>();
+  const add = (m: Map<string, Set<string>>, k: string, v: string) =>
+    (m.get(k) ?? m.set(k, new Set()).get(k)!).add(v);
+  for (const name of all) {
+    const own = `agent:${name}`;
+    const isDeclared =
+      label.has(own) && (declared.has(own) || !touched.has(own));
+    const source =
+      isDeclared || !hasStar ? (label.has(own) ? own : null) : STAR;
+    for (const e of (source && out.get(source)) || []) {
+      const to = label.get(e.target);
+      if (to === undefined || to === name || e.target === STAR) continue;
+      add(reaches, name, to);
+      add(calledBy, to, name);
+    }
+  }
+  const m = new Map<string, AgentReach>();
+  for (const name of new Set([...reaches.keys(), ...calledBy.keys()])) {
+    m.set(name, {
+      reaches: [...(reaches.get(name) ?? [])],
+      calledBy: [...(calledBy.get(name) ?? [])],
+    });
+  }
+  return m;
+}
