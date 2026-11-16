@@ -193,10 +193,10 @@ export function AuditPage() {
   const rangeTotal = options?.totals.all ?? 0;
   // Filters that narrow the summary (outcome only narrows the log).
   const scopeFiltered = !!(f.agent || f.role || f.tool || f.user);
-  const hasFilters = scopeFiltered || !!(f.outcome || f.start_date);
-  // Nothing recorded in the range and nothing filtered out: show next steps
+  // Nothing recorded in the range for the whole project (rangeTotal ignores
+  // the filters, so a hub link's agent= doesn't hide it): show next steps
   // instead of a wall of zeros.
-  const showOnboarding = optionsQ.isSuccess && rangeTotal === 0 && !hasFilters;
+  const showOnboarding = optionsQ.isSuccess && rangeTotal === 0;
   const rangeText = rangePhrase(f.range, f.start_date);
   if (projectScope.status === "no-project") {
     return <NoProjectEmptyState resource="audit events" />;

@@ -11,6 +11,7 @@ import {
   type AuditTimeseriesPoint,
 } from "@/lib/api";
 import { type Range, rangeDays } from "@/lib/date-range";
+import { denyRatePct } from "@/lib/audit-summary";
 import type { ChartBucket } from "@/components/ui/charts";
 import type { Counts } from "./charts";
 
@@ -45,7 +46,7 @@ export interface OutcomeStats {
   bucketMinutes: number | null;
   days: ChartBucket[];
   spark: Record<"total" | AuditOutcome, number[]>;
-  denyRate: string;
+  denyRate: string | null;
   allowPct: number;
   apprPct: number;
   avgLabel: string;
@@ -99,9 +100,8 @@ export function useOutcomeStats(
     [days],
   );
 
-  const denyRate = counts.total
-    ? ((counts.deny / counts.total) * 100).toFixed(1)
-    : "0.0";
+  // No calls is no rate ("—"), not a real 0.0%.
+  const denyRate = denyRatePct(counts.deny, counts.total);
   const allowPct = counts.total
     ? Math.round((counts.allow / counts.total) * 100)
     : 0;

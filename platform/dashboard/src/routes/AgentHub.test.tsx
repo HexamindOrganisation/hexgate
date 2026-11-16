@@ -595,6 +595,24 @@ describe("AgentHub", () => {
     }
   });
 
+  it("shows an empty state, not a 0.0% deny rate, on a quiet Stats tab", async () => {
+    stubFetch("admin");
+    answer(`/v1/projects/${PROJECT}/audit/summary`, {
+      totals: { all: 0, allow: 0, deny: 0, needs_approval: 0 },
+      by_agent: [],
+      by_role: [],
+      by_tool: [],
+      by_user: [],
+    });
+    renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
+      initialRoute: "/agents/support_bot/stats",
+    });
+    expect(
+      await screen.findByText(/in this range. Try a wider one/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/deny rate/)).toBeNull();
+  });
+
   it("refetches the Stats tab for a new range", async () => {
     renderHub("support_bot", { tab: "/stats" });
     await screen.findByText("Decisions per hour");

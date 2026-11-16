@@ -51,7 +51,7 @@ export function OutcomeStatStrip({
           swatchClass: OUT_SWATCH.deny,
           value: counts.deny.toLocaleString(),
           valueClass: "text-deny",
-          sub: `${stats.denyRate}% deny rate`,
+          sub: stats.denyRate ? `${stats.denyRate}% deny rate` : "—",
           spark: spark.deny,
           sparkColor: "hsl(var(--semantic-deny))",
           onClick: click("deny"),

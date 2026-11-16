@@ -100,8 +100,31 @@ export function AgentStatsTab() {
         <Card className="grid place-items-center p-10 text-sm text-muted-foreground">
           Loading stats…
         </Card>
+      ) : summary.totals.all === 0 ? (
+        <Card className="grid place-items-center gap-1 p-10 text-center text-sm text-muted-foreground">
+          {ctx.agent.manifest === null ? (
+            <span>
+              Not registered yet — run{" "}
+              <span className="font-mono text-foreground">
+                hexgate register
+              </span>{" "}
+              so its calls land here.
+            </span>
+          ) : (
+            <span>
+              No decisions for{" "}
+              <span className="font-mono text-foreground">{agent}</span> in this
+              range. Try a wider one.
+            </span>
+          )}
+        </Card>
       ) : (
         <>
+          {(summaryQ.isError || (tsQ.isError && tsQ.data)) && (
+            <p className="text-meta text-muted-foreground">
+              Couldn't refresh; these are the last stats loaded.
+            </p>
+          )}
           <OutcomeStatStrip
             stats={stats}
             onOutcome={(outcome) => toAudit({ ...auditF, outcome })}
