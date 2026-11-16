@@ -245,8 +245,7 @@ export function AgentDecisionsTab() {
 /** The Playground tab — a live chat with THIS agent, embedded in the hub. The
  * relay is project-scoped (one `hexgate serve` at a time), so the tab only
  * shows a session when this agent is the one being served; otherwise it's a
- * muted "not served" state (the nav tab is unclickable, but a direct URL or a
- * mid-session serve-switch can still land here). */
+ * "not served" card that says how to serve it (the nav tab is muted). */
 export function AgentPlaygroundTab() {
   const ctx = useOutletContext<HubContext>();
   const { projectId } = useProjectScoped();
@@ -348,24 +347,19 @@ function HubTabs({
       <NavLink to="policies" className={cls}>
         Policies
       </NavLink>
-      {/* The playground is only live when THIS agent is the one being served;
-          otherwise the tab is muted and unclickable (no link to navigate). */}
-      {playgroundLive ? (
-        <NavLink to="playground" className={cls}>
-          Playground
-        </NavLink>
-      ) : (
-        <span
-          className={cn(
-            tab,
-            "cursor-not-allowed border-transparent opacity-50",
-          )}
-          aria-disabled="true"
-          title="Run `hexgate serve` for this agent to test it in the playground"
-        >
-          Playground
-        </span>
-      )}
+      {/* Always a link, so the not-served card that teaches `hexgate serve`
+          stays reachable; muted while another agent (or none) is served. */}
+      <NavLink
+        to="playground"
+        className={(p) => cn(cls(p), !playgroundLive && "opacity-60")}
+        title={
+          playgroundLive
+            ? undefined
+            : "Not served: run `hexgate serve` for this agent to test it here"
+        }
+      >
+        Playground
+      </NavLink>
       <NavLink to="decisions" className={cls}>
         Decision log
       </NavLink>

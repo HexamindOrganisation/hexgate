@@ -636,17 +636,13 @@ describe("AgentHub", () => {
     expect(screen.getByText(/Live session with/)).toBeInTheDocument();
   });
 
-  it("mutes the Playground tab when this agent isn't served", async () => {
-    // served is off by default — the nav tab is a disabled span, not a link.
+  it("keeps the Playground tab a link to the not-served card", async () => {
+    // served is off by default: the tab is muted but still navigates.
     renderHub("support_bot");
-    expect(
-      await screen.findByRole("heading", { name: "support_bot" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("link", { name: "Playground" }),
-    ).not.toBeInTheDocument();
-    const muted = screen.getByText("Playground", { selector: "span" });
-    expect(muted).toHaveAttribute("aria-disabled", "true");
+    const tab = await screen.findByRole("link", { name: "Playground" });
+    expect(tab).toHaveAttribute("title", expect.stringMatching(/Not served/));
+    await userEvent.click(tab);
+    expect(await screen.findByText(/isn't being served/)).toBeInTheDocument();
   });
 
   it("shows a not-served state, not a live chat, when this agent isn't served", async () => {

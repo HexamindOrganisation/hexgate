@@ -229,6 +229,8 @@ let activeSocket: WebSocket | null = null;
 let activeProjectId: string | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempts = 0;
+// The last agent a serve announced: a different one starts a fresh transcript.
+let lastAgent: string | null = null;
 
 function setStore(updater: (s: PlaygroundState) => PlaygroundState): void {
   cachedState = updater(cachedState);
@@ -251,8 +253,20 @@ function handleFrame(frame: unknown): void {
   const f = frame as { type?: string; event_type?: string };
   if (f.type === "agent_online") {
     const ev = f as AgentOnlineEvent;
+    // A new serve of another agent starts with empty history: drop the
+    // previous agent's transcript rather than show it under this one.
+    const switched = !!ev.agent && !!lastAgent && ev.agent !== lastAgent;
+    if (ev.agent) lastAgent = ev.agent;
     setStore((s) => ({
-      ...s,
+      ...(switched
+        ? {
+            ...s,
+            messages: [],
+            decisions: [],
+            currentTurnId: null,
+            pendingApprovals: [],
+          }
+        : s),
       agentOnline: Boolean(ev.online),
       agentName: ev.agent ?? (ev.online ? s.agentName : null),
     }));
@@ -335,6 +349,7 @@ export function resetPlayground(): void {
   }
   activeProjectId = null;
   reconnectAttempts = 0;
+  lastAgent = null;
   cachedState = INITIAL_STATE;
   listeners.forEach((l) => l());
 }
@@ -348,6 +363,7 @@ function ensureSocketFor(projectId: string): void {
   // wipe it and open a fresh connection.
   if (activeProjectId !== null && activeProjectId !== projectId) {
     activeSocket?.close();
+    lastAgent = null;
     cachedState = INITIAL_STATE;
     listeners.forEach((l) => l());
   }
