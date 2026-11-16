@@ -600,14 +600,14 @@ describe("AuditPage", () => {
     expect(screen.queryByText("Decision log")).not.toBeInTheDocument();
   });
 
-  it("keeps the log, not next steps, when a filter empties the range", async () => {
-    seedFilters({ tool: "read_file" });
+  it("shows next steps on an empty project even with a filter set", async () => {
+    // A hub link into Audit always sets agent=; the project holds nothing.
+    seedFilters({ agent: "support_bot" });
     stubFetch([], "owner", EMPTY_SUMMARY);
     renderWithProviders(<AuditPage />);
-    expect(await screen.findByText("Decision log")).toBeInTheDocument();
     expect(
-      screen.queryByText("No decisions in this range"),
-    ).not.toBeInTheDocument();
+      await screen.findByText("No decisions in this range"),
+    ).toBeInTheDocument();
   });
 
   it("outcome KPI card toggles the outcome filter", async () => {

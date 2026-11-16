@@ -165,21 +165,29 @@ const DIMS = [
   { id: "agent" as const, label: "Agents", fkey: "agent" as const },
   { id: "role" as const, label: "Caller roles", fkey: "role" as const },
 ];
+type BreakdownDim = (typeof DIMS)[number]["id"];
 
 export function BreakdownCard({
-  byTool,
-  byAgent,
-  byRole,
+  byTool = [],
+  byAgent = [],
+  byRole = [],
   f,
   setF,
+  dims,
 }: {
-  byTool: AuditBreakdownRow[];
-  byAgent: AuditBreakdownRow[];
-  byRole: AuditBreakdownRow[];
+  byTool?: AuditBreakdownRow[];
+  byAgent?: AuditBreakdownRow[];
+  byRole?: AuditBreakdownRow[];
   f: Filters;
   setF: SetFilters;
+  /** The dimensions to offer, in this order (default: all); the first is
+   * selected. */
+  dims?: [BreakdownDim, ...BreakdownDim[]];
 }) {
-  const [dim, setDim] = useState<"tool" | "agent" | "role">("tool");
+  const shownDims = dims
+    ? dims.map((id) => DIMS.find((d) => d.id === id)!)
+    : DIMS;
+  const [dim, setDim] = useState<BreakdownDim>(shownDims[0].id);
   const [sort, setSort] = useState<"volume" | "denials">("volume");
   const source = dim === "tool" ? byTool : dim === "agent" ? byAgent : byRole;
   const data = useMemo(() => {
@@ -193,7 +201,7 @@ export function BreakdownCard({
 
   return (
     <BreakdownCardShell
-      dims={DIMS}
+      dims={shownDims}
       dim={dim}
       onDimChange={setDim}
       metric={sort}
