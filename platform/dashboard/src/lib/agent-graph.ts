@@ -107,8 +107,8 @@ export type AgentReach = { reaches: string[]; calledBy: string[] };
  * (e.g. registered agents it doesn't), resolved as the hub does: an agent's
  * own edges when the policy declares it, else the generic `*` agent's. Only
  * a permitted reach delegates (a call edge never targets an agent), and a
- * reach to itself is none. A reach to `*` reads "any agent" and makes it a
- * caller of every other agent. Labels are deduped, in graph order. */
+ * reach to itself is none. A reach to `*` is none either: the engine has no
+ * wildcard reach, so it denies every real target. Labels are deduped, in graph order. */
 export function agentReachMap(
   graph: PolicyGraph,
   names: string[] = [],
@@ -121,12 +121,15 @@ export function agentReachMap(
     ...[...label].filter(([id]) => id !== STAR).map(([, l]) => l),
     ...names,
   ]);
-  // Declared, by resolveAgent's rule: edges out, or roles that admit it.
+  // Declared, by resolveAgent's rule: any edge but an inbound reach, or none
+  // at all (locked down to nothing).
+  const touched = new Set<string>();
   const declared = new Set<string>();
   const out = new Map<string, PolicyGraph["edges"]>();
   for (const e of graph.edges) {
+    touched.add(e.source).add(e.target);
     declared.add(e.source);
-    if (e.kind === "admission") declared.add(e.target);
+    if (e.kind !== "reach") declared.add(e.target);
     if (delegates(e)) push(out, e.source, e);
   }
   const hasStar = label.has(STAR);
@@ -136,16 +139,13 @@ export function agentReachMap(
     (m.get(k) ?? m.set(k, new Set()).get(k)!).add(v);
   for (const name of all) {
     const own = `agent:${name}`;
+    const isDeclared =
+      label.has(own) && (declared.has(own) || !touched.has(own));
     const source =
-      declared.has(own) || !hasStar ? (label.has(own) ? own : null) : STAR;
+      isDeclared || !hasStar ? (label.has(own) ? own : null) : STAR;
     for (const e of (source && out.get(source)) || []) {
       const to = label.get(e.target);
-      if (to === undefined || to === name) continue;
-      if (e.target === STAR) {
-        add(reaches, name, "any agent");
-        for (const other of all) if (other !== name) add(calledBy, other, name);
-        continue;
-      }
+      if (to === undefined || to === name || e.target === STAR) continue;
       add(reaches, name, to);
       add(calledBy, to, name);
     }

@@ -241,38 +241,37 @@ describe("agentReachMap", () => {
   });
 
   it("gives an agent the policy doesn't declare the generic * agent's reach", () => {
+    // support is registered but not in the graph.
     const g: PolicyGraph = {
       roles: [],
-      nodes: [agent("support"), agent("ops"), agent("*")],
+      nodes: [agent("ops"), agent("*")],
       edges: [reach("*", "ops")],
     };
-    expect(agentReach(g, "support")).toEqual({
-      reaches: ["ops"],
-      calledBy: [],
-    });
+    const m = agentReachMap(g, [...namesOf(g), "support"]);
+    expect(m.get("support")).toEqual({ reaches: ["ops"], calledBy: [] });
     // ops resolves through * too, but reaching itself is no delegation.
-    expect(agentReach(g, "ops")).toEqual({
-      reaches: [],
-      calledBy: ["support"],
-    });
+    expect(m.get("ops")).toEqual({ reaches: [], calledBy: ["support"] });
     // * itself is no one.
-    expect(agentReachMap(g, namesOf(g)).has("*")).toBe(false);
+    expect(m.has("*")).toBe(false);
   });
 
-  it("reads a reach to * as any agent, a caller of every other", () => {
+  it("doesn't read a reach to * as reaching any agent", () => {
+    // The engine has no wildcard reach: agent.tool:* denies every real target.
     const g: PolicyGraph = {
       roles: [],
       nodes: [agent("support"), agent("admin"), agent("*")],
       edges: [reach("support", "*"), reach("admin", "admin", "deny")],
     };
-    expect(agentReach(g, "support")).toEqual({
-      reaches: ["any agent"],
-      calledBy: [],
-    });
-    expect(agentReach(g, "admin")).toEqual({
-      reaches: [],
-      calledBy: ["support"],
-    });
+    expect(agentReachMap(g, namesOf(g)).size).toBe(0);
+  });
+
+  it("doesn't give an agent locked down to nothing *'s reach", () => {
+    const g: PolicyGraph = {
+      roles: [],
+      nodes: [agent("locked"), agent("b"), agent("*")],
+      edges: [reach("*", "b")],
+    };
+    expect(agentReach(g, "locked")).toEqual(NONE);
   });
 
   it("doesn't count a call edge as delegation", () => {
