@@ -20,7 +20,12 @@ export function formatRelative(iso: string, now = Date.now()): string {
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
-/** The full local date and time, for a tooltip beside a relative time. */
+/** The full local date and time; the raw string if it won't parse, never
+ * "Invalid Date". */
 export function formatAbsolute(iso: string): string {
-  return new Date(iso).toLocaleString();
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
+
+/** A timestamp shown on its own: the same as `formatAbsolute`. */
+export const formatDate = formatAbsolute;
