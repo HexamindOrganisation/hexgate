@@ -40,8 +40,8 @@ describe("rangeSearch", () => {
 });
 
 describe("rangeDays", () => {
-  it("runs an open-ended custom start to now", () => {
+  it("reads a lone custom start as the preset, as the API does", () => {
     const start = new Date(Date.now() - 30 * 86_400_000);
-    expect(rangeDays("24h", start, null)).toBe(30);
+    expect(rangeDays("24h", start, null)).toBe(1);
   });
 });

@@ -110,7 +110,7 @@ export function useOutcomeStats(
     : 0;
   const nDays = rangeDays(range, start_date, end_date);
   const avgLabel =
-    !start_date && range === "24h"
+    !(start_date && end_date) && range === "24h"
       ? `${(counts.total / 24).toFixed(1)}/hr avg`
       : `${(counts.total / nDays).toFixed(0)}/day avg`;
 

@@ -217,7 +217,7 @@ export function UsageStatStrip({
   end_date: Date | null;
 }) {
   const nDays = rangeDays(range, start_date, end_date);
-  const hourly = !start_date && range === "24h";
+  const hourly = !(start_date && end_date) && range === "24h";
   // `fmt` overrides the plain count (e.g. compact tokens). en-US, like
   // fmtTokens beside it, so one strip never mixes decimal marks.
   const avgLabel = (

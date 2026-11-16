@@ -81,6 +81,11 @@ export function AgentUsageTab() {
         </Card>
       ) : (
         <>
+          {summaryQ.isError && (
+            <p className="text-meta text-muted-foreground">
+              Couldn't refresh; these are the last counts loaded.
+            </p>
+          )}
           <UsageStatStrip
             totals={summary.totals}
             range={f.range}
