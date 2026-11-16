@@ -61,7 +61,8 @@ export function AgentHub() {
 
   // Roles x tools for this agent, as the engine tabulates them. Only projects
   // with a policy.yaml compose; others have no matrix.
-  const modular = isModular(usePolicyFiles(scope.projectId).data);
+  const policyFiles = usePolicyFiles(scope.projectId);
+  const modular = isModular(policyFiles.data);
   const toolNames = useMemo(
     () => agent?.manifest?.tools?.map((t) => t.name) ?? [],
     [agent],
