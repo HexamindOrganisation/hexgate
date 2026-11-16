@@ -212,7 +212,7 @@ would 403.
 
 **Cross-page tie-ins.** `Bans.tsx` reads `?ban_user=` / `?ban_agent=` query params to pre-fill and
 auto-open the dialog (clearing the params on close), so the Audit page's "Ban user" affordance and
-the Agents page's "Ban agent" affordance can deep-link here.
+the agent hub's "Ban agent" affordance can deep-link here.
 
 **Server side** (`features/bans/router.py:53`, `service.py:47`):
 

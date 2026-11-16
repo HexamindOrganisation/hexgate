@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/card";
 import { useProjectScoped } from "@/lib/active";
 import { cn } from "@/lib/utils";
+import { PageHeader } from "@/components/ui/page-header";
 
 /**
  * /settings — project-scoped configuration.
@@ -43,13 +44,10 @@ export function SettingsPage() {
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Project configuration — applies to every agent, token, and policy in
-          this project.
-        </p>
-      </header>
+      <PageHeader
+        title="Settings"
+        description="Project configuration — applies to every agent, token, and policy in this project."
+      />
 
       {!projectResolved && (
         <div className="rounded-md border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
@@ -144,9 +142,7 @@ function SectionCard({
   destructive,
 }: Section) {
   return (
-    <Card
-      className={cn(destructive && "border-[hsl(var(--semantic-deny))]/40")}
-    >
+    <Card className={cn(destructive && "border-deny/40")}>
       <CardHeader>
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
@@ -154,7 +150,7 @@ function SectionCard({
               className={cn(
                 "grid place-items-center rounded-md size-9 shrink-0",
                 destructive
-                  ? "bg-[hsl(var(--semantic-deny))]/10 text-[hsl(var(--semantic-deny))]"
+                  ? "bg-deny/10 text-deny"
                   : "bg-muted text-muted-foreground",
               )}
             >

@@ -1,7 +1,7 @@
 /**
  * Tests for the sidebar app-shell.
  *
- * Four surfaces worth pinning:
+ * Surfaces worth pinning:
  *   1. The workspace nav renders its links, and collapsing the sidebar
  *      hides the labels (icon-only mode).
  *   2. The collapse toggle works from both the button and Cmd/Ctrl-B.
@@ -93,15 +93,133 @@ describe("AppShell", () => {
     await waitFor(() => {
       expect(screen.getByText("Agents")).toBeInTheDocument();
     });
-    for (const label of [
-      "Policies",
-      "Graph",
-      "Playground",
-      "Audit",
-      "API keys",
-    ]) {
+    for (const label of ["Home", "Policies", "Audit", "API keys"]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+    // Graph and Playground left the sidebar — they live inside an agent now
+    // (the hub's Overview graph and its Playground tab).
+    expect(screen.queryByText("Graph")).not.toBeInTheDocument();
+    expect(screen.queryByText("Playground")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute(
+      "href",
+      "/",
+    );
+  });
+
+  it("groups the workspace nav under section headings", async () => {
+    renderWithProviders(<AppShell />);
+    await waitFor(() => expect(screen.getByText("Agents")).toBeInTheDocument());
+    for (const heading of ["Build", "Monitor", "Control"]) {
+      expect(screen.getByText(heading)).toBeInTheDocument();
+    }
+  });
+
+  it("expands an inline, lazily-loaded agent list from the Agents row", async () => {
+    stubFetch({
+      "/v1/users/me": USER,
+      "/v1/orgs": [ORG_A, ORG_B],
+      "/v1/orgs/org-a/projects": [PROJ_A1, PROJ_A2],
+      "/v1/orgs/org-b/projects": [],
+      [`/v1/projects/${PROJ_A1.id}/agents/manifest`]: [
+        { name: "alpha_bot" },
+        { name: "beta_bot" },
+      ],
+    });
+    renderWithProviders(<AppShell />);
+    const toggle = await screen.findByRole("button", {
+      name: /show agent list/i,
+    });
+    // Not fetched until opened.
+    expect(screen.queryByRole("link", { name: "alpha_bot" })).toBeNull();
+    await userEvent.click(toggle);
+    expect(
+      await screen.findByRole("link", { name: "alpha_bot" }),
+    ).toHaveAttribute("href", "/agents/alpha_bot");
+    expect(screen.getByRole("link", { name: "beta_bot" })).toBeInTheDocument();
+  });
+
+  it("says the agent list failed rather than that there are none", async () => {
+    // stubWorkspace has no manifest route: it 404s.
+    renderWithProviders(<AppShell />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: /show agent list/i }),
+    );
+    expect(await screen.findByText("Couldn't load agents")).toBeInTheDocument();
+    expect(screen.queryByText("No agents yet")).toBeNull();
+  });
+
+  it("says there's no project instead of loading forever", async () => {
+    act(() => {
+      useActive.setState({ activeOrgId: ORG_B.id, activeProjectId: null });
+    });
+    renderWithProviders(<AppShell />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: /show agent list/i }),
+    );
+    expect(await screen.findByText("No project yet")).toBeInTheDocument();
+  });
+
+  it("keeps the Agents row active on an agent's hub page", async () => {
+    renderWithProviders(<AppShell />, { initialRoute: "/agents/alpha_bot" });
+    expect(await screen.findByRole("link", { name: "Agents" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
+
+  it("counts active bans on the Bans link for admins", async () => {
+    vi.restoreAllMocks();
+    stubFetch({
+      "/v1/users/me": USER,
+      "/v1/orgs": [ORG_A, ORG_B],
+      "/v1/orgs/org-a/projects": [PROJ_A1, PROJ_A2],
+      [`/v1/projects/${PROJ_A1.id}/bans`]: [{ id: "b1" }, { id: "b2" }],
+    });
+    renderWithProviders(<AppShell />);
+    expect(
+      await screen.findByRole("link", { name: "Bans, 2 active bans" }),
+    ).toHaveTextContent("2");
+  });
+
+  it("names a single active ban in the singular", async () => {
+    vi.restoreAllMocks();
+    stubFetch({
+      "/v1/users/me": USER,
+      "/v1/orgs": [ORG_A, ORG_B],
+      "/v1/orgs/org-a/projects": [PROJ_A1, PROJ_A2],
+      [`/v1/projects/${PROJ_A1.id}/bans`]: [{ id: "b1" }],
+    });
+    renderWithProviders(<AppShell />);
+    expect(
+      await screen.findByRole("link", { name: "Bans, 1 active ban" }),
+    ).toBeInTheDocument();
+  });
+
+  it("never asks a non-admin for bans (admin-only endpoint)", async () => {
+    act(() => {
+      useActive.setState({ activeOrgId: ORG_B.id, activeProjectId: "proj-b1" });
+    });
+    vi.restoreAllMocks();
+    stubFetch({
+      "/v1/users/me": USER,
+      "/v1/orgs": [ORG_A, ORG_B],
+      "/v1/orgs/org-b/projects": [
+        { id: "proj-b1", name: "beta", org_id: "org-b" },
+      ],
+    });
+    renderWithProviders(<AppShell />);
+    await waitFor(() => expect(screen.getByText("beta")).toBeInTheDocument());
+    const calls = vi.mocked(window.fetch).mock.calls.map(([u]) => String(u));
+    expect(calls.some((u) => u.includes("/bans"))).toBe(false);
+  });
+
+  it("hides section headings when collapsed", async () => {
+    useUi.setState({ sidebarCollapsed: true });
+    renderWithProviders(<AppShell />);
+    await waitFor(() =>
+      expect(screen.getByTitle("Agents")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Build")).not.toBeInTheDocument();
   });
 
   it("keeps org/account admin out of the product sidebar", async () => {

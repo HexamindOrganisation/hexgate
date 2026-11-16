@@ -26,6 +26,9 @@ vi.mock("@xyflow/react", () => {
     ),
     Handle: () => null,
     Panel: ({ children }: P) => <div>{children as React.ReactNode}</div>,
+    ViewportPortal: ({ children }: P) => (
+      <div>{children as React.ReactNode}</div>
+    ),
     Position: { Top: "top", Bottom: "bottom", Left: "left", Right: "right" },
     MarkerType: { ArrowClosed: "arrowclosed" },
   };
