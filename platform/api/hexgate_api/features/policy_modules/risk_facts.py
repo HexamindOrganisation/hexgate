@@ -15,8 +15,10 @@ allows any ``amount``); ``constraints_present`` lists them.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Collection, Iterator
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -39,6 +41,17 @@ _UPPER = frozenset({"<", "<=", "==", "in"})
 _MIRROR = {"<": ">", "<=": ">=", ">": "<", ">=": "<=", "==": "=="}
 
 
+@dataclass(frozen=True)
+class _Call:
+    """The call a constraint is read for: its tool and role. In the default
+    bucket, ``named_roles`` are the roles the policy defines, which none of
+    its callers holds; None in a named role."""
+
+    tool: str
+    role: str
+    named_roles: frozenset[str] | None = None
+
+
 def facts_for(
     agent: str,
     role: str,
@@ -54,33 +67,33 @@ def facts_for(
 
     schemas = {t.name: t.input_schema for t in manifest.tools} if manifest else {}
     facts: list[dict] = []
-    for tool in _tools(policy, schemas):
+    for tool in _tools(policy, manifest):
         rule = get_tool_policy(policy, tool)
         if rule.mode != "allow":
             continue
         present = [*policy.constraints, *rule.constraints]
         nodes = [parse_constraint(source) for source in present]
-        known = {"tool": tool, "role": role}
-        if role == DEFAULT_ROLE_NAME:
-            # The default bucket serves every caller with no named role.
-            known["named_roles"] = frozenset(roles) - {DEFAULT_ROLE_NAME}
-        if any(_decided(node, known) is False for node in nodes):
-            continue  # a constraint no call of this tool in this role passes
+        named = frozenset(roles) - {DEFAULT_ROLE_NAME}
+        # The default bucket serves every caller with no named role.
+        call = _Call(tool, role, named if role == DEFAULT_ROLE_NAME else None)
+        if any(_unpassable(node, call) for node in nodes):
+            continue  # no call of this tool in this role passes, so no kind applies
         facts += [
             dict(agent=agent, role=role, tool=tool, kind=kind, argument=argument,
                  constraints_present=present)
-            for kind, argument in _tool_risks(tool, schemas, nodes, policy.consts, known)
+            for kind, argument in _tool_risks(tool, schemas, nodes, policy.consts, call)
         ]  # fmt: skip
     return facts
 
 
-def _tools(policy: AgentPolicy, schemas: dict[str, InputSchema]) -> list[str]:
-    """The tools the agent may call: its manifest's and every authored rule.
-    Agent and skill keys are reach, not calls, so they're left out."""
+def _tools(policy: AgentPolicy, manifest: AgentManifest | None) -> list[str]:
+    """The tools the agent may call: its manifest's, or without one every
+    authored rule. Agent and skill keys are reach, not calls, so they're left
+    out."""
     from hexgate.security.models import is_reserved_key
 
-    names = set(policy.effective_tools) | set(schemas)
-    return sorted(name for name in names if not is_reserved_key(name))
+    names = [t.name for t in manifest.tools] if manifest else policy.effective_tools
+    return sorted({name for name in names if not is_reserved_key(name)})
 
 
 def _tool_risks(
@@ -88,14 +101,14 @@ def _tool_risks(
     schemas: dict[str, InputSchema],
     nodes: list[Node],
     consts: dict,
-    known: dict,
+    call: _Call,
 ) -> Iterator[tuple[FactKind, str | None]]:
     if _is_destructive(tool):
         yield "destructive_without_approval", None
     props = schemas[tool].properties if tool in schemas else {}
     for name, prop in sorted(props.items()):
         if prop.type in _NUMBER_TYPES:
-            if not any(_caps(node, name, consts, known) for node in nodes):
+            if not any(_caps(node, name, consts, call) for node in nodes):
                 yield "unbounded_number", name
 
 
@@ -104,14 +117,17 @@ def _is_destructive(tool: str) -> bool:
     return any(word in _DESTRUCTIVE_VERBS for word in _words(tool))
 
 
+_WORD = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+")
+
+
 def _words(name: str) -> list[str]:
-    """``name`` split on separators and camelCase, lowercased
-    (``db.drop_table`` → ``db drop table``, ``HTTPDelete`` → ``http delete``)."""
-    spaced = re.sub(r"([a-z0-9])([A-Z])|([A-Z])([A-Z][a-z])", r"\1\3 \2\4", name)
-    return [w.lower() for w in re.split(r"[^A-Za-z0-9]+", spaced) if w]
+    """``name`` split on separators, camelCase and digits, lowercased
+    (``db.drop_table`` → ``db drop table``, ``HTTPDelete`` → ``http delete``,
+    ``getADelete`` → ``get a delete``, ``delete2fa`` → ``delete 2 fa``)."""
+    return [w.lower() for w in _WORD.findall(name)]
 
 
-def _caps(node: Node, arg: str, consts: dict, known: dict) -> bool:
+def _caps(node: Node, arg: str, consts: dict, call: _Call) -> bool:
     """Whether every call that passes ``node`` has ``args.<arg>`` capped from
     above by a number, literal or const. A string bound caps nothing, since
     strings compare as text (``"1000000" <= "500"`` holds), so neither does a
@@ -125,15 +141,27 @@ def _caps(node: Node, arg: str, consts: dict, known: dict) -> bool:
             else None
         )  # fmt: skip
         values = value if isinstance(value, list) else [value]
-        return all(
-            isinstance(v, int | float) and not isinstance(v, bool) for v in values
-        )
+        return all(_finite_number(v) for v in values)
 
     def leaf_caps(leaf: Node) -> bool:
         op, bound = _bound(leaf, arg) if isinstance(leaf, Cmp) else (None, None)
         return op in _UPPER and numeric(bound)
 
-    return _holds(node, leaf_caps, known)
+    return _holds(node, leaf_caps, call)
+
+
+def _finite_number(value: object) -> bool:
+    """An int (one too large for a float still caps) or a finite float: inf
+    and nan cap nothing, and a bool isn't a number."""
+    if isinstance(value, float):
+        return math.isfinite(value)
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _unpassable(node: Node, call: _Call) -> bool:
+    """Whether no call passes ``node``: the same walk as :func:`_holds` with a
+    leaf that never holds, so only the parts decided False count."""
+    return _holds(node, lambda _leaf: False, call)
 
 
 def _bound(cmp: Cmp, arg: str) -> tuple[str | None, Operand | None]:
@@ -145,27 +173,27 @@ def _bound(cmp: Cmp, arg: str) -> tuple[str | None, Operand | None]:
     return (op, right) if _is_arg(left, arg) else (None, None)
 
 
-def _holds(node: Node, leaf, known: dict) -> bool:
+def _holds(node: Node, leaf, call: _Call) -> bool:
     """Whether ``leaf`` holds on every path through ``node``: one part of an
     And is enough, every branch of an Or is needed. A part that reads only the
-    ``known`` tool and role is decided: one no call passes bounds vacuously, one
+    call's tool and role is decided: one no call passes bounds vacuously, one
     every call passes bounds nothing (``tool != "x" or args.amount <= 5``). A Not
     never counts: a comparison on a missing or mistyped value is False, so its
     negation passes it. Nor does a quantifier, which binds elements."""
     from hexgate.security.constraints import And, Cmp, Or
 
-    decided = _decided(node, known)
+    decided = _decided(node, call)
     if decided is not None:
         return not decided
     if isinstance(node, Cmp):
         return leaf(node)
     if isinstance(node, (And, Or)):
-        results = (_holds(part, leaf, known) for part in node.parts)
+        results = (_holds(part, leaf, call) for part in node.parts)
         return all(results) if isinstance(node, Or) else any(results)
     return False
 
 
-def _decided(node: Node, known: dict) -> bool | None:
+def _decided(node: Node, call: _Call) -> bool | None:
     """``node``'s result when it reads only the tool and role, else None. In
     the default bucket a role test is decided only when it names roles the
     policy defines (``role == "admin"``), which no caller there holds."""
@@ -178,13 +206,13 @@ def _decided(node: Node, known: dict) -> bool | None:
     paths = set(iter_arg_refs(node))
     if not paths or not paths <= {("tool",), ("role",)} or any(iter_const_refs(node)):
         return None
-    named = known.get("named_roles")
-    if named is not None and ("role",) in paths:
+    role: str | None = call.role
+    if call.named_roles is not None and ("role",) in paths:
         tested = _role_literals(node)
-        if tested is None or not tested <= named:
+        if tested is None or not tested <= call.named_roles:
             return None
-        known = {**known, "role": None}  # holds none of them: tests as no role
-    return evaluate_constraint(node, known)
+        role = None  # holds none of them: tests as no role
+    return evaluate_constraint(node, {"tool": call.tool, "role": role})
 
 
 def _role_literals(node: Node) -> set[str] | None:

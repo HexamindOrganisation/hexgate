@@ -72,6 +72,7 @@ def test_facts_for_happy_path():
         _refund("500 >= args.amount"),
         _refund("args.amount in [10, 20]"),
         {**_refund("args.amount <= consts.max"), "consts": {"max": 500}},
+        {**_refund("args.amount <= consts.max"), "consts": {"max": 10**400}},
         _refund("500 == args.amount"),
         _refund('args.amount <= 100 or (args.currency == "EUR" and args.amount < 50)'),
         _refund('args.currency == "EUR" and args.amount <= 500'),
@@ -102,11 +103,15 @@ def test_when_amount_is_capped_then_no_fact(policy):
         'args.amount <= "500"',
         "args.amount <= consts.text_max",
         "args.amount <= ctx.limit",
+        # An infinite bound caps nothing: 1e400 parses as inf.
+        "args.amount < 1e400",
+        "args.amount <= consts.inf_max",
         'role == "support" or args.amount <= 100',
     ],
 )
 def test_when_amount_has_no_upper_bound_then_it_is_a_fact(constraint):
-    policy = {**_refund(constraint), "consts": {"text_max": "500"}}
+    consts = {"text_max": "500", "inf_max": float("inf")}
+    policy = {**_refund(constraint), "consts": consts}
     assert UNBOUNDED in _facts(policy, _manifest())
 
 
@@ -144,12 +149,35 @@ def test_when_a_tool_falls_to_an_allowing_default_then_it_counts():
 @pytest.mark.parametrize(
     ("tool", "destructive"),
     [("delete_user", True), ("deleteUser", True), ("db.drop_table", True),
-     ("HTTPDelete", True),
+     ("HTTPDelete", True), ("delete2fa", True), ("getADelete", True),
+     ("runADrop", True),
      ("undelete_user", False), ("view_orders", False)],
 )  # fmt: skip
 def test_when_a_word_of_the_name_is_destructive_then_it_is_a_fact(tool, destructive):
     fact = (tool, "destructive_without_approval", None)
     assert (fact in _facts({"tools": {tool: {"mode": "allow"}}})) is destructive
+
+
+@pytest.mark.parametrize(
+    "constraint",
+    [
+        'tool == "other"',
+        'tool == "other" and args.user_id == "1"',
+        '(tool == "a" and args.user_id == "1") or tool == "b"',
+    ],
+)
+def test_when_no_call_of_the_tool_passes_then_no_kind_is_a_fact(constraint):
+    policy = {"tools": {"delete_user": {"mode": "allow", "constraints": [constraint]}}}
+    assert _facts(policy, _manifest()) == set()
+
+
+def test_when_the_manifest_lacks_a_tool_then_its_rule_raises_no_fact():
+    policy = {
+        "tools": {"refund_order": {"mode": "allow"}, "drop_db": {"mode": "allow"}}
+    }
+    assert ("drop_db", "destructive_without_approval", None) not in _facts(
+        policy, _manifest()
+    )
 
 
 def test_when_there_is_no_manifest_then_arguments_raise_no_fact():
@@ -213,3 +241,18 @@ def test_when_no_agent_is_named_then_the_generic_view_answers(client):  # noqa: 
     body = client.get(f"/v1/projects/{pid}/policy/risk-facts").json()
     assert [(f["agent"], f["tool"]) for f in body["facts"]] == [("*", "purge_cache")]
     assert body["agents_without_manifest"] == ["*"]
+
+
+async def test_when_the_project_has_no_policy_store_then_risk_facts_refuses(
+    client,  # noqa: F811 — the imported fixture
+    session_factory,
+):
+    """Its agents enforce their own policy_yaml, which this route doesn't read,
+    so an empty list would read as no risk."""
+    pid = _project(client)
+    await _register(session_factory, pid, _manifest())
+
+    r = client.get(f"/v1/projects/{pid}/policy/risk-facts")
+
+    assert r.status_code == 409
+    assert "policy.yaml" in r.json()["detail"]

@@ -55,6 +55,11 @@ class DraftWithoutEntryError(Exception):
     """
 
 
+class NoPolicyStoreError(Exception):
+    """A project with neither an entry file nor a role binding: its agents
+    enforce their own ``policy_yaml``, which the store's reads don't see."""
+
+
 class UnknownAgentError(Exception):
     """An agent the project neither declares nor has registered (→ 404)."""
 
@@ -1167,14 +1172,17 @@ async def risk_facts(
     ``agent`` alone, else every declared or registered agent, each against its
     latest manifest; the generic ``"*"`` view only when the project has none.
     ``agents_without_manifest`` lists the agents read without one, whose facts
-    can only come from tool names. Raises the SDK's compose
-    errors if the project doesn't resolve, and :class:`UnknownAgentError` for an
-    ``agent`` neither declared nor registered."""
+    can only come from tool names. Raises :class:`NoPolicyStoreError` when
+    the project isn't modular, the SDK's compose errors if it doesn't resolve,
+    and :class:`UnknownAgentError` for an ``agent`` neither declared nor
+    registered."""
     from hexgate.security import DEFAULT_ROLE_NAME
 
     from hexgate_api.features.agents.service import latest_manifests
     from hexgate_api.features.policy_modules.risk_facts import facts_for
 
+    if not await is_modular(session, project_id):
+        raise NoPolicyStoreError(project_id)
     declared, resolve_for_agent = await _agent_resolver(session, project_id)
     # Every registered agent, not only those whose manifest still loads.
     stmt = select(Agent.name).where(Agent.project_id == project_id)

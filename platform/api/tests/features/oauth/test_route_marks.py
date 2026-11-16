@@ -143,7 +143,8 @@ def test_when_route_is_marked_then_require_user_accepts_the_token(
     r = _call(client, method, route, token)
     # 422: no body was sent, and FastAPI validates it only after the
     # dependencies passed. 503: the audit route with an unreachable or broken ClickHouse.
-    assert r.status_code < 400 or r.status_code in (422, 503), r.text
+    # 409: policy risk facts on a project with no policy store.
+    assert r.status_code < 400 or r.status_code in (409, 422, 503), r.text
 
 
 @pytest.mark.parametrize(("method", "route"), UNMARKED_USER)
