@@ -35,6 +35,16 @@ FactKind = Literal[
 
 _NUMBER_TYPES = frozenset({"number", "integer"})
 _HOST_WORDS = ("host", "hostname", "domain", "url", "uri", "endpoint", "webhook")
+# Words that run into a host word in a name that still means a host
+# (``targeturl``, ``subdomain``), unlike ``curl`` or ``ghost``.
+_HOST_QUALIFIERS = frozenset(
+    {
+        "target", "base", "callback", "redirect", "return", "api", "server",
+        "remote", "proxy", "origin", "source", "dest", "destination", "download",
+        "upload", "image", "file", "site", "web", "home", "login", "next",
+        "request", "service", "backend", "upstream", "sub", "root", "public",
+    }
+)  # fmt: skip
 _DESTRUCTIVE_VERBS = frozenset(
     {
         "delete", "remove", "drop", "destroy", "purge", "truncate", "wipe",
@@ -51,10 +61,15 @@ _HOST_PREFIX = re.compile(r"^[a-z][a-z0-9+.-]*://[^/]+/", re.I)
 # its last label has a letter, so an IP's ``.1`` names nothing.
 _DOMAIN_SUFFIX = re.compile(r"^(\.[a-z0-9-]+)*\.[a-z0-9-]*[a-z][a-z0-9-]*$", re.I)
 # ``_HOST_PREFIX`` as an anchored RE2 pattern: a literal authority (dots escaped), and
-# whose "/" is not made optional (``/?`` lets ``api.x.com.evil.net`` through).
+# whose "/" is not made optional (``/?`` lets ``api.x.com.evil.net`` through). The
+# scheme may end in ``s?`` (``https?``) and a "/" may be escaped as ``\/``.
 _LITERAL_HOST_PATTERN = re.compile(
-    r"^\^[a-z][a-z0-9-]*://(?:[a-z0-9@:-]|\\\.)+/(?![?*+{])", re.I
+    r"^\^[a-z][a-z0-9-]*(?:s\?)?:(?://|\\/\\/)(?:[a-z0-9@:_-]|\\\.)+(?:/|\\/)(?![?*+{])",
+    re.I,
 )
+# A whole host as an RE2 pattern, anchored at both ends with its dots escaped
+# (``^api\.example\.com$``): it pins like ``==``.
+_LITERAL_HOST = re.compile(r"^\^(?:[a-z0-9_-]|\\[.-])+\$$", re.I)
 
 
 @dataclass(frozen=True)
@@ -131,12 +146,9 @@ def _tool_risks(
         # A request is pinned by its host or its url. Only the host is parsed;
         # the url is the request's own URI, so a suffix doesn't pin it. (A url
         # pin covers plain HTTP: CONNECT's url has no path, so HTTPS is denied.)
-        pinned = ("host", "url")
-        if not any(
-            _pins(node, arg, call, parsed=arg == "host")
-            for node in nodes
-            for arg in pinned
-        ):
+        # One walk for both, so an Or may pin each branch on either argument.
+        pinned = {"host": True, "url": False}
+        if not any(_pins(node, pinned, call) for node in nodes):
             yield "host_without_allowlist", "host"
         return
     props = schemas[tool].properties if tool in schemas else {}
@@ -145,18 +157,23 @@ def _tool_risks(
             if not any(_caps(node, name, consts, call) for node in nodes):
                 yield "unbounded_number", name
         elif prop.type == "string" and _is_host_name(name):
-            if not any(_pins(node, name, call) for node in nodes):
+            if not any(_pins(node, {name: False}, call) for node in nodes):
                 yield "host_without_allowlist", name
 
 
 def _is_host_name(name: str) -> bool:
     """Whether a word of the argument's name names a host, singular or plural
-    (``baseUrl``, ``host_name``, ``allowed_hosts``), or its run-together end does
-    (``targeturl``, ``targetURLs``, ``url2``)."""
-    words = [word.rstrip("0123456789").removesuffix("s") for word in _words(name)]
+    (``baseUrl``, ``host_name``, ``allowed_hosts``, ``url2``), or the name runs a
+    qualifier into one (``targeturl``, ``targetURLs``, ``webhookurl``); ``curl``
+    and ``ghost`` don't."""
+    words = [word.removesuffix("s") for word in _words(name)]
+    if any(word in _HOST_WORDS for word in words):
+        return True
     run_together = name.lower().rstrip("0123456789").removesuffix("s")
-    return any(word in _HOST_WORDS for word in words) or run_together.endswith(
-        _HOST_WORDS
+    return any(
+        run_together.removesuffix(word) in _HOST_QUALIFIERS | set(_HOST_WORDS)
+        for word in _HOST_WORDS
+        if run_together.endswith(word)
     )
 
 
@@ -212,16 +229,21 @@ def _unpassable(node: Node, call: _Call) -> bool:
     return _holds(node, lambda _leaf: False, call)
 
 
-def _pins(node: Node, arg: str, call: _Call, parsed: bool = False) -> bool:
-    """Whether every call that passes ``node`` has ``args.<arg>`` pinned to a
-    named host: ``==`` / ``in`` a fixed value, or a ``startswith`` or anchored
-    ``matches`` whose literal text runs past the host to its ``/``. A suffix
-    (``endswith(args.host, ".example.com")``) pins only a ``parsed`` host, the
-    one the egress proxy reads off the request: a raw string the model writes
-    can end in it after a ``/`` or ``?``. A scheme-only prefix pins nothing."""
+def _pins(node: Node, args: dict[str, bool], call: _Call) -> bool:
+    """Whether every call that passes ``node`` has one of ``args`` pinned to a
+    named host: ``==`` / ``in`` a fixed value, a ``startswith`` or anchored
+    ``matches`` whose literal text runs past the host to its ``/``, or a
+    ``matches`` of a whole literal host. ``args`` maps each argument to whether
+    it is ``parsed``: a suffix (``endswith(args.host, ".example.com")``) pins
+    only a parsed host, the one the egress proxy reads off the request, since a
+    raw string the model writes can end in it after a ``/`` or ``?``. A
+    scheme-only prefix pins nothing."""
     from hexgate.security.constraints import Call, Cmp
 
     def leaf_pins(leaf: Node) -> bool:
+        return any(_leaf_pins(leaf, arg, parsed) for arg, parsed in args.items())
+
+    def _leaf_pins(leaf: Node, arg: str, parsed: bool) -> bool:
         if isinstance(leaf, Cmp):
             op, bound = _bound(leaf, arg)
             return op in ("==", "in") and _is_fixed(bound)
@@ -231,7 +253,7 @@ def _pins(node: Node, arg: str, call: _Call, parsed: bool = False) -> bool:
         if leaf.fn == "startswith":
             return bool(_HOST_PREFIX.match(value))
         if leaf.fn == "matches":
-            return _literal_host_prefix(value)
+            return _literal_host_prefix(value) or bool(_LITERAL_HOST.match(value))
         return leaf.fn == "endswith" and parsed and bool(_DOMAIN_SUFFIX.match(value))
 
     return _holds(node, leaf_pins, call)
@@ -239,8 +261,30 @@ def _pins(node: Node, arg: str, call: _Call, parsed: bool = False) -> bool:
 
 def _literal_host_prefix(pattern: str) -> bool:
     """Whether an RE2 ``pattern`` is anchored and its text up to the host's ``/``
-    is literal, with no alternation anywhere."""
-    return "|" not in pattern and bool(_LITERAL_HOST_PATTERN.match(pattern))
+    is literal, with no alternation outside a group: one inside a group after
+    that ``/`` can't reach back past it."""
+    return not _top_level_alternation(pattern) and bool(
+        _LITERAL_HOST_PATTERN.match(pattern)
+    )
+
+
+def _top_level_alternation(pattern: str) -> bool:
+    """Whether ``pattern`` has a ``|`` outside every group and character class."""
+    depth, in_class, escaped = 0, False, False
+    for char in pattern:
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif in_class:
+            in_class = char != "]"
+        elif char == "[":
+            in_class = True
+        elif char in "()":
+            depth += 1 if char == "(" else -1
+        elif char == "|" and depth == 0:
+            return True
+    return False
 
 
 def _bound(cmp: Cmp, arg: str) -> tuple[str | None, Operand | None]:

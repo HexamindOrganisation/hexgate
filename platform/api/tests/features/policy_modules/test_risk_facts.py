@@ -170,6 +170,15 @@ def test_when_a_tool_falls_to_an_allowing_default_then_it_counts():
         ('matches(args.url, "^https://api.example.com/")', True),
         ('matches(args.url, "^https://api\\\\.example\\\\.com/?")', True),
         ('matches(args.url, "^https://api\\\\.example\\\\.com/|^http")', True),
+        # The optional "s" of "https?", "\\/" for "/", and "_" in a service name.
+        ('matches(args.url, "^https?://api\\\\.example\\\\.com/")', False),
+        ('matches(args.url, "^https:\\\\/\\\\/api\\\\.example\\\\.com\\\\/")', False),
+        ('matches(args.url, "^https://my_svc\\\\.internal/")', False),
+        # An alternation inside a group after the host's "/" can't leave it...
+        ('matches(args.url, "^https://api\\\\.example\\\\.com/(a|b)$")', False),
+        # ...but one at the top level can.
+        ('matches(args.url, "^https://api\\\\.example\\\\.com/(a)|^http")', True),
+        ('matches(args.url, "^https://(api|evil)\\\\.example\\\\.com/")', True),
         ('args.url in ["https://a.example/"]', False),
         ('"https://a.example/" == args.url', False),
         ('startswith(args.url, "https://")', True),
@@ -199,6 +208,15 @@ def test_when_url_has_a_constraint_then_only_a_named_host_pins_it(constraint, fl
         ('endswith(args.host, ".1")', True),
         ('startswith(args.url, "https://api.example.com/")', False),
         ('endswith(args.url, ".example.com")', True),
+        # A fully anchored literal host pins like ==.
+        ('matches(args.host, "^api\\\\.example\\\\.com$")', False),
+        ('matches(args.host, "^api.example.com$")', True),
+        ('matches(args.host, "api\\\\.example\\\\.com")', True),
+        ('matches(args.host, "^api\\\\.example\\\\.com")', True),
+        ('matches(args.host, "^api\\\\.example\\\\.com$|^evil")', True),
+        # Every branch pins a named host, each on its own argument.
+        ('args.host == "a.com" or startswith(args.url, "http://b.com/")', False),
+        ('args.host == "a.com" or startswith(args.url, "http://")', True),
     ],
 )
 def test_when_egress_is_allowed_then_only_a_host_or_url_pin_clears_it(
@@ -207,6 +225,24 @@ def test_when_egress_is_allowed_then_only_a_host_or_url_pin_clears_it(
     rule = {"mode": "allow", "constraints": [constraint] if constraint else []}
     fact = ("net.http_request", "host_without_allowlist", "host")
     assert (fact in _facts({"tools": {"net.http_request": rule}})) is flagged
+
+
+@pytest.mark.parametrize(
+    ("argument", "host"),
+    [("url", True), ("baseUrl", True), ("targeturl", True), ("webhookurl", True),
+     ("subdomain", True), ("curl", False), ("ghost", False), ("unhost", False),
+     ("purl", False)],
+)  # fmt: skip
+def test_when_a_name_only_ends_in_a_host_word_then_it_is_not_a_host(argument, host):
+    tool = {"name": "run", "description": "", "input_schema": {
+        "properties": {argument: {"title": argument, "type": "string"}},
+        "required": [],
+    }}  # fmt: skip
+    manifest = AgentManifest.model_validate(
+        {"name": "bot", "framework": "hexgate", "tools": [tool]}
+    )
+    fact = ("run", "host_without_allowlist", argument)
+    assert (fact in _facts({"tools": {"run": {"mode": "allow"}}}, manifest)) is host
 
 
 @pytest.mark.parametrize(
