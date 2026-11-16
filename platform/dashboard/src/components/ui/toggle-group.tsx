@@ -10,7 +10,8 @@ const ToggleGroup = React.forwardRef<
   <ToggleGroupPrimitive.Root
     ref={ref}
     className={cn(
-      "inline-flex items-stretch overflow-hidden rounded-md border border-border",
+      // Segmented control: a recessed track with the selected item raised.
+      "inline-flex items-center gap-0.5 rounded-lg bg-muted p-0.5",
       className,
     )}
     {...props}
@@ -25,7 +26,7 @@ const ToggleGroupItem = React.forwardRef<
   <ToggleGroupPrimitive.Item
     ref={ref}
     className={cn(
-      "inline-flex items-center justify-center gap-1.5 whitespace-nowrap border-r border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors last:border-r-0 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 data-[state=on]:bg-background data-[state=on]:text-foreground",
+      "inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 data-[state=on]:bg-raised data-[state=on]:text-foreground data-[state=on]:shadow-xs",
       className,
     )}
     {...props}

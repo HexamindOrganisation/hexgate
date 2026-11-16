@@ -8,6 +8,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { HexgateMark } from "@/components/ui/hexgate-mark";
 import { useActive } from "@/lib/active";
 import { useOrgs, type OrgWithRole } from "@/lib/orgs";
 import { useProjects, type ProjectRead } from "@/lib/projects";
@@ -19,9 +20,8 @@ import { cn } from "@/lib/utils";
  * projects nested) in a single dropdown. "+ New project" /
  * "+ New organization" footer actions open the corresponding dialogs.
  *
- * Renders as a two-line block — project name on top, org name beneath — so
- * the project reads as the primary context (OpenAI-style) even though one
- * dropdown still switches both.
+ * Renders as a card: the org as a small caption above the project name, which
+ * is the larger, primary line even though one dropdown switches both.
  *
  * Two state pieces:
  *   - which orgs/projects exist (from React Query)
@@ -63,22 +63,35 @@ export function OrgProjectSwitcher({
         <button
           type="button"
           className={cn(
-            "flex w-full flex-col gap-0.5 rounded-md px-2 py-1 text-left",
-            "transition-colors hover:bg-accent",
+            // Sits on the sidebar's card surface: no fill of its own, and the
+            // sidebar's one hover shade (full accent is the active nav row).
+            "flex w-full items-center gap-2.5 rounded-xl border border-border bg-transparent p-1.5 text-left",
+            "transition-colors hover:bg-accent/60",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           )}
         >
-          <span className="flex w-full items-center gap-1">
-            <span className="truncate text-sm font-medium text-foreground">
+          <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-action text-action-foreground">
+            <HexgateMark className="size-4" />
+          </span>
+          <span className="flex min-w-0 flex-1 flex-col">
+            {label.org && (
+              <span className="truncate text-caption text-muted-foreground">
+                {label.org}
+              </span>
+            )}
+            {/* Mono for a project name, not for a placeholder like it. */}
+            <span
+              className={cn(
+                "truncate text-[13px] font-medium",
+                label.placeholder
+                  ? "text-muted-foreground"
+                  : "font-mono text-foreground",
+              )}
+            >
               {label.project}
             </span>
-            <ChevronsUpDown className="ml-auto size-3 shrink-0 text-muted-foreground" />
           </span>
-          {label.org && (
-            <span className="truncate text-xs text-muted-foreground">
-              {label.org}
-            </span>
-          )}
+          <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
         </button>
       </DropdownMenuTrigger>
 
@@ -163,13 +176,20 @@ function switcherLabel(
   activeOrg: OrgWithRole | null,
   activeProject: ProjectRead | null,
   loading: boolean,
-): { project: string; org: string } {
+): { project: string; org: string; placeholder: boolean } {
   // Keep the org name visible while projects load, so an org switch doesn't
   // blank the context — only the project line reads "Loading…".
-  if (loading) return { project: "Loading…", org: activeOrg?.name ?? "" };
-  if (!activeOrg) return { project: "Pick an organization", org: "" };
+  if (loading)
+    return {
+      project: "Loading…",
+      org: activeOrg?.name ?? "",
+      placeholder: true,
+    };
+  if (!activeOrg)
+    return { project: "Pick an organization", org: "", placeholder: true };
   return {
     project: activeProject?.name ?? "No project",
     org: activeOrg.name,
+    placeholder: !activeProject,
   };
 }

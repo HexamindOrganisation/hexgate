@@ -12,7 +12,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import yaml
@@ -24,7 +25,8 @@ from hexgate_api.core.ids import new_id
 from hexgate_api.models import PolicyFile, PolicyModule, RoleBinding, utcnow
 
 if TYPE_CHECKING:  # the SDK is imported lazily at run time
-    from hexgate.security import PolicyLint
+    from hexgate.security import PolicyLint, Verdict
+    from hexgate.security.linker import ProjectLinkResult
 
     from hexgate_api.schemas import PolicyFileDraft
 
@@ -61,6 +63,12 @@ class UnknownRoleError(Exception):
     without also catching a ``KeyError`` the SDK decision engine might raise for an
     unrelated missing key — which should surface as a 500, not a phantom 404.
     """
+
+
+class UndeclaredAgentError(UnknownRoleError):
+    """An unknown role looked up for an agent the policy does not declare: the
+    agent resolved under the generic ``"*"`` view, so a mistyped agent, not the
+    role, is the likelier cause. ``args``: the role, the agent, the declared."""
 
 
 def _content_hash(content: str) -> str:
@@ -561,6 +569,32 @@ async def is_modular(session: AsyncSession, project_id: str) -> bool:
     return row is not None
 
 
+def matrix_json(result, extra_tools: Iterable[str] = ()) -> dict:
+    """Roles x tools for a resolution, tabulated by the engine's own fallback
+    and constraint composition (``hexgate.security.matrix``) — the grid the AI
+    Act report evidences, so the editor can't read a grant the engine won't
+    enforce. ``extra_tools`` the policy doesn't list get the engine's fallback
+    cells (reserved keys deny) in ``cells``, but stay out of ``tools``."""
+    from hexgate.security.matrix import authorisation_matrix
+
+    m = authorisation_matrix(result.policy_set)
+
+    def cell(c) -> dict:
+        return {"mode": c.mode, "constraint": c.constraint_text}
+
+    cells = {t: {r: cell(m.cell(t, r)) for r in m.roles} for t in m.tools}
+    for t in extra_tools:
+        if t not in cells:
+            cells[t] = {r: cell(m.default_cell(t, r)) for r in m.roles}
+    return {
+        "roles": list(m.roles),
+        "tools": list(m.tools),
+        "cells": cells,
+        "defaults": {r: cell(c) for r, c in m.defaults.items()},
+        "aliased_default": m.aliased_default,
+    }
+
+
 def roles_json(result, role: str | None = None) -> dict:
     """The effective policy per role, as JSON-able dicts.
 
@@ -709,11 +743,28 @@ def _resolve_files(files: dict[str, str], agent: str = DEFAULT_AGENT):
     )
 
 
+def _resolve_parsed(files: dict[str, str], entry, agent: str):
+    """:func:`_resolve_files` for an entry already parsed from ``files``. Resolving
+    splices imports into ``entry``, so each entry resolves one agent only."""
+    from hexgate.security.compose import resolve_entry
+
+    return resolve_entry(
+        entry,
+        agent=agent,
+        source=ENTRY_FILE,
+        loader=_db_loader(files),
+        entry_path=ENTRY_FILE,
+    )
+
+
 def _compose_agent_names(files: dict[str, str]) -> list[str]:
     """``"*"`` plus every agent the entry declares — the compile fan-out set."""
     from hexgate.security.compose import parse_entry
 
-    entry = parse_entry(files[ENTRY_FILE], source=ENTRY_FILE)
+    return _declared_agents(parse_entry(files[ENTRY_FILE], source=ENTRY_FILE))
+
+
+def _declared_agents(entry) -> list[str]:
     return [DEFAULT_AGENT, *sorted(entry.agents)]
 
 
@@ -824,12 +875,17 @@ async def resolve_auto(
     session: AsyncSession, project_id: str, agent: str = DEFAULT_AGENT
 ):
     """Resolve for the resolve endpoint — compose (an entry file) or the tier
-    store, deciding from a **single** store read of the files. Raises the SDK's
+    store, deciding from a **single** store read of the files — and whether the
+    project is modular (:func:`is_modular`), from the same reads. Raises the SDK's
     compose errors (:func:`compose_error_types`, a superset of the tier errors)."""
     files = await _files_map(session, project_id)
     if ENTRY_FILE in files:
-        return _resolve_files(files, agent)
-    return await resolve(session, project_id, agent=agent)
+        return _resolve_files(files, agent), True
+    from hexgate.security import resolve_for_project
+
+    boundaries, capabilities, roles = await _sdk_inputs(session, project_id)
+    result = resolve_for_project(boundaries, capabilities, roles, agent=agent)
+    return result, roles is not None
 
 
 async def check_auto(
@@ -932,26 +988,31 @@ async def compose_preview(
     *,
     drafts: Iterable[PolicyFileDraft],
     agent: str = DEFAULT_AGENT,
-) -> tuple[dict | None, list[PolicyLint]]:
+) -> tuple[dict | None, dict | None, list[PolicyLint]]:
     """Resolve the project with ``drafts`` applied over its files — the
-    editor's live preview. Returns ``(resolved, lints)``: the requested agent's
-    effective policy (``None`` when it doesn't compose) and the lints. Validates *every* declared agent (like the save-time 409 check) so
+    editor's live preview. Returns ``(resolved, matrix, lints)``: the requested
+    agent's effective policy and its roles x tools matrix (both ``None`` when it
+    doesn't compose) and the lints. Validates *every* declared agent (like the save-time 409 check) so
     the preview and the save agree — a draft that breaks a different agent still
     previews as an error, not falsely clean. The lints are the same findings
     :func:`check_auto` returns for the saved project."""
     try:
         files = await files_with_drafts(session, project_id, drafts)
     except DraftWithoutEntryError as exc:
-        return None, [_link_error(str(exc))]
+        return None, None, [_link_error(str(exc))]
     if ENTRY_FILE not in files:
-        return None, [_link_error(f"no entry file {ENTRY_FILE!r} in this project")]
+        return (
+            None,
+            None,
+            [_link_error(f"no entry file {ENTRY_FILE!r} in this project")],
+        )
     try:
         # Every declared agent, so the preview and the save agree.
         resolved, lints = await _resolve_and_lint(session, project_id, files)
         requested = _resolution_for(resolved, agent)
     except compose_error_types() as exc:
-        return None, [_link_error(str(exc))]
-    return roles_json(requested), lints
+        return None, None, [_link_error(str(exc))]
+    return roles_json(requested), matrix_json(requested), lints
 
 
 def _graph_from(agent_names, resolve_for_agent, role: str | None = None) -> dict:
@@ -1092,23 +1153,46 @@ async def policy_graph(
     """A node/edge graph of the project's agents, tools, and reach/admission edges,
     for one ``role`` (or the union across roles). Auto-dispatches compose (an entry
     file) vs the tier store — a single files read — and feeds the same builder.
-    Raises the SDK's compose errors if the project doesn't resolve."""
+    Also returns the declared agents (``"*"`` included; an agent a grant only
+    reaches is a node but not declared) and whether the project is modular
+    (:func:`is_modular`), from the same reads. Raises the SDK's compose errors if
+    the project doesn't resolve."""
     files = await _files_map(session, project_id)
+    agent_names, resolve_for_agent, modular = await _agent_resolver(
+        session, project_id, files
+    )
+    graph = _graph_from(agent_names, resolve_for_agent, role=role)
+    return {**graph, "declared_agents": agent_names, "modular": modular}
+
+
+async def _agent_resolver(
+    session: AsyncSession, project_id: str, files: dict[str, str]
+) -> tuple[list[str], Callable[[str], ProjectLinkResult], bool]:
+    """The agents the project declares (``"*"`` included), a per-agent resolver
+    (compose when ``files`` holds an entry file, else the tier store), and
+    whether the project is modular (:func:`is_modular`), from the same reads."""
     if ENTRY_FILE in files:
-        agent_names = _compose_agent_names(files)
+        return _compose_agent_names(files), lambda a: _resolve_files(files, a), True
+    from hexgate.security import resolve_for_project
 
-        def resolve_for_agent(a: str):
-            return _resolve_files(files, a)
-    else:
-        from hexgate.security import resolve_for_project
+    boundaries, capabilities, roles = await _sdk_inputs(session, project_id)
+    return (
+        sorted(_all_agent_names(roles)),
+        lambda a: resolve_for_project(boundaries, capabilities, roles, agent=a),
+        roles is not None,
+    )
 
-        boundaries, capabilities, roles_matrix = await _sdk_inputs(session, project_id)
-        agent_names = sorted(_all_agent_names(roles_matrix))
 
-        def resolve_for_agent(a: str):
-            return resolve_for_project(boundaries, capabilities, roles_matrix, agent=a)
+@dataclass(frozen=True)
+class DryRun:
+    """A dry-run's verdict, and whether the policy it ran against declares the
+    agent: an agent it does not declare is evaluated under the generic ``"*"``
+    view, so the same verdict would otherwise read as that agent's own. With
+    the agents it does declare (``"*"`` included), to name them."""
 
-    return _graph_from(agent_names, resolve_for_agent, role=role)
+    verdict: Verdict
+    agent_declared: bool
+    declared_agents: list[str]
 
 
 async def test_policy(
@@ -1121,7 +1205,7 @@ async def test_policy(
     args: dict,
     attributes: dict | None = None,
     drafts: Iterable[PolicyFileDraft] = (),
-):
+) -> DryRun:
     """Evaluate one tool call against the resolved policy for ``role`` + ``agent``,
     then run the SDK decision engine.
 
@@ -1129,19 +1213,30 @@ async def test_policy(
     :func:`files_with_drafts`, which raises :class:`DraftWithoutEntryError` for
     a project that would still resolve from the tier store). Raises the SDK's
     compose errors if the project doesn't resolve, and :class:`UnknownRoleError`
-    (→ 404) for an unknown role."""
+    (→ 404) for an unknown role (:class:`UndeclaredAgentError` when ``agent`` is
+    not declared either)."""
     files = await files_with_drafts(session, project_id, drafts)
     if ENTRY_FILE in files:
-        result = _resolve_files(files, agent)
-    else:
-        from hexgate.security import resolve_for_project
+        # One parse: the entry gives both the declared agents and the resolve.
+        from hexgate.security.compose import parse_entry
 
-        boundaries, capabilities, roles = await _sdk_inputs(session, project_id)
-        result = resolve_for_project(boundaries, capabilities, roles, agent=agent)
+        entry = parse_entry(files[ENTRY_FILE], source=ENTRY_FILE)
+        declared = _declared_agents(entry)
+        result = _resolve_parsed(files, entry, agent)
+    else:
+        declared, resolve_for_agent, _ = await _agent_resolver(
+            session, project_id, files
+        )
+        result = resolve_for_agent(agent)
     if role not in result.policy_set.roles:
+        if agent not in declared:
+            raise UndeclaredAgentError(role, agent, declared)
         raise UnknownRoleError(role)
-    return result.policy_set.evaluate(
+    verdict = result.policy_set.evaluate(
         role=role, tool=tool, args=dict(args), attributes=attributes
+    )
+    return DryRun(
+        verdict=verdict, agent_declared=agent in declared, declared_agents=declared
     )
 
 

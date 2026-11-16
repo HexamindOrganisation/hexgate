@@ -137,6 +137,27 @@ describe("sendChat role attenuation", () => {
   });
 });
 
+describe("served agent", () => {
+  it("drops the transcript when a different agent comes online", async () => {
+    const { result } = renderHook(() => usePlayground({ projectId: "p1" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const ws = MockSocket.instances[0];
+    act(() => ws.receive({ type: "agent_online", online: true, agent: "a" }));
+    act(() => result.current.sendChat("hi"));
+    expect(result.current.state.messages).toHaveLength(2);
+    // A restart of the same agent keeps the chat.
+    act(() => ws.receive({ type: "agent_online", online: false }));
+    act(() => ws.receive({ type: "agent_online", online: true, agent: "a" }));
+    expect(result.current.state.messages).toHaveLength(2);
+    act(() => ws.receive({ type: "agent_online", online: false }));
+    act(() => ws.receive({ type: "agent_online", online: true, agent: "b" }));
+    expect(result.current.state.messages).toHaveLength(0);
+    expect(result.current.state.agentName).toBe("b");
+  });
+});
+
 describe("approval requests over the WS", () => {
   it("renders a received approval.request into pendingApprovals", async () => {
     const { result } = renderHook(() => usePlayground({ projectId: "p1" }));

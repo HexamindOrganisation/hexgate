@@ -75,6 +75,13 @@ function baseRoutes(): Record<string, unknown> {
     [`/v1/projects/${PID}/policy/resolve`]: {
       roles: { default: { tools: { read_ticket: { mode: "allow" } } } },
     },
+    [`/v1/projects/${PID}/policy/matrix`]: {
+      roles: ["default"],
+      tools: ["read_ticket"],
+      cells: { read_ticket: { default: { mode: "allow", constraint: null } } },
+      defaults: { default: { mode: "deny", constraint: null } },
+      aliased_default: null,
+    },
     [`/v1/projects/${PID}/policy/check`]: { ok: true, lints: [] },
     // A saved new file echoes back its stored row.
     [`/v1/projects/${PID}/policy-files/extra.yaml`]: file("extra.yaml", ""),
@@ -112,6 +119,19 @@ describe("PoliciesPage", () => {
     renderWithProviders(<PoliciesPage />);
     await waitFor(() => expect(screen.getByText("active")).toBeInTheDocument());
     expect(screen.getAllByText("policy.yaml").length).toBeGreaterThan(0);
+  });
+
+  it("opens on the agent a hub link names", async () => {
+    renderWithProviders(<PoliciesPage />, {
+      initialRoute: "/policies?agent=support_bot",
+    });
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(window.fetch)
+          .mock.calls.some(([u]) => String(u).includes("agent=support_bot")),
+      ).toBe(true),
+    );
   });
 
   it("renders the resolved policy for the entry file's grant", async () => {
