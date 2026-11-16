@@ -22,9 +22,11 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from hexgate_api.features.policy_modules import coverage
+from hexgate_api.features.policy_modules import service
+from hexgate_api.models import Agent
 from hexgate_api.schemas import SimilarAgentOut, SimilarReasonsOut, SimilarSignalsOut
 
 if TYPE_CHECKING:  # the SDK is imported lazily at run time
@@ -42,10 +44,21 @@ NO_ROLE_WEIGHTS = {k: w for k, w in SIGNAL_WEIGHTS.items() if k != "roles"}
 
 _MIN_WORD = 4
 _MIN_PLURAL_WORD = 5
-_CAMEL = re.compile(r"([a-z0-9])([A-Z])|([A-Z])([A-Z][a-z])")
-# "es" is the plural only after x, z, ch, sh or ss (boxes, branches, addresses);
-# elsewhere the plural is the "s" (invoices, databases).
-_ES_PLURAL = re.compile(r"(?:x|z|ch|sh|ss)es$")
+# Between a lowercase letter and a capital, and before the last capital of a
+# run that starts a word: getAValue → get A Value, HTTPServer → HTTP Server.
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+# "es" is the plural only after x, z, ch, sh, ss, "us" (statuses, not houses)
+# or "ias" (aliases); elsewhere the plural is the "s" (invoices, databases).
+_ES_PLURAL = re.compile(r"(?:x|z|ch|sh|ss|[^aou]us|ias)es$")
+# Verbs that most tool names start with: sharing one says nothing about what
+# two agents do. Not the ones that are as often nouns (post, view, query, patch).
+_GENERIC_VERBS = frozenset(
+    {
+        "list", "create", "read", "update", "delete", "remove", "send", "search",
+        "fetch", "find", "write", "lookup", "edit", "show", "insert", "upsert",
+        "retrieve", "describe", "execute", "submit", "make",
+    }
+)  # fmt: skip
 
 
 class UnknownAgentError(Exception):
@@ -77,25 +90,28 @@ class Profile:
 
 def _words(text: str) -> list[str]:
     """``text`` split on separators and camelCase, lowercased, plurals stripped."""
-    spaced = _CAMEL.sub(r"\1\3 \2\4", text)
+    spaced = _CAMEL.sub(" ", text)
     split = re.split(r"[^A-Za-z0-9]+", spaced)
     return [_singular(w.lower()) for w in split if w]
 
 
 def _singular(word: str) -> str:
-    """``invoices`` → ``invoice``, ``boxes`` → ``box``; not ``address`` or
-    ``status``. Deliberately rough and English only (``queries`` is not
-    handled): the simplest rule that matches the common plurals, until
-    embeddings replace the word comparison."""
-    if len(word) < _MIN_PLURAL_WORD or word.endswith(("ss", "us", "is")):
+    """``invoices`` → ``invoice``, ``boxes`` → ``box``, ``policies`` →
+    ``policy``, ``statuses`` → ``status``; not ``address``, ``status`` or
+    ``alias``. Deliberately rough and English only (irregular plurals,
+    ``movies`` → ``movy``, ``abuses`` → ``abus``): the simplest rule that matches the common plurals,
+    until embeddings replace the word comparison."""
+    if len(word) < _MIN_PLURAL_WORD or word.endswith(("ss", "us", "is", "ias")):
         return word
+    if word.endswith("ies"):
+        return word[:-3] + "y"
     if _ES_PLURAL.search(word):
         return word[:-2]
     return word[:-1] if word.endswith("s") else word
 
 
 def _is_content(word: str) -> bool:
-    return len(word) >= _MIN_WORD and not word.isdigit()
+    return len(word) >= _MIN_WORD and not word.isdigit() and word not in _GENERIC_VERBS
 
 
 def rarity(doc_freq: int, agents: int) -> float:
@@ -162,30 +178,66 @@ def compare(
     return score, signals, reasons
 
 
+@dataclass(frozen=True)
+class AgentPolicy:
+    """Whether an agent has a policy of its own, and the roles it defines."""
+
+    has_policy: bool
+    roles: list[str]
+
+
+async def _agent_policies(
+    session: AsyncSession, project_id: str
+) -> dict[str, AgentPolicy]:
+    """Every registered agent's :class:`AgentPolicy`, by name. Roles say
+    something only where the project policy names the agent: an agent it does
+    not name runs under the ``"*"`` view, whose roles every such agent shares,
+    and without a project policy each agent's own is seeded with the same
+    platform roles. Only the entry file is resolved, to read its sections: the
+    bindings are read as stored, and an agent's own policy is not read."""
+    agents = (
+        await session.exec(
+            select(Agent.name, Agent.policy_yaml).where(Agent.project_id == project_id)
+        )
+    ).all()
+    if await service.has_entry_file(session, project_id):
+        # Resolved, not parsed: a section's roles may come from its imports.
+        resolved = await service.resolve_every_agent(session, project_id)
+        return {
+            name: AgentPolicy(True, resolved[name].policy_set.roles)
+            if name in resolved
+            else AgentPolicy(False, [])
+            for name, _ in agents
+        }
+    if not await service.is_modular(session, project_id):
+        return {name: AgentPolicy(bool(text.strip()), []) for name, text in agents}
+    # A role's "*" cell reaches every column, so a named column resolves with
+    # every role: only the cells naming the agent are its own.
+    bindings = await service.get_roles(session, project_id)
+    named = {
+        name: [role for role, cells in bindings.items() if name in cells]
+        for name, _ in agents
+    }
+    return {name: AgentPolicy(bool(roles), roles) for name, roles in named.items()}
+
+
 async def similar_agents(
     session: AsyncSession, project_id: str, agent: str, limit: int
 ) -> tuple[bool, list[SimilarAgentOut]]:
     """Whether ``agent`` has a registered manifest, and the other registered
     agents with any signal in common, best first (ties by name), at most
     ``limit``. Raises :class:`UnknownAgentError` for an agent that is not
-    registered, and what :func:`coverage.agent_policies` raises when a policy
-    does not resolve."""
+    registered, and the SDK's compose errors when a project's entry file does
+    not resolve."""
     from hexgate_api.features.agents.service import latest_manifests
 
-    modular, enforced = await coverage.agent_policies(session, project_id)
-    if agent not in enforced:
+    policies = await _agent_policies(session, project_id)
+    if agent not in policies:
         raise UnknownAgentError(agent)
     manifests = await latest_manifests(session, project_id)
-    # Roles say something only where the project policy gave the agent a
-    # section: without a project policy every agent's own one is seeded with
-    # the same platform roles, and an agent it has no section for runs under
-    # the "*" view, whose roles all such agents share.
     profiles = {
-        name: Profile.of(
-            manifests.get(name),
-            policy.policy_set.roles if modular and policy.has_policy else [],
-        )
-        for name, policy in enforced.items()
+        name: Profile.of(manifests.get(name), policy.roles)
+        for name, policy in policies.items()
     }
     target = profiles[agent]
     corpus = Corpus.of(list(profiles.values()))
@@ -200,7 +252,7 @@ async def similar_agents(
                 SimilarAgentOut(
                     agent=name,
                     score=score,
-                    has_policy=enforced[name].has_policy,
+                    has_policy=policies[name].has_policy,
                     roles=sorted(profile.roles),
                     signals=signals,
                     reasons=reasons,
@@ -208,8 +260,8 @@ async def similar_agents(
             )
     # A full sort, O(n log n) time and O(n) space for the matches, not a
     # top-`limit` heap (`heapq.heappushpop` as each agent is scored), O(n log limit)
-    # time and O(limit) space: a project has tens of agents, and loading and
-    # parsing every agent's policy and manifest, plus the profiles and rarity
+    # time and O(limit) space: a project has tens of agents, and loading the
+    # policies and parsing every manifest, plus the profiles and rarity
     # counts that need every agent (O(n * features) space either way), cost far
     # more. If projects reach thousands of agents, switch to the heap with the
     # same key; `heapq.nsmallest` over this finished list would save time, not space.

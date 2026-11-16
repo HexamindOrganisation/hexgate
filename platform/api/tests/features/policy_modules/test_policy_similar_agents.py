@@ -6,7 +6,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.features.policy_modules.conftest import _project, _put_file
+from tests.features.policy_modules.conftest import _project, _put_file, _put_module
+from hexgate_api.features.agents import service as agents_service
 from hexgate_api.features.policy_modules import similar
 
 ENTRY = (
@@ -70,14 +71,14 @@ async def test_when_agents_share_only_name_words_then_the_words_are_the_reason(
     client, register
 ):
     pid = _project(client)
-    await register(pid, "a", ["send_email"])
-    await register(pid, "b", ["send_slack"])
+    await register(pid, "a", ["notify_email"])
+    await register(pid, "b", ["notify_slack"])
     await register(pid, "c", ["email_draft"])
 
     matches = _similar(client, pid, "a").json()["matches"]
 
     assert [m["agent"] for m in matches] == ["b", "c"]
-    assert matches[0]["reasons"]["shared_name_words"] == ["send"]
+    assert matches[0]["reasons"]["shared_name_words"] == ["notify"]
     assert matches[1]["reasons"]["shared_name_words"] == ["email"]
     assert matches[0]["signals"]["tools"] == 0
     assert 0 < matches[0]["signals"]["name_words"] < 1
@@ -305,3 +306,85 @@ async def test_when_target_has_no_policy_section_then_candidates_are_scored_alik
 
 def test_when_weights_are_summed_then_they_equal_1():
     assert sum(similar.SIGNAL_WEIGHTS.values()) == pytest.approx(1.0)
+
+
+async def test_when_project_has_role_bindings_then_roles_are_the_cells_naming_the_agent(
+    client, register
+):
+    pid = _project(client)
+    _put_module(
+        client, pid, "capability", "read_only", "tools:\n  view: { mode: allow }\n"
+    )
+    _put_module(
+        client, pid, "capability", "refunds", "tools:\n  refund: { mode: allow }\n"
+    )
+    star = {"*": ["read_only"]}
+    roles = {
+        "support": star | {"refund_bot": ["refunds"], "billing_bot": ["refunds"]},
+        "finance": star | {"weather_bot": ["refunds"]},
+    }
+    r = client.put(f"/v1/projects/{pid}/policy-roles", json={"roles": roles})
+    assert r.status_code == 200, r.text
+    await register(pid, "refund_bot", ["issue_refund"])
+    await register(pid, "billing_bot", ["export_invoices"])
+    await register(pid, "weather_bot", ["get_forecast"])
+
+    matches = _similar(client, pid, "refund_bot").json()["matches"]
+
+    # Every named column resolves with both roles through "*"; only the cells
+    # that name an agent say which roles are its own.
+    assert [(m["agent"], m["roles"], m["has_policy"]) for m in matches] == [
+        ("billing_bot", ["support"], True)
+    ]
+
+
+async def test_when_a_classic_project_has_a_policy_that_does_not_load_then_others_rank(
+    client, register, session_factory
+):
+    pid = _project(client)
+    for name in ("a", "b", "broken"):
+        await register(pid, name, ["read_ticket"])
+    async with session_factory() as session:
+        agent = await agents_service.get_agent(session, pid, "broken")
+        agent.policy_yaml = "- not a mapping\n"
+        await session.commit()
+
+    r = _similar(client, pid, "a")
+
+    assert r.status_code == 200, r.text
+    assert [m["agent"] for m in r.json()["matches"]] == ["b", "broken"]
+
+
+async def test_when_names_share_only_generic_verbs_then_they_do_not_match(
+    client, register
+):
+    pid = _project(client)
+    await register(pid, "a", ["list_orders", "create_refund"])
+    await register(pid, "b", ["list_weather_stations"])
+    await register(pid, "c", ["create_calendar_event", "search_events"])
+    await register(pid, "d", ["update_ledger", "delete_ledger", "read_ledger"])
+
+    assert _similar(client, pid, "a").json()["matches"] == []
+    assert _similar(client, pid, "d").json()["matches"] == []
+
+
+@pytest.mark.parametrize(
+    ("plural", "singular", "word"),
+    [
+        ("list_policies", "read_policy", "policy"),
+        ("get_statuses", "get_status", "status"),
+        ("list_aliases", "get_alias", "alias"),
+        ("list_warehouses", "get_warehouse", "warehouse"),
+        ("getAValue", "get_value", "value"),
+    ],
+)
+async def test_when_a_regular_plural_or_single_capital_differs_then_the_word_matches(
+    client, register, plural, singular, word
+):
+    pid = _project(client)
+    await register(pid, "a", [plural])
+    await register(pid, "b", [singular])
+
+    (match,) = _similar(client, pid, "a").json()["matches"]
+
+    assert match["reasons"]["shared_name_words"] == [word]

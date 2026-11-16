@@ -636,7 +636,8 @@ async def api_policy_similar_agents(
     words in tool names and roles, best first by a 0 to 1 ``score``, each with
     its per-signal ``signals``, the ``reasons`` it ranked and whether it has a
     policy to start from. Tool descriptions are not compared. 404 for an
-    ``agent`` that is not registered; 422 as for ``/policy/coverage``."""
+    ``agent`` that is not registered; 422 when the project's entry file does
+    not resolve."""
     try:
         has_manifest, matches = await similar.similar_agents(
             session, project_id, agent, limit
@@ -644,11 +645,6 @@ async def api_policy_similar_agents(
     except similar.UnknownAgentError as exc:
         raise HTTPException(
             status_code=404, detail=f"agent {agent!r} is not registered"
-        ) from exc
-    except coverage.PolicyLoadError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"the stored policy of agent {exc.agent!r} does not load",
         ) from exc
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

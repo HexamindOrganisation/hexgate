@@ -706,11 +706,14 @@ class SimilarSignalsOut(BaseModel):
 
 class SimilarAgentOut(BaseModel):
     """One registered agent that resembles the one asked about. ``score`` is
-    0 to 1, the weighted sum of its ``signals``. ``has_policy`` is False when
-    the project policy has no section for it (it enforces the ``"*"`` view) or
-    its own stored policy is empty; ``roles`` are the roles the project policy
-    defines for it (none without a project policy). Read the policy itself
-    with ``/policy/resolve?agent=``."""
+    0 to 1, the weighted sum of its ``signals``; when the agent asked about
+    has no roles, none can be shared, so ``roles`` is left out and the other
+    two weights are scaled to sum to 1. ``has_policy`` is False when the
+    project policy does not name it (it enforces the ``"*"`` view) or its own
+    stored policy is empty; ``roles`` are the roles the project policy gives
+    it (none without a project policy). Read its policy with
+    ``/policy/resolve?agent=`` where the project has a project policy, else
+    from its own ``policy_yaml`` (``/agents/{name}``)."""
 
     agent: str
     score: float

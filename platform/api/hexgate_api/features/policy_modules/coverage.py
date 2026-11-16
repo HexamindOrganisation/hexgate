@@ -41,7 +41,7 @@ class PolicyLoadError(Exception):
 
 
 @dataclass(frozen=True)
-class EnforcedPolicy:
+class _Enforced:
     """The policy set an agent enforces, the tool keys it has a rule for, and
     whether it is the agent's own (its section of the project policy, or its
     own stored ``policy_yaml``)."""
@@ -51,18 +51,20 @@ class EnforcedPolicy:
     has_policy: bool
 
     @classmethod
-    def of(cls, policy_set: PolicySet, *, has_policy: bool) -> EnforcedPolicy:
+    def of(cls, policy_set: PolicySet, *, has_policy: bool) -> _Enforced:
         return cls(policy_set, _named_keys(policy_set), has_policy)
 
 
-async def agent_policies(
+async def project_coverage(
     session: AsyncSession, project_id: str
-) -> tuple[bool, dict[str, EnforcedPolicy]]:
-    """Whether the project has a policy of its own (``is_modular``), and every
-    registered agent's :class:`EnforcedPolicy`, by name: its section of that
-    policy, else its own ``policy_yaml``. Raises the SDK's compose errors
+) -> list[AgentCoverageOut]:
+    """Coverage for every registered agent, by name, against the policy it
+    enforces: the project policy when the project has one (``is_modular``),
+    else its own ``policy_yaml``. Raises the SDK's compose errors
     (:func:`service.compose_error_types`) when the project policy doesn't
     resolve, and :class:`PolicyLoadError` when an agent's own doesn't load."""
+    from hexgate_api.features.agents.service import latest_manifests
+
     agents = (
         await session.exec(
             select(Agent.name, Agent.policy_yaml)
@@ -72,43 +74,31 @@ async def agent_policies(
     ).all()
     if await service.is_modular(session, project_id):
         enforced = await _project_policies(session, project_id, [a for a, _ in agents])
-        return True, enforced
-    return False, {agent: _own_policy(agent, text) for agent, text in agents}
-
-
-async def project_coverage(
-    session: AsyncSession, project_id: str
-) -> list[AgentCoverageOut]:
-    """Coverage for every registered agent, by name, against the policy it
-    enforces (:func:`agent_policies`, whose errors it raises)."""
-    from hexgate_api.features.agents.service import latest_manifests
-
-    _, enforced = await agent_policies(session, project_id)
+    else:
+        enforced = {agent: _own_policy(agent, text) for agent, text in agents}
     manifests = await latest_manifests(session, project_id)
     return [
-        _agent_coverage(agent, policy, manifests.get(agent))
-        for agent, policy in enforced.items()
+        _agent_coverage(agent, enforced[agent], manifests.get(agent))
+        for agent, _ in agents
     ]
 
 
 async def _project_policies(
     session: AsyncSession, project_id: str, agents: list[str]
-) -> dict[str, EnforcedPolicy]:
+) -> dict[str, _Enforced]:
     """Each agent's section of the project policy, or the ``"*"`` view when
     the policy has none for it."""
     resolved = await service.resolve_every_agent(session, project_id)
-    generic = EnforcedPolicy.of(
-        resolved[service.DEFAULT_AGENT].policy_set, has_policy=False
-    )
+    generic = _Enforced.of(resolved[service.DEFAULT_AGENT].policy_set, has_policy=False)
     return {
-        agent: EnforcedPolicy.of(resolved[agent].policy_set, has_policy=True)
+        agent: _Enforced.of(resolved[agent].policy_set, has_policy=True)
         if agent in resolved
         else generic
         for agent in agents
     }
 
 
-def _own_policy(agent: str, policy_yaml: str) -> EnforcedPolicy:
+def _own_policy(agent: str, policy_yaml: str) -> _Enforced:
     """An agent's own stored policy. An empty one loads as the platform
     default (deny everything), which is what the agent then enforces."""
     from hexgate.security import load_policy_set_from_dict
@@ -120,12 +110,12 @@ def _own_policy(agent: str, policy_yaml: str) -> EnforcedPolicy:
         policy_set = load_policy_set_from_dict(document)
     except service.compose_error_types() as exc:
         raise PolicyLoadError(agent) from exc
-    return EnforcedPolicy.of(policy_set, has_policy=bool(policy_yaml.strip()))
+    return _Enforced.of(policy_set, has_policy=bool(policy_yaml.strip()))
 
 
 def _agent_coverage(
     agent: str,
-    enforced: EnforcedPolicy,
+    enforced: _Enforced,
     manifest: AgentManifest | None,
 ) -> AgentCoverageOut:
     policy_set, keys = enforced.policy_set, enforced.named
