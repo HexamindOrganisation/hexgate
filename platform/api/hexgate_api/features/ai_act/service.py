@@ -47,6 +47,7 @@ from hexgate_api.models import (
     Organization,
     Project,
     User,
+    as_utc,
     utcnow,
 )
 from hexgate_api.query_scope import RETENTION_WINDOW, prepare_date_range, scope_filters
@@ -416,18 +417,6 @@ _PLAIN_AGGREGATES = (
 )
 
 
-def _as_utc(value: datetime) -> datetime:
-    """Stamp a driver datetime as UTC.
-
-    ``DateTime64(3, 'UTC')`` comes back from clickhouse_connect as a NAIVE
-    datetime whose value is already UTC. Serialized as-is it would put a
-    timestamp with no zone into a signed evidence document, which an auditor
-    cannot read unambiguously — and which nothing downstream could correct,
-    because the signature covers it.
-    """
-    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
-
-
 def _coverage(events: int, earliest: Any, latest: Any) -> dict[str, Any]:
     """Coverage metadata for one table, with empty slices reported as empty.
 
@@ -437,8 +426,8 @@ def _coverage(events: int, earliest: Any, latest: Any) -> dict[str, Any]:
     """
     return {
         "event_count": events,
-        "earliest_received_at": _as_utc(earliest).isoformat() if events else None,
-        "latest_received_at": _as_utc(latest).isoformat() if events else None,
+        "earliest_received_at": as_utc(earliest).isoformat() if events else None,
+        "latest_received_at": as_utc(latest).isoformat() if events else None,
         "retention_days": RETENTION_WINDOW.days,
     }
 
@@ -447,12 +436,17 @@ _ROW_TIMESTAMPS = ("occurred_at", "received_at")
 
 
 def _stamp_row_timestamps(row: dict[str, Any]) -> dict[str, Any]:
-    """Make a sampled row's timestamps explicitly UTC. See :func:`_as_utc`."""
+    """Make a sampled row's timestamps explicitly UTC.
+
+    The driver returns them naive (see :func:`~hexgate_api.models.as_utc`), and
+    the signature over the evidence document would freeze a zoneless timestamp
+    that an auditor cannot read unambiguously.
+    """
     stamped = dict(row)
     for column in _ROW_TIMESTAMPS:
         value = stamped.get(column)
         if isinstance(value, datetime):
-            stamped[column] = _as_utc(value)
+            stamped[column] = as_utc(value)
     return stamped
 
 
