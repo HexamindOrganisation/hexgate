@@ -181,10 +181,11 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         constraints that apply but don't bound it. Destructive tools are
         recognised by verbs in their names, a heuristic: an empty list is not
         proof of safety. Agents in `agents_without_manifest` are read without
-        their tools, so only tool names can raise facts for them. Pass `agent` for one agent; by default every
-        declared or registered agent, or the generic view "*" (every agent's
-        starting point) when the project names none. A result over 256 KiB is
-        cut and marked `{"truncated": true}`: pass `agent` to narrow it."""
+        their tools, so only tool names can raise facts for them. Pass `agent`
+        for one agent; by default every declared or registered agent, or the
+        generic view "*" (every agent's starting point) when the project names
+        none. A result over 256 KiB keeps the facts that fit, marked
+        `"truncated": true`: pass `agent` to narrow it."""
         await refuse_without_store(project_id)
         return result_text(await read(project_id, "/policy/risk-facts", agent=agent))
 
