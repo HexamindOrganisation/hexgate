@@ -43,8 +43,8 @@ export interface BaseDashboardFilters extends RangePickerFilters {
   user: string;
 }
 
-/** Effective day count for a window: explicit custom dates win when both
- * are set, otherwise falls back to the preset range's day count. */
+/** Effective day count for a window: a full custom range wins, otherwise the
+ * preset's day count. A lone start is the preset too: the API ignores it. */
 export function rangeDays(
   range: Range,
   start: Date | null,
