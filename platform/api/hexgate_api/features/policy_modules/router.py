@@ -519,7 +519,7 @@ async def api_resolve_policy(
     project has an entry ``policy.yaml``, else via the tier store. 422 if the
     policy can't be composed — use /policy/check to see that as a lint instead."""
     try:
-        result = await service.resolve_auto(session, project_id, agent=agent)
+        result, modular = await service.resolve_auto(session, project_id, agent=agent)
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -531,7 +531,7 @@ async def api_resolve_policy(
 
     return ResolvedPolicyResponse(
         roles=service.roles_json(result, role=role),
-        modular=await service.is_modular(session, project_id),
+        modular=modular,
     )
 
 
@@ -549,7 +549,7 @@ async def api_policy_matrix(
     doesn't list also gets its fallback cells. 422 if the policy can't be
     composed."""
     try:
-        result = await service.resolve_auto(session, project_id, agent=agent)
+        result, _ = await service.resolve_auto(session, project_id, agent=agent)
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PolicyMatrixResponse(**service.matrix_json(result, tool))
@@ -614,9 +614,7 @@ async def api_policy_graph(
         graph = await service.policy_graph(session, project_id, role=role)
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return PolicyGraphResponse(
-        **graph, modular=await service.is_modular(session, project_id)
-    )
+    return PolicyGraphResponse(**graph)
 
 
 @router.post(
@@ -651,6 +649,14 @@ async def api_test_policy(
         ) from exc
     except service.DraftWithoutEntryError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except service.UndeclaredAgentError as exc:
+        role, agent, declared = exc.args
+        raise HTTPException(
+            status_code=404,
+            detail=f"agent {agent!r} is not declared in the policy (declared: "
+            f"{declared}), so role {role!r} was looked up under the generic "
+            '"*" view, which does not define it',
+        ) from exc
     except service.UnknownRoleError as exc:
         raise HTTPException(
             status_code=404, detail=f"role {exc.args[0]!r} not defined"
@@ -665,4 +671,5 @@ async def api_test_policy(
         # field is a string, so serialize rather than 500 on a dict.
         hint=json.dumps(verdict.hint) if verdict.hint is not None else None,
         agent_declared=dry_run.agent_declared,
+        declared_agents=dry_run.declared_agents,
     )

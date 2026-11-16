@@ -40,14 +40,21 @@ ANSWERS = {
         "nodes": [
             {"id": "agent:billing", "kind": "agent", "label": "billing"},
             {"id": "tool:refund", "kind": "tool", "label": "refund"},
+            # Reached by a grant, not declared: it runs under "*".
+            {"id": "agent:payments", "kind": "agent", "label": "payments"},
         ],
         "edges": [],
         "roles": ["support"],
+        "declared_agents": ["*", "billing"],
     },
     ("GET", "/policy-roles"): {"roles": {"support": {"*": ["refunds"]}}},
     ("GET", "/policy/check"): {"ok": True, "lints": []},
     ("POST", "/policy/preview"): {"resolved": {}, "lints": []},
-    ("POST", "/policy/test"): {"outcome": "allow", "agent_declared": True},
+    ("POST", "/policy/test"): {
+        "outcome": "allow",
+        "agent_declared": True,
+        "declared_agents": ["*", "billing"],
+    },
 }
 # The tools that read the resolved policy, so refuse a project with no store.
 RESOLVED = [
@@ -234,9 +241,9 @@ def error(result: dict) -> str:
         pytest.param(
             "policy_dry_run",
             FULL_DRY_RUN,
+            # No graph lookup: the API's agent_declared answers for the agent.
             [
                 ("GET", "/policy-files", {}),
-                ("GET", "/policy/graph", {}),
                 ("POST", "/policy/test", FULL_DRY_RUN),
             ],
             ANSWERS["POST", "/policy/test"],
@@ -309,15 +316,15 @@ def test_when_name_and_tier_are_swapped_then_policy_read_file_refuses(token):
     assert api_requests() == []
 
 
-@pytest.mark.parametrize("agent", ["biling", "refund"])
+@pytest.mark.parametrize("agent", ["biling", "refund", "payments"])
 def test_when_agent_is_not_declared_then_policy_resolve_refuses(token, agent):
-    # A tool node's label is not an agent.
+    # A tool node's label is not an agent, nor is an agent a grant only reaches.
     mock_api()
 
     message = error(call(token, "policy_resolve", agent=agent))
 
     assert (
-        f"agent {agent!r} is not declared in the policy (declared: ['billing'])"
+        f"agent {agent!r} is not declared in the policy (declared: ['*', 'billing'])"
         in message
     )
     assert 'runs under the generic "*" view' in message
@@ -471,18 +478,23 @@ def test_when_a_new_file_comes_with_a_stored_one_then_both_are_sent(
 
 
 def test_when_agent_is_not_declared_then_policy_dry_run_refuses(token):
-    mock_api()
+    answer = {**ANSWERS["POST", "/policy/test"], "agent_declared": False}
+    mock_api(**{"/policy/test": answer})
 
     message = error(call(token, "policy_dry_run", **DRY_RUN, agent="biling"))
 
-    assert "agent 'biling' is not declared in the policy" in message
-    assert {r.method for r in api_requests()} == {"GET"}
+    assert (
+        "agent 'biling' is not declared in the policy (declared: ['*', 'billing'])"
+        in message
+    )
+    assert all(sent(r)[1] != "/policy/graph" for r in api_requests())
 
 
 def test_when_entry_draft_does_not_declare_agent_then_policy_dry_run_refuses(token):
     # The API evaluated the call under the generic "*" view: an "allow" here
     # would read as the draft's answer for "triage".
-    mock_api(**{"/policy/test": {"outcome": "allow", "agent_declared": False}})
+    answer = {**ANSWERS["POST", "/policy/test"], "agent_declared": False}
+    mock_api(**{"/policy/test": answer})
 
     message = error(
         call(token, "policy_dry_run", **DRY_RUN, agent="triage", drafts=[ENTRY_DRAFT])
@@ -547,3 +559,27 @@ def test_when_a_tool_sends_a_body_then_its_keys_are_api_model_fields(
         values = body[field] if isinstance(body[field], list) else [body[field]]
         for value in values:
             assert set(value) <= api_model_fields(field_model)
+
+
+# The answers the tools index by key, beside the API model sending them: a
+# renamed field would raise KeyError in every call while the mocks stay green.
+ANSWER_MODELS = [
+    (("GET", "/policy/graph"), "PolicyGraphResponse", {"declared_agents"}),
+    (
+        ("POST", "/policy/test"),
+        "PolicyTestResponse",
+        {"agent_declared", "declared_agents"},
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("route", "model", "read"), ANSWER_MODELS, ids=[m for _, m, _ in ANSWER_MODELS]
+)
+def test_when_a_tool_reads_an_answer_then_its_keys_are_api_model_fields(
+    route, model, read
+):
+    fields = api_model_fields(model)
+
+    assert read <= fields
+    assert set(ANSWERS[route]) <= fields

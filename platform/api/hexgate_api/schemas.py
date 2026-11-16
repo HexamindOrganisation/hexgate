@@ -652,6 +652,9 @@ class PolicyGraphResponse(BaseModel):
     edges: list[PolicyGraphEdge] = Field(default_factory=list)
     roles: list[str] = Field(default_factory=list)
     modular: bool  # as on ResolvedPolicyResponse
+    # The agents the policy declares ("*" included). An agent a grant only
+    # reaches is a node, but not declared: it runs under the "*" view.
+    declared_agents: list[str]
 
 
 class PolicyTestRequest(BaseModel):
@@ -679,6 +682,7 @@ class PolicyTestResponse(BaseModel):
     # Whether the policy (the draft included) declares the request's agent; an
     # agent it does not declare was evaluated under the generic "*" view.
     agent_declared: bool
+    declared_agents: list[str]  # as on PolicyGraphResponse
 
 
 # --- Agent manifest registration ---------------------------------------------
