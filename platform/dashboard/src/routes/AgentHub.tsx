@@ -335,6 +335,8 @@ export function AgentResourcesTab() {
           subAgents={ctx.subAgents}
           unregistered={ctx.agent.manifest === null}
           onOpenGraph={ctx.openGraph}
+          // agentSubgraph is empty (not null) when the agent isn't in the graph.
+          inGraph={!!ctx.subgraph && ctx.subgraph.nodes.length > 0}
           callsError={ctx.activityError}
           graphLoading={ctx.graphLoading}
           graphError={ctx.graphError}
@@ -356,6 +358,7 @@ function ReachesSection({
   subAgents,
   unregistered,
   onOpenGraph,
+  inGraph,
   callsError,
   graphLoading,
   graphError,
@@ -365,6 +368,8 @@ function ReachesSection({
   unregistered: boolean;
   /** Opens the agent's graph dialog; null when there's no graph to show. */
   onOpenGraph: (() => void) | null;
+  /** The project's policy graph has this agent, so rows carry verdicts. */
+  inGraph: boolean;
   callsError: boolean;
   graphLoading: boolean;
   graphError: GraphError | null;

@@ -14,7 +14,7 @@ import userEvent from "@testing-library/user-event";
 
 import type { PolicyGraph } from "@/lib/api";
 import { PolicyGraphDialog } from "./PolicyGraphDialog";
-import { renderWithProviders } from "@/test/render";
+import { makeQueryClient, renderWithProviders } from "@/test/render";
 
 // --- @xyflow/react stub -----------------------------------------------------
 // A minimal ReactFlow that renders the caller's node/edge components (so their
@@ -358,6 +358,34 @@ describe("PolicyGraphDialog", () => {
     expect(options).toEqual(["all roles", "admin"]);
   });
 
+  it("offers the roles on the agent's edges without an admission block", async () => {
+    // No role nodes: the policy declares no `admission:`, but edges carry roles.
+    stubGraph({
+      nodes: [
+        { id: "agent:bot", kind: "agent", label: "bot" },
+        { id: "tool:refund", kind: "tool", label: "refund" },
+      ],
+      edges: [
+        {
+          source: "agent:bot",
+          target: "tool:refund",
+          kind: "call",
+          via: null,
+          verdict: "allow",
+          constraints: [],
+          roles: ["support", "billing"],
+        },
+      ],
+      roles: ["billing", "support"],
+    });
+    renderDialog({ agent: "bot" });
+    await screen.findByTestId("node-agent:bot");
+    const options = within(screen.getByRole("combobox"))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+    expect(options).toEqual(["all roles", "billing", "support"]);
+  });
+
   it("shows the empty state for an agent with no edges", async () => {
     stubGraph({
       nodes: [{ id: "agent:lone", kind: "agent", label: "lone" }],
@@ -395,6 +423,26 @@ describe("PolicyGraphDialog", () => {
     await waitFor(() =>
       expect(screen.getByText(/don't compose/i)).toBeInTheDocument(),
     );
+  });
+
+  it("keeps a cached graph with a banner when a refresh fails", async () => {
+    const client = makeQueryClient();
+    client.setQueryData(["policy-graph", "p1", null], GRAPH, { updatedAt: 0 });
+    stubGraph({ detail: "boom" }, 500);
+    renderWithProviders(
+      <PolicyGraphDialog
+        open
+        onOpenChange={() => undefined}
+        projectId="p1"
+        roleNames={[]}
+      />,
+      { client },
+    );
+    expect(
+      await screen.findByText(/showing the last graph loaded/),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("node-agent:worker")).toBeInTheDocument();
+    expect(screen.queryByText(/don't compose/)).toBeNull();
   });
 
   it("shows the empty state when no agents are bound", async () => {

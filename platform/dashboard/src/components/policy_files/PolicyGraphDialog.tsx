@@ -22,7 +22,7 @@ import { AlertTriangle, Maximize2, Network, Play, X } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { usePolicyGraph } from "@/lib/policy_files";
 import { agentSubgraph } from "@/lib/agent-graph";
-import type { PolicyGraph, PolicyGraphEdge } from "@/lib/api";
+import { ApiError, type PolicyGraph, type PolicyGraphEdge } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { HEX_H, HEX_W, delegates, layeredLayout } from "@/lib/graph-layout";
 import { pluralise } from "@/lib/format";
@@ -985,10 +985,19 @@ export function PolicyGraphView({
   const roleOptions = useMemo(() => {
     if (!agent) return graph.data?.roles ?? roleNames;
     if (!base.data) return roleNames;
-    return agentSubgraph(base.data, agent)
-      .nodes.filter((n) => n.kind === "role")
-      .map((n) => n.label);
+    // Its role nodes (admission), plus every role its own edges carry: a
+    // policy without `admission:` has no role nodes but per-role edges.
+    const sub = agentSubgraph(base.data, agent);
+    const self = sub.nodes.find((n) => n.kind === "agent" && n.label === agent);
+    const roles = new Set(
+      sub.nodes.filter((n) => n.kind === "role").map((n) => n.label),
+    );
+    for (const e of sub.edges)
+      if (e.source === self?.id || e.target === self?.id)
+        e.roles.forEach((r) => roles.add(r));
+    return [...roles].sort();
   }, [agent, base.data, graph.data, roleNames]);
+  const errorText = graph.isError ? graphErrorText(graph.error) : null;
   // An agent with no edges is a lone node — nothing to draw.
   const minNodes = agent ? 2 : 1;
   const shown = useMemo(
@@ -1037,9 +1046,16 @@ export function PolicyGraphView({
             resolving graph…
           </div>
         )}
-        {graph.isError && (
+        {/* A failed refetch over a cached graph keeps the graph, with a
+            banner; only with nothing cached does the error take the box. */}
+        {errorText && !graph.data && (
           <div className="grid h-full place-items-center px-8 text-center font-mono text-xs text-deny">
-            the modules don't compose — fix the lints, then reopen the graph.
+            {errorText}
+          </div>
+        )}
+        {errorText && graph.data && (
+          <div className="absolute inset-x-0 top-0 z-10 border-b border-border bg-card/90 px-4 py-1.5 font-mono text-[11px] text-muted-foreground">
+            {errorText} showing the last graph loaded.
           </div>
         )}
         {shown && shown.nodes.length >= minNodes && (
@@ -1055,6 +1071,15 @@ export function PolicyGraphView({
       </div>
     </div>
   );
+}
+
+/** Why the graph failed, by status (as the agent hub reads it). */
+function graphErrorText(error: unknown): string {
+  const status = error instanceof ApiError ? error.status : null;
+  if (status === 422)
+    return "the modules don't compose — fix the lints, then reopen the graph.";
+  if (status === 404) return "you don't have access to this project's policy.";
+  return "couldn't load the graph — try again.";
 }
 
 export function PolicyGraphDialog({
