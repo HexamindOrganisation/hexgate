@@ -1,4 +1,4 @@
-import { Check, ChevronsUpDown, FolderPlus, Hexagon, Plus } from "lucide-react";
+import { Check, ChevronsUpDown, FolderPlus, Plus } from "lucide-react";
 
 import {
   DropdownMenu,
@@ -8,6 +8,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { HexgateMark } from "@/components/ui/hexgate-mark";
 import { useActive } from "@/lib/active";
 import { useOrgs, type OrgWithRole } from "@/lib/orgs";
 import { useProjects, type ProjectRead } from "@/lib/projects";
@@ -70,7 +71,7 @@ export function OrgProjectSwitcher({
           )}
         >
           <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-action text-action-foreground">
-            <Hexagon className="size-4" strokeWidth={2} />
+            <HexgateMark className="size-4" />
           </span>
           <span className="flex min-w-0 flex-1 flex-col">
             {label.org && (

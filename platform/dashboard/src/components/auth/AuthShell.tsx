@@ -1,19 +1,22 @@
 import { useEffect, useState } from "react";
-import { Check, Hexagon, Loader2, type LucideIcon, X } from "lucide-react";
+import { Check, Loader2, type LucideIcon, X } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { HexgateMark } from "@/components/ui/hexgate-mark";
 import { googleOAuthAvailable, startGoogleSignIn } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
-/** The mark's tone: the brand (dark hexagon tile) or a status badge. */
+/** The mark's tone: the brand (keyhole tile) or a status badge. */
 type Tone = "brand" | "success" | "error" | "muted";
 
-const MARK: Record<Tone, { box: string; icon: LucideIcon; spin?: boolean }> = {
+type MarkIcon = LucideIcon | typeof HexgateMark;
+
+const MARK: Record<Tone, { box: string; icon: MarkIcon; spin?: boolean }> = {
   brand: {
     box: "rounded-xl bg-action text-action-foreground",
-    icon: Hexagon,
+    icon: HexgateMark,
   },
   success: { box: "rounded-full bg-success/15 text-success", icon: Check },
   error: { box: "rounded-full bg-deny/10 text-deny", icon: X },
@@ -26,7 +29,7 @@ const MARK: Record<Tone, { box: string; icon: LucideIcon; spin?: boolean }> = {
 };
 
 /**
- * The shared pre-login layout: a centred column with the hexagon brand mark
+ * The shared pre-login layout: a centred column with the keyhole brand mark
  * (or a status badge), a title and optional description, then the page's own
  * content in a card. Every /sign-in, onboarding and invite screen uses it, so
  * they read as one surface.
