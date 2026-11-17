@@ -12,7 +12,7 @@ import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { DocsLink } from "@/components/DocsLink";
 import { DOC_PATHS } from "@/lib/docs";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { SearchField } from "@/components/ui/search-field";
 import { Button } from "@/components/ui/button";
 import { AgentFilterDialog } from "@/components/agents/AgentFilterDialog";
 import {
@@ -62,6 +62,16 @@ export function AgentsPage() {
     queryFn: () => api.listAgentManifests(scope.projectId as string),
     enabled: !!scope.projectId,
   });
+  // Below the cap the toolbar is gone: drop its filters rather than keep
+  // ones nobody can see, which would come back when the list grows.
+  if (
+    (activeCount(filters) > 0 || query) &&
+    manifests.data &&
+    manifests.data.length <= AGENT_LIST_CAP
+  ) {
+    setFilters(NO_FILTERS);
+    setQuery("");
+  }
   // 24h activity per agent; shares Home's cache entry.
   const { summary, activityOf } = useAgentActivity24h(scope.projectId);
   // Agent-to-agent delegation, from the policy graph (a classic project's
@@ -241,13 +251,12 @@ export function AgentsPage() {
 
       {toolbar && (
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <Input
-            type="search"
+          <SearchField
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={setQuery}
             placeholder={`Filter ${agents.length} agents by name`}
-            aria-label="Filter agents by name"
-            className="h-9 max-w-xs flex-1 basis-60 text-sm"
+            label="Filter agents by name"
+            className="h-9 max-w-xs flex-1 basis-60 bg-card"
           />
           <Button
             type="button"

@@ -1,24 +1,40 @@
 import type { PolicyGraph, PolicyGraphEdge } from "@/lib/api";
 import { delegates, push } from "@/lib/graph-layout";
 
-/** The agent's node, and whose outbound edges stand for it: its own
+const STAR = "agent:*";
+
+/** Resolves agents by name against one graph, indexing it once: each one's
+ * node, and whose outbound edges stand for it. That's its own
  * `agent:<name>` when the policy declares it, else the generic `agent:*` it
  * resolves like, relabelled to the name. Only an agent that appears solely as
  * another's reach target is undeclared; one with no edges at all is locked
- * down to nothing (a named cell replaces `*`). */
+ * down to nothing (a named cell replaces `*`). The one place this rule lives:
+ * the hub, /agents and its filters all resolve through it. */
+export function agentResolver(graph: PolicyGraph) {
+  const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
+  const touched = new Set<string>();
+  // Touched by anything but an inbound reach: the policy declares it.
+  const declared = new Set<string>();
+  for (const e of graph.edges) {
+    touched.add(e.source).add(e.target);
+    declared.add(e.source);
+    if (e.kind !== "reach") declared.add(e.target);
+  }
+  const star = nodes.get(STAR);
+  return (agentName: string) => {
+    const own = nodes.get(`agent:${agentName}`);
+    const isOwn = !!own && (declared.has(own.id) || !touched.has(own.id));
+    const source = isOwn || !star ? own : star;
+    if (!source) return null;
+    return {
+      node: { ...(own ?? star!), label: agentName },
+      sourceId: source.id,
+    };
+  };
+}
+
 function resolveAgent(graph: PolicyGraph, agentName: string) {
-  const own = graph.nodes.find((n) => n.id === `agent:${agentName}`);
-  const star = graph.nodes.find((n) => n.id === "agent:*");
-  const touching = own
-    ? graph.edges.filter((e) => e.source === own.id || e.target === own.id)
-    : [];
-  const declared =
-    own &&
-    (touching.length === 0 ||
-      touching.some((e) => !(e.target === own.id && e.kind === "reach")));
-  const source = declared || !star ? own : star;
-  if (!source) return null;
-  return { node: { ...(own ?? star!), label: agentName }, sourceId: source.id };
+  return agentResolver(graph)(agentName);
 }
 
 /** One agent's graph: the roles that run it, the agent, and its own
@@ -43,7 +59,8 @@ export function agentSubgraph(
   const edges = graph.edges
     .filter(
       (e) =>
-        e.source === sourceId ||
+        // A reach to `*` reaches no one: the engine denies every target.
+        (e.source === sourceId && !(e.kind === "reach" && e.target === STAR)) ||
         ((e.target === node.id || e.target === sourceId) &&
           e.kind === "admission"),
     )
@@ -88,7 +105,6 @@ export function agentReachMap(
   graph: PolicyGraph,
   names: string[] = [],
 ): Map<string, AgentReach> {
-  const STAR = "agent:*";
   const label = new Map(
     graph.nodes.filter((n) => n.kind === "agent").map((n) => [n.id, n.label]),
   );
@@ -96,28 +112,15 @@ export function agentReachMap(
     ...[...label].filter(([id]) => id !== STAR).map(([, l]) => l),
     ...names,
   ]);
-  // Declared, by resolveAgent's rule: any edge but an inbound reach, or none
-  // at all (locked down to nothing).
-  const touched = new Set<string>();
-  const declared = new Set<string>();
   const out = new Map<string, PolicyGraph["edges"]>();
-  for (const e of graph.edges) {
-    touched.add(e.source).add(e.target);
-    declared.add(e.source);
-    if (e.kind !== "reach") declared.add(e.target);
-    if (delegates(e)) push(out, e.source, e);
-  }
-  const hasStar = label.has(STAR);
+  for (const e of graph.edges) if (delegates(e)) push(out, e.source, e);
+  const resolve = agentResolver(graph);
   const reaches = new Map<string, Set<string>>();
   const calledBy = new Map<string, Set<string>>();
   const add = (m: Map<string, Set<string>>, k: string, v: string) =>
     (m.get(k) ?? m.set(k, new Set()).get(k)!).add(v);
   for (const name of all) {
-    const own = `agent:${name}`;
-    const isDeclared =
-      label.has(own) && (declared.has(own) || !touched.has(own));
-    const source =
-      isDeclared || !hasStar ? (label.has(own) ? own : null) : STAR;
+    const source = resolve(name)?.sourceId;
     for (const e of (source && out.get(source)) || []) {
       const to = label.get(e.target);
       if (to === undefined || to === name || e.target === STAR) continue;

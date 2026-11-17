@@ -69,8 +69,12 @@ export function RolePickerDialog({
   // Only meaningful when the policy gates running the agent by role.
   const gated = options.some((o) => o.runs !== null);
   const runners = options.filter((o) => o.runs).length;
-  // Narrowed to runners only when some role does run it.
-  const [onlyRunners, setOnlyRunners] = useState(gated && runners > 0);
+  // Narrowed to runners only when some role does run it, and never so far
+  // that the picked role is hidden.
+  const pickedRuns = options.find((o) => o.name === picked)?.runs;
+  const [onlyRunners, setOnlyRunners] = useState(
+    gated && runners > 0 && pickedRuns !== false,
+  );
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     return options.filter(

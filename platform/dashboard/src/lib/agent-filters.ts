@@ -5,6 +5,7 @@
  */
 
 import type { PolicyGraph } from "./api";
+import { agentResolver } from "./agent-graph";
 
 export type Activity = "deny" | "approval" | "quiet";
 export type Delegation = "reaches" | "called";
@@ -57,27 +58,16 @@ export function rolesThatRun(
     for (const n of names) out.set(n, null);
     return out;
   }
-  const ids = new Set(graph.nodes.map((n) => n.id));
-  const touched = new Set<string>();
-  // Touched by anything but an inbound reach: the policy declares it.
-  const declared = new Set<string>();
   const admits = new Map<string, PolicyGraph["edges"]>();
-  for (const e of graph.edges) {
-    touched.add(e.source).add(e.target);
-    declared.add(e.source);
-    if (e.kind !== "reach") declared.add(e.target);
+  for (const e of graph.edges)
     if (e.kind === "admission")
       admits.set(e.target, [...(admits.get(e.target) ?? []), e]);
-  }
-  const STAR = "agent:*";
+  const resolve = agentResolver(graph);
   for (const name of names) {
-    const own = `agent:${name}`;
-    const isOwn = ids.has(own) && (declared.has(own) || !touched.has(own));
-    const source = isOwn || !ids.has(STAR) ? own : STAR;
-    const edges = [
-      ...(admits.get(own) ?? []),
-      ...(source !== own ? (admits.get(source) ?? []) : []),
-    ];
+    const r = resolve(name);
+    // As agentSubgraph keeps them: into its node or the one standing for it.
+    const ids = r ? new Set([r.node.id, r.sourceId]) : new Set<string>();
+    const edges = [...ids].flatMap((id) => admits.get(id) ?? []);
     out.set(
       name,
       edges.length

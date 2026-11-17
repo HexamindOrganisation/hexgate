@@ -19,6 +19,7 @@ import "@xyflow/react/dist/style.css";
 import { Network, Play, X } from "lucide-react";
 
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { SearchField } from "@/components/ui/search-field";
 import {
   compactAgentGraph,
   graphErrorOf,
@@ -548,11 +549,15 @@ function NodePanel({
   id,
   labelOf,
   onClose,
+  subTools,
 }: {
   graph: PolicyGraph;
   id: string;
   labelOf: (id: string) => string;
   onClose: () => void;
+  /** Set for a sub-agent: its tool count. This graph holds none of its own
+   * edges, so its tools are counted, not listed. */
+  subTools?: number;
 }) {
   const node = graph.nodes.find((n) => n.id === id);
   if (!node) return null;
@@ -561,15 +566,17 @@ function NodePanel({
   const calls = from.filter((e) => e.kind === "call");
   const open = calls.filter((e) => e.verdict !== "deny");
   const summary =
-    node.kind === "agent"
-      ? `Calls ${open.length} of ${pluralise(calls.length, "tool")} — ${
-          open.filter((e) => e.constraints.length > 0).length
-        } with constraints, ${
-          open.filter((e) => e.verdict === "approval_required").length
-        } behind approval.`
-      : node.kind === "role"
-        ? `Admitted by ${from.filter((e) => e.verdict !== "deny").length} of ${pluralise(from.length, "agent")}.`
-        : `Callable by ${to.filter((e) => e.verdict !== "deny").length} of ${pluralise(to.length, "agent")}.`;
+    subTools !== undefined
+      ? `A sub-agent this agent reaches. It may call ${pluralise(subTools, "tool")}; its own graph shows them.`
+      : node.kind === "agent"
+        ? `Calls ${open.length} of ${pluralise(calls.length, "tool")} — ${
+            open.filter((e) => e.constraints.length > 0).length
+          } with constraints, ${
+            open.filter((e) => e.verdict === "approval_required").length
+          } behind approval.`
+        : node.kind === "role"
+          ? `Admitted by ${from.filter((e) => e.verdict !== "deny").length} of ${pluralise(from.length, "agent")}.`
+          : `Callable by ${to.filter((e) => e.verdict !== "deny").length} of ${pluralise(to.length, "agent")}.`;
   return (
     <aside
       aria-label={`${node.kind} ${node.label}`}
@@ -592,18 +599,12 @@ function NodePanel({
         </button>
       </div>
       <p className="mt-1 font-sans text-xs text-muted-foreground">{summary}</p>
-      {node.kind === "agent" && (
+      {node.kind === "agent" && subTools === undefined && (
         <>
           <EdgeList
             labelOf={labelOf}
             title="Admitted roles"
             edges={to.filter((e) => e.kind === "admission")}
-            end="source"
-          />
-          <EdgeList
-            labelOf={labelOf}
-            title="Reached by"
-            edges={to.filter((e) => e.kind === "reach")}
             end="source"
           />
           <EdgeList
@@ -696,13 +697,12 @@ function GroupList({
           <X size={13} />
         </button>
       </div>
-      <input
-        type="search"
+      <SearchField
         value={query}
-        onChange={(e) => setQuery(e.target.value)}
+        onChange={setQuery}
         placeholder={`filter ${edges.length} tools`}
-        aria-label="Filter tools"
-        className="mx-2 mb-2 h-8 rounded border border-border bg-transparent px-2 outline-none placeholder:text-muted-foreground focus:border-primary"
+        label="Filter tools"
+        className="mx-2 mb-2 h-8"
       />
       <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {rows.map((e) => (
@@ -1096,12 +1096,19 @@ export function PolicyFlow({
                   id={pinned}
                   labelOf={labelOf}
                   onClose={() => setPinned(null)}
+                  subTools={
+                    toolCount &&
+                    pinned !== self &&
+                    kindOf.get(pinned) === "agent"
+                      ? toolCount(labelOf(pinned))
+                      : undefined
+                  }
                 />
               )}
               {/* Stacked under the node panel so the two never overlap. */}
               {selected && (
                 // Capped and scrolling like the node panel, so the two together
-                // stay clear of the canvas bottom and the bypass warnings.
+                // stay clear of the canvas bottom.
                 <div className="max-h-[25vh] w-64 overflow-y-auto rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur">
                   <div className="mb-2 flex items-center justify-between">
                     <VerdictTag verdict={selected.verdict} />

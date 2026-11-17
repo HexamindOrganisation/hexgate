@@ -110,10 +110,15 @@ export function roleOptionsFor(
   sub: PolicyGraph,
 ): RoleOption[] {
   const runners = runnersOf(sub);
-  return roles.map((name) => ({
-    name,
-    runs: runners ? runners.has(name) : null,
-  }));
+  if (runners) return roles.map((name) => ({ name, runs: runners.has(name) }));
+  // No admission gate: list the roles its own edges name, which are the
+  // ones that change what it may do; every role if none are named.
+  const self = sub.nodes[0]?.id;
+  const named = new Set(
+    sub.edges.filter((e) => e.source === self).flatMap((e) => e.roles),
+  );
+  const relevant = named.size ? roles.filter((r) => named.has(r)) : roles;
+  return relevant.map((name) => ({ name, runs: null }));
 }
 
 /** Why a graph fetch failed: 422 the modules don't compose, 404 the project

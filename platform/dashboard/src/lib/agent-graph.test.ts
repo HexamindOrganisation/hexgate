@@ -321,4 +321,20 @@ describe("agentReachEdges", () => {
       expect(agentSubgraph(g, "x").edges).toHaveLength(0);
     });
   });
+
+  describe("a reach to *", () => {
+    it("isn't drawn as a sub-agent", () => {
+      const g: PolicyGraph = {
+        roles: [],
+        nodes: [
+          { id: "agent:a", kind: "agent", label: "a" },
+          { id: "agent:*", kind: "agent", label: "*" },
+        ],
+        edges: [edge("agent:a", "agent:*", "reach")],
+      };
+      const sub = agentSubgraph(g, "a");
+      expect(sub.nodes.map((n) => n.id)).toEqual(["agent:a"]);
+      expect(agentReachCounts(sub).agents).toBe(0);
+    });
+  });
 });

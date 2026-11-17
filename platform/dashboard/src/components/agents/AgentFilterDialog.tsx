@@ -66,6 +66,20 @@ export function AgentFilterDialog({
     return q ? roles.filter((r) => r.toLowerCase().includes(q)) : roles;
   }, [roles, roleQuery]);
   const kept = facts.filter((a) => matches(f, a)).length;
+  // Each option's count, once per agent list: typing in the role search
+  // mustn't recount every option.
+  const counts = useMemo(() => {
+    const m = new Map<string, number>();
+    const put = (key: string, patch: Partial<AgentFilters>) =>
+      m.set(key, countWhere(facts, patch));
+    put("s:registered", { status: "registered" });
+    put("s:unregistered", { status: "unregistered" });
+    for (const [v] of ACTIVITY) put(`a:${v}`, { activity: [v] });
+    for (const fw of frameworks) put(`f:${fw}`, { frameworks: [fw] });
+    for (const r of roles) put(`r:${r}`, { roles: [r] });
+    for (const [v] of DELEGATION) put(`d:${v}`, { delegation: [v] });
+    return m;
+  }, [facts, frameworks, roles]);
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -79,15 +93,11 @@ export function AgentFilterDialog({
               {(
                 [
                   ["any", "Any", facts.length],
-                  [
-                    "registered",
-                    "Registered",
-                    countWhere(facts, { status: "registered" }),
-                  ],
+                  ["registered", "Registered", counts.get("s:registered") ?? 0],
                   [
                     "unregistered",
                     "Not registered",
-                    countWhere(facts, { status: "unregistered" }),
+                    counts.get("s:unregistered") ?? 0,
                   ],
                 ] as const
               ).map(([v, label, n]) => (
@@ -116,7 +126,7 @@ export function AgentFilterDialog({
               <Check
                 key={v}
                 label={label}
-                count={countWhere(facts, { activity: [v] })}
+                count={counts.get(`a:${v}`) ?? 0}
                 checked={f.activity.includes(v)}
                 disabled={!activityKnown}
                 onChange={() =>
@@ -132,7 +142,7 @@ export function AgentFilterDialog({
                   key={fw}
                   label={fw}
                   mono
-                  count={countWhere(facts, { frameworks: [fw] })}
+                  count={counts.get(`f:${fw}`) ?? 0}
                   checked={f.frameworks.includes(fw)}
                   onChange={() =>
                     setF((p) => ({ ...p, frameworks: flip(p.frameworks, fw) }))
@@ -162,7 +172,7 @@ export function AgentFilterDialog({
                     label={r}
                     mono
                     // What applying it keeps, ungated agents included.
-                    count={countWhere(facts, { roles: [r] })}
+                    count={counts.get(`r:${r}`) ?? 0}
                     checked={f.roles.includes(r)}
                     disabled={!graphKnown}
                     onChange={() =>
@@ -184,7 +194,7 @@ export function AgentFilterDialog({
               <Check
                 key={v}
                 label={label}
-                count={countWhere(facts, { delegation: [v] })}
+                count={counts.get(`d:${v}`) ?? 0}
                 checked={f.delegation.includes(v)}
                 disabled={!graphKnown}
                 onChange={() =>

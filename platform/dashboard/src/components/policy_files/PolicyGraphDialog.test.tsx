@@ -540,4 +540,12 @@ describe("PolicyGraphDialog", () => {
     );
     expect(onMoreAgents).toHaveBeenCalled();
   });
+
+  it("counts a pinned sub-agent's tools rather than claim it has none", async () => {
+    renderFlow(WORKER, options({ hasPage: () => false }));
+    await userEvent.click(await screen.findByTestId("node-agent:helper"));
+    const panel = screen.getByRole("complementary", { name: "agent helper" });
+    expect(panel).toHaveTextContent("It may call 3 tools");
+    expect(panel).not.toHaveTextContent(/Calls 0 of/);
+  });
 });
