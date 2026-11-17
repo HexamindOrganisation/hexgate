@@ -105,9 +105,10 @@ asyncio_mode = "auto"
 # over. Source is the hexgate_api package — exclude tests/, scripts/, and
 # the seeded ClickHouse init files (not Python).
 branch = true
-# The async SQLAlchemy session runs the code after each DB await in a greenlet;
-# without greenlet here, coverage stops tracing there and counts those lines
-# as missed.
+# The async SQLAlchemy session runs its sync ORM/driver internals in a child
+# greenlet on every DB await (greenlet_spawn); without greenlet here, coverage
+# loses tracing across those greenlet switches and counts the lines after the
+# await as missed.
 concurrency = ["greenlet", "thread"]
 source = ["hexgate_api"]
 omit = [
