@@ -63,15 +63,14 @@ export function AgentsPage() {
     enabled: !!scope.projectId,
   });
   // Below the cap the toolbar is gone: drop its filters rather than keep
-  // ones nobody can see, which would come back when the list grows.
+  // ones nobody can see, which would come back when the list grows. (The
+  // name search just stops applying: it's still in the box when it returns.)
   if (
-    (activeCount(filters) > 0 || query) &&
+    activeCount(filters) > 0 &&
     manifests.data &&
     manifests.data.length <= AGENT_LIST_CAP
-  ) {
+  )
     setFilters(NO_FILTERS);
-    setQuery("");
-  }
   // 24h activity per agent; shares Home's cache entry.
   const { summary, activityOf } = useAgentActivity24h(scope.projectId);
   // Agent-to-agent delegation, from the policy graph (a classic project's

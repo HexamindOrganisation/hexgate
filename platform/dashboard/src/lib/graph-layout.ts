@@ -46,11 +46,6 @@ export interface LayeredLayout {
   endDy: Record<number, number>;
 }
 
-/** Whether an edge lets its source delegate to its target: a permitted
- * reach. A denied one delegates nothing. */
-export const delegates = (e: { kind: string; verdict: string }) =>
-  e.kind === "reach" && e.verdict !== "deny";
-
 /** Append `v` to the list at `k`, starting it if need be. */
 export const push = <K, V>(m: Map<K, V[]>, k: K, v: V) => {
   const a = m.get(k);

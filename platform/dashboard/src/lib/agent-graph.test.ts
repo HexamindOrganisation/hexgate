@@ -337,4 +337,26 @@ describe("agentReachEdges", () => {
       expect(agentReachCounts(sub).agents).toBe(0);
     });
   });
+
+  describe("declared_agents", () => {
+    it("keeps a declared agent as itself, even when only reached", () => {
+      // Under some role, y reaches x and x's own cell grants it nothing.
+      const g: PolicyGraph = {
+        roles: [],
+        declared_agents: ["*", "x", "y"],
+        nodes: [
+          { id: "agent:*", kind: "agent", label: "*" },
+          { id: "agent:x", kind: "agent", label: "x" },
+          { id: "agent:y", kind: "agent", label: "y" },
+          { id: "tool:t", kind: "tool", label: "t" },
+        ],
+        edges: [
+          edge("agent:y", "agent:x", "reach"),
+          edge("agent:*", "tool:t", "call"),
+        ],
+      };
+      // Not *'s grants: x is declared, with none of its own.
+      expect(agentReachCounts(agentSubgraph(g, "x")).tools).toBe(0);
+    });
+  });
 });

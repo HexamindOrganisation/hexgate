@@ -1,5 +1,10 @@
 import type { PolicyGraph, PolicyGraphEdge } from "@/lib/api";
-import { delegates, push } from "@/lib/graph-layout";
+import { push } from "@/lib/graph-layout";
+
+/** Whether an edge lets its source delegate to its target: a permitted
+ * reach. A denied one delegates nothing. */
+export const delegates = (e: { kind: string; verdict: string }) =>
+  e.kind === "reach" && e.verdict !== "deny";
 
 const STAR = "agent:*";
 
@@ -12,6 +17,9 @@ const STAR = "agent:*";
  * the hub, /agents and its filters all resolve through it. */
 export function agentResolver(graph: PolicyGraph) {
   const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
+  // The server says which agents the policy declares; only without that
+  // list is it read off the edges.
+  const listed = graph.declared_agents && new Set(graph.declared_agents);
   const touched = new Set<string>();
   // Touched by anything but an inbound reach: the policy declares it.
   const declared = new Set<string>();
@@ -23,7 +31,11 @@ export function agentResolver(graph: PolicyGraph) {
   const star = nodes.get(STAR);
   return (agentName: string) => {
     const own = nodes.get(`agent:${agentName}`);
-    const isOwn = !!own && (declared.has(own.id) || !touched.has(own.id));
+    const isOwn =
+      !!own &&
+      (listed
+        ? listed.has(agentName)
+        : declared.has(own.id) || !touched.has(own.id));
     const source = isOwn || !star ? own : star;
     if (!source) return null;
     return {
@@ -159,4 +171,24 @@ export function agentReachEdges(
     }
   }
   return out;
+}
+
+/** How many tools each agent may call (never through a denied edge), by
+ * name: one index over `graph`, then a lookup per agent. */
+export function toolCounter(graph: PolicyGraph): (agent: string) => number {
+  const resolve = agentResolver(graph);
+  const kind = new Map(graph.nodes.map((n) => [n.id, n.kind]));
+  const tools = new Map<string, Set<string>>();
+  for (const e of graph.edges) {
+    const k = kind.get(e.target);
+    if (e.kind !== "call" || e.verdict === "deny") continue;
+    if (k !== "tool" && k !== "mcp") continue;
+    (tools.get(e.source) ?? tools.set(e.source, new Set()).get(e.source)!).add(
+      e.target,
+    );
+  }
+  return (agent) => {
+    const r = resolve(agent);
+    return r ? (tools.get(r.sourceId)?.size ?? 0) : 0;
+  };
 }

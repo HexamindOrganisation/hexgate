@@ -238,7 +238,6 @@ const options = (over: Partial<AgentGraphOptions> = {}): AgentGraphOptions => ({
   toolCount: () => 3,
   onOpenAgent: vi.fn(),
   onMoreRoles: vi.fn(),
-  onMoreAgents: vi.fn(),
   ...over,
 });
 
@@ -529,16 +528,21 @@ describe("PolicyGraphDialog", () => {
       ],
     };
     const onMoreRoles = vi.fn();
-    const onMoreAgents = vi.fn();
-    renderFlow(g, options({ onMoreRoles, onMoreAgents }));
+    const onOpenAgent = vi.fn();
+    renderFlow(g, options({ onMoreRoles, onOpenAgent }));
     await userEvent.click(
       screen.getByRole("button", { name: "+2 more roles" }),
     );
     expect(onMoreRoles).toHaveBeenCalled();
+    // The hidden sub-agent is in the list beside the graph, and opens.
     await userEvent.click(
       screen.getByRole("button", { name: "+1 more sub-agent" }),
     );
-    expect(onMoreAgents).toHaveBeenCalled();
+    const list = screen.getByRole("complementary", { name: "Sub-agents" });
+    await userEvent.click(
+      within(list).getByRole("button", { name: "agent:s5" }),
+    );
+    expect(onOpenAgent).toHaveBeenCalledWith("agent:s5");
   });
 
   it("counts a pinned sub-agent's tools rather than claim it has none", async () => {

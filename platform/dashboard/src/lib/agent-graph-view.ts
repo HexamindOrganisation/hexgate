@@ -27,6 +27,8 @@ export type AgentView = {
   /** Roles and sub-agents left off the canvas. */
   hiddenRoles: number;
   hiddenAgents: number;
+  /** Every reach to a sub-agent, for the list beside the graph. */
+  reaches: PolicyGraphEdge[];
 };
 
 /** `sub` (from agentSubgraph, the agent first) as the canvas draws it. */
@@ -37,7 +39,8 @@ export function compactAgentGraph(
 ): AgentView {
   const self = sub.nodes[0];
   const tools = new Map<Verdict, PolicyGraphEdge[]>();
-  if (!self) return { graph: sub, tools, hiddenRoles: 0, hiddenAgents: 0 };
+  if (!self)
+    return { graph: sub, tools, hiddenRoles: 0, hiddenAgents: 0, reaches: [] };
   const kind = new Map(sub.nodes.map((n) => [n.id, n.kind]));
 
   const calls = sub.edges.filter(
@@ -59,10 +62,10 @@ export function compactAgentGraph(
     sub.edges.filter((e) => e.kind === "admission" && e.target === self.id),
     "source",
   );
-  const agents = keepFirst(
-    sub.edges.filter((e) => e.kind === "reach" && e.source === self.id),
-    "target",
+  const reaches = sub.edges.filter(
+    (e) => e.kind === "reach" && e.source === self.id,
   );
+  const agents = keepFirst(reaches, "target");
 
   const edges = sub.edges.filter(
     (e) =>
@@ -81,6 +84,7 @@ export function compactAgentGraph(
     tools,
     hiddenRoles: roles.hidden,
     hiddenAgents: agents.hidden,
+    reaches,
   };
 }
 
@@ -88,9 +92,14 @@ export function compactAgentGraph(
  * its admission edges; null when it has none (running it isn't gated). */
 export function runnersOf(sub: PolicyGraph): Set<string> | null {
   const self = sub.nodes[0]?.id;
-  const admits = sub.edges.filter(
-    (e) => e.kind === "admission" && e.target === self,
+  return runnersFrom(
+    sub.edges.filter((e) => e.kind === "admission" && e.target === self),
   );
+}
+
+/** The roles an agent's admission edges let run it; null when it has none
+ * (running it isn't gated). The one copy of this rule. */
+export function runnersFrom(admits: PolicyGraphEdge[]): Set<string> | null {
   if (!admits.length) return null;
   return new Set(
     admits
@@ -109,16 +118,13 @@ export function roleOptionsFor(
   roles: string[],
   sub: PolicyGraph,
 ): RoleOption[] {
+  // Every role: which ones change what it may do isn't in the graph
+  // (each edge keeps only its most permissive roles, #486).
   const runners = runnersOf(sub);
-  if (runners) return roles.map((name) => ({ name, runs: runners.has(name) }));
-  // No admission gate: list the roles its own edges name, which are the
-  // ones that change what it may do; every role if none are named.
-  const self = sub.nodes[0]?.id;
-  const named = new Set(
-    sub.edges.filter((e) => e.source === self).flatMap((e) => e.roles),
-  );
-  const relevant = named.size ? roles.filter((r) => named.has(r)) : roles;
-  return relevant.map((name) => ({ name, runs: null }));
+  return roles.map((name) => ({
+    name,
+    runs: runners ? runners.has(name) : null,
+  }));
 }
 
 /** Why a graph fetch failed: 422 the modules don't compose, 404 the project

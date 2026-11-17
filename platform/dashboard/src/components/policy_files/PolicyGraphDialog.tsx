@@ -725,6 +725,89 @@ function GroupList({
   );
 }
 
+/** Every sub-agent the agent reaches, from the policy: the ones the canvas
+ * leaves out included. Each with a page opens it. */
+function SubAgentList({
+  reaches,
+  labelOf,
+  canOpen,
+  onOpen,
+  onClose,
+}: {
+  reaches: PolicyGraphEdge[];
+  labelOf: (id: string) => string;
+  canOpen: (name: string) => boolean;
+  onOpen: (name: string) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const rows = reaches.filter(
+    (e) => !q || labelOf(e.target).toLowerCase().includes(q),
+  );
+  return (
+    <aside
+      aria-label="Sub-agents"
+      className="flex max-h-[55vh] w-72 flex-col rounded-lg border border-border bg-card/95 font-mono text-[11px] text-foreground shadow-xl backdrop-blur"
+    >
+      <div className="flex items-center gap-2 p-2">
+        <span className="font-sans text-xs font-medium">
+          {pluralise(new Set(reaches.map((e) => e.target)).size, "sub-agent")}
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close sub-agent list"
+          className="ml-auto px-1 text-muted-foreground hover:text-foreground"
+        >
+          <X size={13} />
+        </button>
+      </div>
+      <SearchField
+        value={query}
+        onChange={setQuery}
+        placeholder={`filter ${reaches.length} reaches`}
+        label="Filter sub-agents"
+        className="mx-2 mb-2 h-8"
+      />
+      <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        {rows.map((e) => {
+          const name = labelOf(e.target);
+          return (
+            <li
+              key={`${e.target}:${e.via}`}
+              className="flex items-center gap-2 rounded px-1.5 py-1.5"
+            >
+              {canOpen(name) ? (
+                <button
+                  type="button"
+                  onClick={() => onOpen(name)}
+                  className="truncate text-left text-primary hover:underline"
+                >
+                  {name}
+                </button>
+              ) : (
+                <span className="truncate">{name}</span>
+              )}
+              <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[10px] text-muted-foreground">
+                {e.via}
+                <VerdictIcon
+                  verdict={e.verdict}
+                  className="size-3"
+                  style={{ color: VERDICT[e.verdict] }}
+                />
+              </span>
+            </li>
+          );
+        })}
+        {rows.length === 0 && (
+          <li className="px-1.5 py-1.5 text-muted-foreground">no match</li>
+        )}
+      </ul>
+    </aside>
+  );
+}
+
 /** What PolicyFlow needs to draw one agent's graph (from agentSubgraph, the
  * agent first): big agents group their tools by verdict, and the extra nodes
  * act on click. */
@@ -738,8 +821,6 @@ export type AgentGraphOptions = {
   hasPage?: (agent: string) => boolean;
   /** "+N more roles" was clicked. */
   onMoreRoles?: () => void;
-  /** "+N more sub-agents" was clicked. */
-  onMoreAgents?: () => void;
 };
 
 export function PolicyFlow({
@@ -761,8 +842,10 @@ export function PolicyFlow({
   );
   const [pinnedId, setPinned] = useState<string | null>(null);
   const [animate, setAnimate] = useState(false);
-  // The tool verdict whose names are listed beside the graph.
+  // The tool verdict whose names are listed beside the graph, and whether
+  // the list of every sub-agent is open.
   const [group, setGroup] = useState<Verdict | null>(null);
+  const [agentsOpen, setAgentsOpen] = useState(false);
   const isAgent = !!agent;
   const view = useMemo(
     () =>
@@ -773,6 +856,7 @@ export function PolicyFlow({
             tools: new Map<Verdict, PolicyGraphEdge[]>(),
             hiddenRoles: 0,
             hiddenAgents: 0,
+            reaches: [],
           },
     [graph, isAgent],
   );
@@ -995,10 +1079,11 @@ export function PolicyFlow({
                 +{pluralise(view.hiddenRoles, "more role")}
               </button>
             )}
-            {view.hiddenAgents > 0 && agent?.onMoreAgents && (
+            {view.hiddenAgents > 0 && (
               <button
                 type="button"
-                onClick={agent.onMoreAgents}
+                aria-pressed={agentsOpen}
+                onClick={() => setAgentsOpen((o) => !o)}
                 className="inline-flex h-7 items-center rounded-md border border-dashed border-border px-2 font-medium text-muted-foreground hover:text-foreground"
               >
                 +{pluralise(view.hiddenAgents, "more sub-agent")}
@@ -1081,6 +1166,15 @@ export function PolicyFlow({
                 <Play size={12} />
                 {animate ? "Animating…" : "Animate flow"}
               </button>
+              {agentsOpen && view.hiddenAgents > 0 && (
+                <SubAgentList
+                  reaches={view.reaches}
+                  labelOf={labelOf}
+                  canOpen={(n) => !!onOpenAgent && (hasPage?.(n) ?? true)}
+                  onOpen={(n) => onOpenAgent?.(n)}
+                  onClose={() => setAgentsOpen(false)}
+                />
+              )}
               {openGroup && (
                 <GroupList
                   verdict={openGroup}
@@ -1212,6 +1306,7 @@ export function PolicyGraphDialog({
   options,
   roleControl,
   flowKey,
+  role,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1223,8 +1318,10 @@ export function PolicyGraphDialog({
   options: AgentGraphOptions;
   /** The role picker button. */
   roleControl?: React.ReactNode;
-  /** Remounts (and refits) the canvas for a new agent or role set. */
+  /** Remounts (and refits) the canvas for a new agent or role. */
   flowKey?: string;
+  /** The role the graph is for, if one is picked. */
+  role?: string | null;
 }) {
   const errorText = error ? graphErrorText(error) : null;
   return (
@@ -1266,7 +1363,9 @@ export function PolicyGraphDialog({
           )}
           {graph && graph.nodes.length <= 1 && (
             <div className="grid h-full place-items-center font-mono text-xs text-muted-foreground">
-              {`no roles, tools or sub-agents for ${agent}.`}
+              {role
+                ? `as ${role}, ${agent} may use no tools or sub-agents.`
+                : `no roles, tools or sub-agents for ${agent}.`}
             </div>
           )}
         </div>

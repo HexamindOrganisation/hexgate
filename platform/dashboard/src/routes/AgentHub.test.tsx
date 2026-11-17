@@ -607,6 +607,29 @@ describe("AgentHub", () => {
     ).toBeInTheDocument();
   });
 
+  it("says a picked role gives the agent nothing, not that the policy is empty", async () => {
+    stubFetch("admin");
+    answer(`/v1/projects/${PROJECT}/policy/graph`, {
+      roles: ["support", "guest"],
+      nodes: [{ id: "agent:support_bot", kind: "agent", label: "support_bot" }],
+      edges: [],
+    });
+    renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
+      initialRoute: "/agents/support_bot",
+    });
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Roles · all 2/ }),
+    );
+    await userEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: /^guest/,
+      }),
+    );
+    expect(
+      await screen.findByText(/As guest, support_bot may use no tools/),
+    ).toBeInTheDocument();
+  });
+
   it("says the policy doesn't compose on a 422", async () => {
     renderHubWithGraph({ detail: "boom" }, 422);
     expect(await screen.findByText(/don't compose/)).toBeInTheDocument();

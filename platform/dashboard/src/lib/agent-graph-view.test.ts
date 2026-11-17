@@ -125,11 +125,12 @@ describe("roleOptionsFor", () => {
     expect(roleOptionsFor(["ops"], agentWith(1))[0].runs).toBeNull();
   });
 
-  it("lists the roles its edges name when no role gates running it", () => {
+  it("lists every role, as edges don't say which ones matter", () => {
     const g = agentWith(2);
     g.edges[0] = { ...g.edges[0], roles: ["ops"] };
     expect(roleOptionsFor(["ops", "guest"], g)).toEqual([
       { name: "ops", runs: null },
+      { name: "guest", runs: null },
     ]);
   });
 });

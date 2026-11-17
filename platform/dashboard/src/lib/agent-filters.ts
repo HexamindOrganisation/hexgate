@@ -6,6 +6,8 @@
 
 import type { PolicyGraph } from "./api";
 import { agentResolver } from "./agent-graph";
+import { runnersFrom } from "./agent-graph-view";
+import { push } from "./graph-layout";
 
 export type Activity = "deny" | "approval" | "quiet";
 export type Delegation = "reaches" | "called";
@@ -60,24 +62,13 @@ export function rolesThatRun(
   }
   const admits = new Map<string, PolicyGraph["edges"]>();
   for (const e of graph.edges)
-    if (e.kind === "admission")
-      admits.set(e.target, [...(admits.get(e.target) ?? []), e]);
+    if (e.kind === "admission") push(admits, e.target, e);
   const resolve = agentResolver(graph);
   for (const name of names) {
     const r = resolve(name);
     // As agentSubgraph keeps them: into its node or the one standing for it.
     const ids = r ? new Set([r.node.id, r.sourceId]) : new Set<string>();
-    const edges = [...ids].flatMap((id) => admits.get(id) ?? []);
-    out.set(
-      name,
-      edges.length
-        ? new Set(
-            edges
-              .filter((e) => e.verdict !== "deny")
-              .map((e) => e.source.slice("role:".length)),
-          )
-        : null,
-    );
+    out.set(name, runnersFrom([...ids].flatMap((id) => admits.get(id) ?? [])));
   }
   return out;
 }

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Link,
   NavLink,
@@ -42,6 +42,7 @@ import {
   agentReachCounts,
   agentReachEdges,
   agentSubgraph,
+  toolCounter,
 } from "@/lib/agent-graph";
 import {
   graphErrorOf,
@@ -164,6 +165,8 @@ export function AgentHub() {
     setRoleFor(`${scope.projectId}:${name}`);
     setRole(null);
   }
+  // A role the policy no longer has isn't a view of anything: back to all.
+  if (role && graph && !graph.roles.includes(role)) setRole(null);
   const [pickingRole, setPickingRole] = useState(false);
   const roleQuery = usePolicyGraph(
     scope.projectId,
@@ -200,12 +203,9 @@ export function AgentHub() {
     [graph, subgraph],
   );
   const navigate = useNavigate();
-  const toolCount = useCallback(
-    (n: string) => {
-      if (!projectGraph) return 0;
-      const c = agentReachCounts(agentSubgraph(projectGraph, n));
-      return c.tools + c.mcpTools;
-    },
+  // One index per graph, then a lookup per sub-agent.
+  const toolCount = useMemo(
+    () => (projectGraph ? toolCounter(projectGraph) : () => 0),
     [projectGraph],
   );
   const graphOptions = useMemo<AgentGraphOptions | null>(
@@ -219,10 +219,6 @@ export function AgentHub() {
             },
             hasPage: (n) => !!manifests.data?.some((m) => m.name === n),
             onMoreRoles: () => setPickingRole(true),
-            onMoreAgents: () => {
-              setGraphOpen(false);
-              navigate(`${agentHubPath(agent.name)}/resources`);
-            },
           }
         : null,
     [agent, toolCount, navigate, manifests.data],
@@ -381,6 +377,7 @@ export function AgentHub() {
           options={graphOptions}
           roleControl={rolesButton}
           flowKey={flowKey}
+          role={role}
         />
       )}
       {pickingRole && (
@@ -898,7 +895,13 @@ function AgentOverview({
         </div>
       ) : (
         <Placeholder>
-          {graphPlaceholder(graphLoading, graphError, agent.name, classic)}
+          {graphPlaceholder(
+            graphLoading,
+            graphError,
+            agent.name,
+            classic,
+            role,
+          )}
         </Placeholder>
       )}
     </Card>
@@ -911,6 +914,7 @@ function graphPlaceholder(
   error: GraphError | null,
   name: string,
   classic: boolean,
+  role: string | null,
 ): string {
   if (loading) return "Loading graph…";
   if (error === "compose")
@@ -920,6 +924,8 @@ function graphPlaceholder(
   if (error === "load") return "Couldn't load the graph. Refresh to retry.";
   if (classic)
     return `${name} is governed by its own policy file. The graph appears once the project uses policy.yaml or role bindings.`;
+  // A role that gives it nothing is a fact about the role, not the policy.
+  if (role) return `As ${role}, ${name} may use no tools or sub-agents.`;
   // The graph comes from the policy, not the manifest.
   return `Nothing in the policy maps roles, tools or reach to ${name} yet.`;
 }
