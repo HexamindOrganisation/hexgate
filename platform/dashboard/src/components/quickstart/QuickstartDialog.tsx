@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Dialog,
   DialogContent,
@@ -51,8 +52,14 @@ import { cn } from "@/lib/utils";
 
 /** A dark code block with a copy button. */
 function CodeBlock({ title, code }: { title: string; code: string }) {
-  const [copied, copyText] = useCopy();
+  const [status, copyText] = useCopy();
   const copy = () => void copyText(code);
+  const label =
+    status === "copied"
+      ? "Copied"
+      : status === "failed"
+        ? "Copy failed"
+        : "Copy";
   return (
     <div className="overflow-hidden rounded-lg border border-white/10 bg-[#0a0d14] text-slate-200">
       <div className="flex items-center justify-between gap-2 px-3 pt-2 font-mono text-[11px] text-slate-500">
@@ -63,8 +70,12 @@ function CodeBlock({ title, code }: { title: string; code: string }) {
           aria-label={`Copy ${title}`}
           className="flex items-center gap-1 rounded px-1.5 py-0.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-          {copied ? "Copied" : "Copy"}
+          {status === "copied" ? (
+            <Check className="size-3" />
+          ) : (
+            <Copy className="size-3" />
+          )}
+          {label}
         </button>
       </div>
       <pre className="overflow-x-auto p-3 pt-2 font-mono text-[11.5px] leading-relaxed scrollbar-thin">
@@ -82,28 +93,20 @@ function FrameworkPicker({
   onChange: (f: Framework) => void;
 }) {
   return (
-    <div
-      role="group"
+    <ToggleGroup
+      type="single"
+      value={value}
+      // Radix sends "" when the selected item is clicked again: keep it.
+      onValueChange={(v) => v && onChange(v as Framework)}
       aria-label="Framework"
-      className="flex flex-wrap gap-1 rounded-lg bg-muted p-1"
+      className="grid w-full grid-cols-2 sm:grid-cols-4"
     >
       {FRAMEWORKS.map((f) => (
-        <button
-          key={f.id}
-          type="button"
-          aria-pressed={value === f.id}
-          onClick={() => onChange(f.id)}
-          className={cn(
-            "flex-1 whitespace-nowrap rounded-md px-2 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            value === f.id
-              ? "bg-card font-medium text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
+        <ToggleGroupItem key={f.id} value={f.id}>
           {f.label}
-        </button>
+        </ToggleGroupItem>
       ))}
-    </div>
+    </ToggleGroup>
   );
 }
 
@@ -297,6 +300,8 @@ export function QuickstartDialog() {
         onKeyDown={(e) => {
           // Arrow keys page through the steps unless focus is in a control
           // that uses them itself.
+          // Modified arrows belong to the browser (history, text navigation).
+          if (e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
           const t = e.target as HTMLElement;
           if (t.closest("pre, input, textarea, [role='group']")) return;
           if (e.key === "ArrowRight") go(index + 1);

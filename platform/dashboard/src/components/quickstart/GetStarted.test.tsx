@@ -30,6 +30,18 @@ describe("GetStarted", () => {
     expect(screen.queryByText(/get started/i)).toBeNull();
   });
 
+  it("hides when set up and the decision couldn't be checked", () => {
+    renderWithProviders(<GetStarted hasKey hasAgent hasDecision={null} />);
+    expect(screen.queryByText(/get started/i)).toBeNull();
+  });
+
+  it("shows an unchecked decision step without a tick or a count", () => {
+    renderWithProviders(
+      <GetStarted hasKey={false} hasAgent hasDecision={null} />,
+    );
+    expect(screen.getByText(/1 of 2 done/)).toBeInTheDocument();
+  });
+
   it("counts what's done and links the key step to the mint window", () => {
     renderWithProviders(
       <GetStarted hasKey={false} hasAgent hasDecision={false} />,

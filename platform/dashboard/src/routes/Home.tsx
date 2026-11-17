@@ -225,16 +225,17 @@ export function HomePage() {
     retry: 1,
     refetchInterval: SLOW_MS,
   });
-  // Has this project ever recorded a decision? One row over the longest audit
-  // window, so a set-up project with a quiet week isn't sent back to "Get
-  // started". Only the checklist reads it.
+  // Has this project ever recorded a decision? Totals over the longest audit
+  // window (the summary aggregates; a decisions page would also count and
+  // buffer every matching row), so a set-up project with a quiet week isn't
+  // sent back to "Get started". Only the checklist reads it, and once there's
+  // a decision the answer can't change: polling stops.
   const everQ = useQuery({
-    queryKey: ["audit", "list", pid, { window: "90d", limit: 1 }],
+    queryKey: ["audit", "summary", pid, { window: "90d" }],
     enabled: on,
-    queryFn: () => api.listAuditDecisions({ window: "90d", limit: 1 }, pid!),
+    queryFn: () => api.getAuditSummary({ window: "90d" }, pid!),
     retry: 1,
-    // Once there's a decision the answer can't change: stop asking.
-    refetchInterval: (q) => (q.state.data?.rows.length ? false : SLOW_MS),
+    refetchInterval: (q) => (q.state.data?.totals.all ? false : SLOW_MS),
   });
   // Usage is best-effort: a member without access just doesn't get it.
   const usageQ = useQuery({
@@ -311,24 +312,24 @@ export function HomePage() {
   const hasAgent = agentsQ.isSuccess
     ? agents.some((a) => a.manifest)
     : undefined;
-  // A failed check reads as "not yet": the step stays to do, but the key and
-  // agent steps still show instead of the whole card disappearing.
+  // null = couldn't check (audit unavailable): neither done nor to do.
   const hasDecision = everQ.isSuccess
-    ? everQ.data.rows.length > 0
+    ? everQ.data.totals.all > 0
     : everQ.isError
-      ? false
+      ? null
       : undefined;
 
   // A project with no agents is where the quickstart helps most: offer it
   // unprompted once (closing it sets quickstartSeen); the checklist stays.
   const openQuickstart = useUi((s) => s.openQuickstart);
   const quickstartSeen = useUi((s) => s.quickstartSeen);
-  // Same rule as the checklist's register step: no agent with a manifest.
-  const noRegisteredAgent = hasAgent === false;
+  // Only a truly empty project (the "No agents yet" panel), so it doesn't
+  // pop up over agents that exist but aren't registered; the checklist still
+  // covers those. quickstartSeen is per browser, like any onboarding hint.
+  const noAgents = agentsQ.isSuccess && agents.length === 0;
   useEffect(() => {
-    if (noRegisteredAgent && !quickstartSeen)
-      openQuickstart(QUICKSTART_STEP.idea);
-  }, [noRegisteredAgent, quickstartSeen, openQuickstart]);
+    if (noAgents && !quickstartSeen) openQuickstart(QUICKSTART_STEP.idea);
+  }, [noAgents, quickstartSeen, openQuickstart]);
 
   const maxAgentCalls = Math.max(
     ...agents.map((a) => activityOf(a.name)?.all ?? 0),

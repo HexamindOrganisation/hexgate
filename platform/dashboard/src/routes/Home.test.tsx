@@ -284,22 +284,19 @@ describe("HomePage", () => {
     expect(useUi.getState().quickstartOpen).toBe(false);
   });
 
-  it("asks for one decision over 90 days to tick the decision step", async () => {
+  it("ticks the decision step from the 90-day audit totals", async () => {
     stub();
     renderWithProviders(<HomePage />);
     await screen.findByText(/of 3 done/);
     const urls = vi.mocked(window.fetch).mock.calls.map(([u]) => String(u));
     expect(
       urls.some(
-        (u) =>
-          u.includes("/audit/decisions") &&
-          u.includes("window=90d") &&
-          u.includes("limit=1"),
+        (u) => u.includes("/audit/summary") && u.includes("window=90d"),
       ),
     ).toBe(true);
   });
 
-  it("offers the quickstart when the only agent has no manifest", async () => {
+  it("doesn't pop the quickstart over agents that exist but aren't registered", async () => {
     stub({
       "/v1/projects/p1/agents/manifest": [
         {
@@ -312,20 +309,31 @@ describe("HomePage", () => {
       ],
     });
     renderWithProviders(<HomePage />);
-    await waitFor(() => expect(useUi.getState().quickstartOpen).toBe(true));
+    // The checklist still asks for a registered agent…
+    expect(await screen.findByText(/1 of 3 done/)).toBeInTheDocument();
+    // …but only a truly empty project gets the walkthrough unprompted.
+    expect(useUi.getState().quickstartOpen).toBe(false);
   });
 
-  it("keeps the checklist when the decision check fails", async () => {
-    // No route for audit/decisions: both the feed and the 90-day check 404.
-    stub({ "/v1/projects/p1/audit/decisions": undefined });
+  it("shows no tick for the decision step when audit is unavailable", async () => {
+    // No route for the summary: the 24h panel and the 90-day check both 404.
+    stub({ "/v1/projects/p1/audit/summary": undefined });
     renderWithProviders(<HomePage />);
+    // Key (to do) and agent (done) still count; the decision step doesn't.
     expect(
-      await screen.findByText(/1 of 3 done/, {}, { timeout: 5000 }),
+      await screen.findByText(/1 of 2 done/, {}, { timeout: 5000 }),
     ).toBeInTheDocument();
   });
 
   it("points a project that never had a decision at the quickstart", async () => {
     stub({
+      "/v1/projects/p1/audit/summary": {
+        totals: counts(0, 0, 0),
+        by_agent: [],
+        by_role: [],
+        by_tool: [],
+        by_user: [],
+      },
       "/v1/projects/p1/audit/decisions": {
         rows: [],
         total: 0,

@@ -80,7 +80,7 @@ describe("QuickstartDialog", () => {
     );
     expect(screen.getByText(/wrap_langchain_agent\(agent=graph/)).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: "Pydantic AI" }));
+    await user.click(screen.getByRole("radio", { name: "Pydantic AI" }));
     expect(screen.getByText(/wrap_pydantic_agent\(agent=agent\)/)).toBeTruthy();
     expect(screen.queryByText(/wrap_langchain_agent\(agent=graph/)).toBeNull();
   });

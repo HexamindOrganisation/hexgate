@@ -78,7 +78,8 @@ function JustMintedBanner({
 }) {
   // Brief "Copied!" feedback on successful copy, with a label since this
   // is the prominent action on the dialog.
-  const [copied, copy] = useCopy();
+  const [copyStatus, copy] = useCopy();
+  const copied = copyStatus === "copied";
   // Copy-only \u2014 no reveal UI. Matches the show-once + copy-only pattern
   // GitHub / AWS / Stripe / Vercel / Discord use for API tokens. The
   // mask still shows the env-tagged prefix and the last 4 chars so the
@@ -128,6 +129,14 @@ function JustMintedBanner({
           {copied ? "Copied!" : "Copy"}
         </Button>
       </div>
+      {copyStatus === "failed" && (
+        // The key is shown once: a silent failure would let the operator
+        // dismiss this thinking it was copied.
+        <p role="alert" className="mt-2 text-xs text-deny">
+          Couldn't copy to the clipboard (permission denied or an insecure
+          page). Allow clipboard access and click Copy again before dismissing.
+        </p>
+      )}
 
       <div className="mt-3 flex items-center gap-4 text-xs text-muted-foreground">
         <span className="flex items-center gap-1.5">

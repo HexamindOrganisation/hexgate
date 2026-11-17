@@ -4,8 +4,10 @@
  * recorded). Each step links to where it happens — the key step straight into
  * the "Mint API key" window — or opens the quickstart dialog at that step.
  *
- * Renders nothing until every signal is known, and nothing once they're all
- * done, so a set-up project never sees it flash by.
+ * Renders nothing until every signal has loaded, and nothing once they're all
+ * done, so a set-up project never sees it flash by. If the decision check
+ * fails, that step shows no tick and the card shows only while the key or
+ * agent step is still to do.
  */
 
 import type { ReactNode } from "react";
@@ -20,10 +22,11 @@ import { useUi } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 export interface SetupState {
-  /** `undefined` while unknown (loading or failed). */
+  /** `undefined` while loading (or, for key and agent, failed). */
   hasKey: boolean | undefined;
   hasAgent: boolean | undefined;
-  hasDecision: boolean | undefined;
+  /** `null` when it couldn't be checked (audit unavailable). */
+  hasDecision: boolean | null | undefined;
 }
 
 interface Item {
@@ -46,7 +49,9 @@ export function GetStarted({ hasKey, hasAgent, hasDecision }: SetupState) {
     hasDecision === undefined
   )
     return null;
-  if (hasKey && hasAgent && hasDecision) return null;
+  // A project with a key and a registered agent is set up enough not to be
+  // told to start over just because the decision check failed.
+  if (hasKey && hasAgent && hasDecision !== false) return null;
 
   const showMe = (step: number) => (
     <button

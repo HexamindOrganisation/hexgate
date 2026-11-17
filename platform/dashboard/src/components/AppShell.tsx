@@ -393,7 +393,9 @@ export function AppShell() {
   // shows something usable instead of "Pick an organization" empty
   // state. Idempotent — won't overwrite an existing valid selection.
   useActiveBootstrap();
-  const { sidebarCollapsed, toggleSidebar } = useUi();
+  // Selectors, so quickstart open/step changes don't re-render the shell.
+  const sidebarCollapsed = useUi((s) => s.sidebarCollapsed);
+  const toggleSidebar = useUi((s) => s.toggleSidebar);
   const navigate = useNavigate();
 
   // Two sidebar "spaces" share this one shell frame: the product features, and
