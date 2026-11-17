@@ -5,8 +5,6 @@
  */
 
 import type { PolicyGraph } from "./api";
-import { agentSubgraph } from "./agent-graph";
-import { runnersOf } from "./agent-graph-view";
 
 export type Activity = "deny" | "approval" | "quiet";
 export type Delegation = "reaches" | "called";
@@ -46,14 +44,59 @@ export type AgentFacts = {
   runBy: Set<string> | null;
 };
 
-/** The roles that run `name`, from the project graph's admission edges;
- * null when its graph has none (running it isn't gated by role). */
+/** The roles that run each of `names`, from the project graph's admission
+ * edges, resolved as agentSubgraph resolves an agent (its own node when the
+ * policy declares it, else `*`'s); null for one no role gates. One pass over
+ * the edges, however many agents. */
 export function rolesThatRun(
   graph: PolicyGraph | undefined,
-  name: string,
-): Set<string> | null {
-  return graph ? runnersOf(agentSubgraph(graph, name)) : null;
+  names: string[],
+): Map<string, Set<string> | null> {
+  const out = new Map<string, Set<string> | null>();
+  if (!graph) {
+    for (const n of names) out.set(n, null);
+    return out;
+  }
+  const ids = new Set(graph.nodes.map((n) => n.id));
+  const touched = new Set<string>();
+  // Touched by anything but an inbound reach: the policy declares it.
+  const declared = new Set<string>();
+  const admits = new Map<string, PolicyGraph["edges"]>();
+  for (const e of graph.edges) {
+    touched.add(e.source).add(e.target);
+    declared.add(e.source);
+    if (e.kind !== "reach") declared.add(e.target);
+    if (e.kind === "admission")
+      admits.set(e.target, [...(admits.get(e.target) ?? []), e]);
+  }
+  const STAR = "agent:*";
+  for (const name of names) {
+    const own = `agent:${name}`;
+    const isOwn = ids.has(own) && (declared.has(own) || !touched.has(own));
+    const source = isOwn || !ids.has(STAR) ? own : STAR;
+    const edges = [
+      ...(admits.get(own) ?? []),
+      ...(source !== own ? (admits.get(source) ?? []) : []),
+    ];
+    out.set(
+      name,
+      edges.length
+        ? new Set(
+            edges
+              .filter((e) => e.verdict !== "deny")
+              .map((e) => e.source.slice("role:".length)),
+          )
+        : null,
+    );
+  }
+  return out;
 }
+
+export const ACTIVITY_LABEL: Record<Activity, string> = {
+  deny: "Has denials",
+  approval: "Waiting on approval",
+  quiet: "No calls",
+};
 
 const ACTIVITY: Record<Activity, (a: AgentFacts["activity"]) => boolean> = {
   deny: (a) => !!a && a.deny > 0,

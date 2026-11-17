@@ -5,9 +5,10 @@
  */
 
 import { useMemo, useState } from "react";
-import { ChevronDown, Search } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { SearchField } from "@/components/ui/search-field";
 import {
   Dialog,
   DialogContent,
@@ -67,8 +68,9 @@ export function RolePickerDialog({
   const [query, setQuery] = useState("");
   // Only meaningful when the policy gates running the agent by role.
   const gated = options.some((o) => o.runs !== null);
-  const [onlyRunners, setOnlyRunners] = useState(gated);
   const runners = options.filter((o) => o.runs).length;
+  // Narrowed to runners only when some role does run it.
+  const [onlyRunners, setOnlyRunners] = useState(gated && runners > 0);
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     return options.filter(
@@ -89,17 +91,12 @@ export function RolePickerDialog({
           </DialogDescription>
         </div>
         <div className="space-y-2.5 px-5 pb-3">
-          <label className="flex h-10 items-center gap-2 rounded-lg border border-input px-3 focus-within:ring-2 focus-within:ring-ring">
-            <Search className="size-3.5 text-muted-foreground" aria-hidden />
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={`Search ${pluralise(options.length, "role")}`}
-              aria-label="Search roles"
-              className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-            />
-          </label>
+          <SearchField
+            value={query}
+            onChange={setQuery}
+            placeholder={`Search ${pluralise(options.length, "role")}`}
+            label="Search roles"
+          />
           {gated && (
             <div className="flex flex-wrap gap-2">
               <ChipToggle
@@ -139,12 +136,12 @@ export function RolePickerDialog({
               />
             </li>
           ))}
-          {shown.length === 0 && (
+          {shown.length === 0 && query.trim() && (
             <li className="px-5 py-3 text-sm text-muted-foreground">
               No role matches “{query.trim()}”.
             </li>
           )}
-          {hidden > 0 && shown.length > 0 && (
+          {hidden > 0 && (
             <li className="px-5 py-2 text-xs text-muted-foreground">
               {pluralise(hidden, "more role")} hidden by the filter above.
             </li>

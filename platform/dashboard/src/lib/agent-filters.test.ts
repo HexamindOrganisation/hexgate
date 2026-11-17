@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { type AgentFacts, NO_FILTERS, matches } from "./agent-filters";
+import type { PolicyGraph } from "./api";
+import {
+  type AgentFacts,
+  NO_FILTERS,
+  matches,
+  rolesThatRun,
+} from "./agent-filters";
 
 const facts = (over: Partial<AgentFacts> = {}): AgentFacts => ({
   name: "a",
@@ -35,5 +41,42 @@ describe("matches", () => {
   it("keeps an agent only if a picked role runs it", () => {
     expect(matches({ ...NO_FILTERS, roles: ["guest"] }, facts())).toBe(false);
     expect(matches({ ...NO_FILTERS, roles: ["ops"] }, facts())).toBe(true);
+  });
+});
+
+describe("rolesThatRun", () => {
+  const admit = (role: string, agent: string, verdict = "allow") => ({
+    source: `role:${role}`,
+    target: `agent:${agent}`,
+    kind: "admission" as const,
+    via: null,
+    verdict: verdict as "allow" | "deny",
+    constraints: [],
+    roles: [],
+  });
+  const g: PolicyGraph = {
+    roles: ["ops", "guest"],
+    nodes: [
+      { id: "agent:*", kind: "agent", label: "*" },
+      { id: "agent:a", kind: "agent", label: "a" },
+      { id: "role:ops", kind: "role", label: "ops" },
+      { id: "role:guest", kind: "role", label: "guest" },
+    ],
+    edges: [
+      admit("ops", "a"),
+      admit("guest", "a", "deny"),
+      admit("guest", "*"),
+    ],
+  };
+
+  it("reads each agent's runners in one pass, through * when undeclared", () => {
+    const m = rolesThatRun(g, ["a", "b"]);
+    expect([...(m.get("a") ?? [])]).toEqual(["ops"]);
+    // b isn't declared: it runs as *, which guest runs.
+    expect([...(m.get("b") ?? [])]).toEqual(["guest"]);
+  });
+
+  it("is unknown for every agent without a graph", () => {
+    expect(rolesThatRun(undefined, ["a"]).get("a")).toBeNull();
   });
 });

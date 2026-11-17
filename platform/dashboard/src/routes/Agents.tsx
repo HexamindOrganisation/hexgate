@@ -21,6 +21,7 @@ import {
   NO_FILTERS,
   activeCount,
   matches,
+  ACTIVITY_LABEL,
   rolesThatRun,
 } from "@/lib/agent-filters";
 import { PageHeader } from "@/components/ui/page-header";
@@ -49,6 +50,13 @@ export function AgentsPage() {
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<AgentFilters>(NO_FILTERS);
   const [filtering, setFiltering] = useState(false);
+  // Filters belong to a project: another project starts unfiltered.
+  const [filtersFor, setFiltersFor] = useState(scope.projectId);
+  if (filtersFor !== scope.projectId) {
+    setFiltersFor(scope.projectId);
+    setFilters(NO_FILTERS);
+    setQuery("");
+  }
   const manifests = useQuery({
     queryKey: ["agent-manifests", scope.projectId],
     queryFn: () => api.listAgentManifests(scope.projectId as string),
@@ -74,12 +82,14 @@ export function AgentsPage() {
     [graph.data, graph.isPlaceholderData, manifests.data],
   );
   // Which roles run each agent: one pass per graph, not per summary poll.
-  const runBy = useMemo(() => {
-    const g = graph.data && !graph.isPlaceholderData ? graph.data : undefined;
-    return new Map(
-      (manifests.data ?? []).map((a) => [a.name, rolesThatRun(g, a.name)]),
-    );
-  }, [graph.data, graph.isPlaceholderData, manifests.data]);
+  const runBy = useMemo(
+    () =>
+      rolesThatRun(
+        graph.data && !graph.isPlaceholderData ? graph.data : undefined,
+        (manifests.data ?? []).map((a) => a.name),
+      ),
+    [graph.data, graph.isPlaceholderData, manifests.data],
+  );
   // A prior project's graph, kept while this one loads, isn't this one's.
   const graphKnown = !!graph.data && !graph.isPlaceholderData;
   // What the filter reads off each agent.
@@ -438,12 +448,6 @@ export function AgentsPage() {
   );
 }
 
-const ACTIVITY_LABEL = {
-  deny: "Has denials · 24h",
-  approval: "Waiting on approval · 24h",
-  quiet: "No calls · 24h",
-};
-
 /** One removable chip per filter set, and Clear all. */
 function FilterChips({
   f,
@@ -464,7 +468,7 @@ function FilterChips({
         ]),
     ...f.activity.map((v) => ({
       key: `a:${v}`,
-      label: ACTIVITY_LABEL[v],
+      label: `${ACTIVITY_LABEL[v]} · 24h`,
       clear: () => setF({ ...f, activity: f.activity.filter((x) => x !== v) }),
     })),
     ...f.frameworks.map((v) => ({

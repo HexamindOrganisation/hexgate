@@ -19,12 +19,15 @@ import "@xyflow/react/dist/style.css";
 import { Network, Play, X } from "lucide-react";
 
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { compactAgentGraph, type Verdict } from "@/lib/agent-graph-view";
 import {
-  ApiError,
-  type PolicyGraph,
-  type PolicyGraphEdge,
-  type PolicyTestOutcome,
+  compactAgentGraph,
+  graphErrorOf,
+  type Verdict,
+} from "@/lib/agent-graph-view";
+import type {
+  PolicyGraph,
+  PolicyGraphEdge,
+  PolicyTestOutcome,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { VerdictIcon } from "@/components/ui/verdict-icon";
@@ -1182,11 +1185,12 @@ export function PolicyFlow({
 
 /** Why the graph failed, by status (as the agent hub reads it). */
 function graphErrorText(error: unknown): string {
-  const status = error instanceof ApiError ? error.status : null;
-  if (status === 422)
-    return "the modules don't compose — fix the lints, then reopen the graph.";
-  if (status === 404) return "you don't have access to this project's policy.";
-  return "couldn't load the graph — try again.";
+  return {
+    compose:
+      "the modules don't compose — fix the lints, then reopen the graph.",
+    gone: "you don't have access to this project's policy.",
+    load: "couldn't load the graph — try again.",
+  }[graphErrorOf(error)];
 }
 
 /** One agent's graph, full size: the hub's Expand. The hub owns the data and

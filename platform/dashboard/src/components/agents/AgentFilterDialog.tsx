@@ -5,15 +5,16 @@
  */
 
 import { useMemo, useState } from "react";
-import { Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { SearchField } from "@/components/ui/search-field";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
   type Activity,
   type AgentFacts,
   type AgentFilters,
   type Delegation,
+  ACTIVITY_LABEL,
   NO_FILTERS,
   countWhere,
   matches,
@@ -21,11 +22,7 @@ import {
 import { pluralise } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-const ACTIVITY: [Activity, string][] = [
-  ["deny", "Has denials"],
-  ["approval", "Waiting on approval"],
-  ["quiet", "No calls"],
-];
+const ACTIVITY = Object.entries(ACTIVITY_LABEL) as [Activity, string][];
 const DELEGATION: [Delegation, string][] = [
   ["reaches", "Reaches other agents"],
   ["called", "Called by other agents"],
@@ -150,20 +147,13 @@ export function AgentFilterDialog({
               off={!graphKnown && "The policy graph hasn't loaded."}
             >
               {roles.length > 8 && (
-                <label className="mb-1 flex h-9 items-center gap-2 rounded-lg border border-input px-3 focus-within:ring-2 focus-within:ring-ring">
-                  <Search
-                    className="size-3.5 text-muted-foreground"
-                    aria-hidden
-                  />
-                  <input
-                    type="search"
-                    value={roleQuery}
-                    onChange={(e) => setRoleQuery(e.target.value)}
-                    placeholder={`Search ${pluralise(roles.length, "role")}`}
-                    aria-label="Search roles"
-                    className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                  />
-                </label>
+                <SearchField
+                  value={roleQuery}
+                  onChange={setRoleQuery}
+                  placeholder={`Search ${pluralise(roles.length, "role")}`}
+                  label="Search roles"
+                  className="mb-1 h-9"
+                />
               )}
               <div className="max-h-56 overflow-y-auto">
                 {shownRoles.map((r) => (
@@ -171,8 +161,8 @@ export function AgentFilterDialog({
                     key={r}
                     label={r}
                     mono
-                    // Agents this role gates in; ungated ones always stay.
-                    count={facts.filter((a) => a.runBy?.has(r)).length}
+                    // What applying it keeps, ungated agents included.
+                    count={countWhere(facts, { roles: [r] })}
                     checked={f.roles.includes(r)}
                     disabled={!graphKnown}
                     onChange={() =>

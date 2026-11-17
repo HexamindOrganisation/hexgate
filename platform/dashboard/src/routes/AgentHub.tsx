@@ -19,7 +19,6 @@ import {
 } from "lucide-react";
 
 import {
-  ApiError,
   api,
   type AgentManifestView,
   type PolicyGraph,
@@ -44,7 +43,11 @@ import {
   agentReachEdges,
   agentSubgraph,
 } from "@/lib/agent-graph";
-import { roleOptionsFor } from "@/lib/agent-graph-view";
+import {
+  graphErrorOf,
+  roleOptionsFor,
+  type GraphError,
+} from "@/lib/agent-graph-view";
 import { agentHubPath } from "@/lib/agent-paths";
 import { rangeSearch } from "@/lib/range-params";
 import { formatDate, pluralise } from "@/lib/format";
@@ -174,10 +177,15 @@ export function AgentHub() {
       ? undefined
       : roleQuery.data
     : graph;
+  // With no role picked, that's the unfiltered subgraph already built.
   const view = useMemo(
     () =>
-      projectGraph && agent ? agentSubgraph(projectGraph, agent.name) : null,
-    [projectGraph, agent],
+      !role
+        ? subgraph
+        : projectGraph && agent
+          ? agentSubgraph(projectGraph, agent.name)
+          : null,
+    [role, subgraph, projectGraph, agent],
   );
   const viewLoading = role
     ? roleQuery.isLoading || roleQuery.isPlaceholderData
@@ -234,9 +242,11 @@ export function AgentHub() {
     const refs = agent?.manifest?.subagents;
     if (!refs) return null;
     // agentSubgraph is empty (not null) when the agent isn't in the graph.
+    // The verdicts read the project graph itself, so a `*` stand-in's reach
+    // (even to `*`, which the drawn graph leaves out) still counts.
     const edges =
-      subgraph && subgraph.nodes.length > 0
-        ? agentReachEdges(subgraph, agent.name)
+      graph && subgraph && subgraph.nodes.length > 0
+        ? agentReachEdges(graph, agent.name)
         : null;
     const names = new Set(manifests.data?.map((m) => m.name));
     // The manifest may list a (name, via) twice (e.g. two as_tool mounts).
@@ -262,7 +272,7 @@ export function AgentHub() {
         calls: activityOf(r.name)?.all ?? null,
       };
     });
-  }, [agent, manifests.data, subgraph, activityOf]);
+  }, [agent, manifests.data, subgraph, graph, activityOf]);
 
   const canManageBans = useCanManageBans();
 
@@ -775,15 +785,6 @@ function Breadcrumb({ name }: { name: string }) {
       <span className="font-mono text-foreground">{name}</span>
     </nav>
   );
-}
-
-type GraphError = "compose" | "gone" | "load";
-
-/** A graph fetch's failure, by status: 422 the modules don't compose, 404
- * the project isn't visible any more, else it didn't load. */
-function graphErrorOf(error: unknown): GraphError {
-  const status = error instanceof ApiError ? error.status : null;
-  return status === 422 ? "compose" : status === 404 ? "gone" : "load";
 }
 
 /** Overview: the 24h strip, then the agent's graph as the centrepiece. */

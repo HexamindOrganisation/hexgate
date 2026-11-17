@@ -5,7 +5,7 @@
  * rest are counted, not drawn. Pure, so it's testable without React Flow.
  */
 
-import type { PolicyGraph, PolicyGraphEdge } from "./api";
+import { ApiError, type PolicyGraph, type PolicyGraphEdge } from "./api";
 
 /** Past this many tools, they're summarised by verdict instead of drawn. */
 export const MAX_TOOLS = 8;
@@ -114,4 +114,13 @@ export function roleOptionsFor(
     name,
     runs: runners ? runners.has(name) : null,
   }));
+}
+
+/** Why a graph fetch failed: 422 the modules don't compose, 404 the project
+ * isn't visible any more, else it didn't load. */
+export type GraphError = "compose" | "gone" | "load";
+
+export function graphErrorOf(error: unknown): GraphError {
+  const status = error instanceof ApiError ? error.status : null;
+  return status === 422 ? "compose" : status === 404 ? "gone" : "load";
 }

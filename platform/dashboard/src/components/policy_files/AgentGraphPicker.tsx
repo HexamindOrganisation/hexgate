@@ -5,8 +5,8 @@
 
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Search } from "lucide-react";
 
+import { SearchField } from "@/components/ui/search-field";
 import {
   Dialog,
   DialogContent,
@@ -80,20 +80,12 @@ export function AgentGraphPicker({
                 if (shown[0]) open(shown[0]);
               }}
             >
-              <label className="flex h-10 items-center gap-2 rounded-lg border border-input px-3 focus-within:ring-2 focus-within:ring-ring">
-                <Search
-                  className="size-3.5 text-muted-foreground"
-                  aria-hidden
-                />
-                <input
-                  type="search"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder={`Search ${pluralise(agents.length, "agent")}`}
-                  aria-label="Search agents"
-                  className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                />
-              </label>
+              <SearchField
+                value={query}
+                onChange={setQuery}
+                placeholder={`Search ${pluralise(agents.length, "agent")}`}
+                label="Search agents"
+              />
             </form>
             <ul className="min-h-0 flex-1 overflow-y-auto border-t border-border py-1">
               {shown.map((a) => (

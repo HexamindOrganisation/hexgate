@@ -1,6 +1,6 @@
 /**
- * Layered layout for the policy graph: roles, then agents (one column per
- * permitted reach hop, so agent-as-tool chains read left to right), then
+ * Layered layout for one agent's graph: roles, then agents (one column per
+ * reach hop, denied or not, so sub-agents sit right of the agent), then
  * tools. An edge that spans columns bends through a reserved slot in each
  * column it crosses, and one within a column loops out to its right, so no
  * edge runs under a node it doesn't touch.
@@ -58,7 +58,7 @@ export const push = <K, V>(m: Map<K, V[]>, k: K, v: V) => {
   else m.set(k, [v]);
 };
 
-/** Column per node — roles 0, agents 1 + their shortest permitted reach
+/** Column per node — roles 0, agents 1 + their shortest reach
  * depth, tools and MCP servers last — and the column count. */
 function columnsOf(graph: LayoutGraph): {
   col: Record<string, number>;
