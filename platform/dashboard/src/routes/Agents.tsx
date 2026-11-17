@@ -327,7 +327,7 @@ export function AgentsPage() {
                 // Everything after the model, so a missing model never leaves a
                 // dangling leading "· ". Outbound delegation ("reaches") rides
                 // here; inbound ("called by") is a chip by the name instead.
-                const facts = [
+                const caption = [
                   a.manifest?.framework?.trim(),
                   pluralise(tools, "tool"),
                   skills > 0 ? pluralise(skills, "skill") : null,
@@ -345,7 +345,7 @@ export function AgentsPage() {
                     aria-describedby={[
                       `${id}-badge`,
                       calledBy && `${id}-chip`,
-                      `${id}-facts`,
+                      `${id}-caption`,
                       `${id}-counts`,
                     ]
                       .filter(Boolean)
@@ -385,7 +385,7 @@ export function AgentsPage() {
                         )}
                       </div>
                       <div
-                        id={`${id}-facts`}
+                        id={`${id}-caption`}
                         className="mt-0.5 truncate text-meta text-muted-foreground"
                       >
                         {registered ? (
@@ -395,7 +395,7 @@ export function AgentsPage() {
                                 {model}
                               </span>
                             )}
-                            {model ? ` · ${facts}` : facts}
+                            {model ? ` · ${caption}` : caption}
                           </>
                         ) : (
                           <>

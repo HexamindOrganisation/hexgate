@@ -865,6 +865,8 @@ export function PolicyFlow({
   const pinned =
     pinnedId && shown.nodes.some((n) => n.id === pinnedId) ? pinnedId : null;
   const openGroup = group && view.tools.has(group) ? group : null;
+  // An edge card whose edge a refetch dropped closes for good.
+  if (selected && !shown.edges.includes(selected)) setSelected(null);
   const lay = useMemo(() => layeredLayout(shown), [shown]);
   const labelOf = useMemo(() => labelLookup(graph), [graph]);
   const kindOf = useMemo(

@@ -6,6 +6,7 @@
  */
 
 import { ApiError, type PolicyGraph, type PolicyGraphEdge } from "./api";
+import { push } from "./graph-layout";
 
 /** Past this many tools, they're summarised by verdict instead of drawn. */
 export const MAX_TOOLS = 8;
@@ -47,8 +48,7 @@ export function compactAgentGraph(
     (e) => e.source === self.id && isTool(kind.get(e.target) ?? ""),
   );
   const offTools = new Set(calls.length > maxTools ? calls : []);
-  for (const e of offTools)
-    tools.set(e.verdict, [...(tools.get(e.verdict) ?? []), e]);
+  for (const e of offTools) push(tools, e.verdict, e);
 
   // Kept by node, permitted first: two edges to one sub-agent are one slot.
   const keepFirst = (edges: PolicyGraphEdge[], end: "source" | "target") => {

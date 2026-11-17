@@ -224,7 +224,7 @@ export function AgentHub() {
     [agent, toolCount, navigate, manifests.data],
   );
   // A new agent or role is a new graph: start it fresh and fitted.
-  const flowKey = `${agent?.name}:${role ?? ""}`;
+  const flowKey = `${scope.projectId}:${agent?.name}:${role ?? ""}`;
   const rolesButton = (
     <RolesButton
       total={roleOptions.length}
@@ -359,6 +359,16 @@ export function AgentHub() {
             // this agent's: show it as loading.
             graphLoading: viewLoading,
             graphError: viewError,
+            // Resources reads the every-role graph: its own load state.
+            reachLoading: graphQuery.isLoading || graphQuery.isPlaceholderData,
+            reachError: graphError,
+            openAnyGraph:
+              scope.projectId && subgraph && subgraph.nodes.length > 1
+                ? () => {
+                    setRole(null);
+                    setGraphOpen(true);
+                  }
+                : null,
             classic: !!policyFiles.data && !modular,
             playgroundLive,
             servedAgent: served.agentName,
@@ -422,6 +432,12 @@ export interface HubContext {
   subAgents: SubAgentRow[] | null;
   /** Opens the agent's graph dialog; null when there's no graph to show. */
   openGraph: (() => void) | null;
+  /** The every-role graph's state, for the Resources tab, which doesn't
+   * follow the picked role. */
+  reachLoading: boolean;
+  reachError: GraphError | null;
+  /** Opens the graph for every role (from Resources). */
+  openAnyGraph: (() => void) | null;
   graphLoading: boolean;
   graphError: GraphError | null;
   /** No policy.yaml: the agent is governed by its own policy file. */
@@ -450,12 +466,12 @@ export function AgentResourcesTab() {
         <ReachesSection
           subAgents={ctx.subAgents}
           unregistered={ctx.agent.manifest === null}
-          onOpenGraph={ctx.openGraph}
+          onOpenGraph={ctx.openAnyGraph}
           // agentSubgraph is empty (not null) when the agent isn't in the graph.
           inGraph={!!ctx.subgraph && ctx.subgraph.nodes.length > 0}
           callsError={ctx.activityError}
-          graphLoading={ctx.graphLoading}
-          graphError={ctx.graphError}
+          graphLoading={ctx.reachLoading}
+          graphError={ctx.reachError}
           callsStale={ctx.activityStale}
         />
       }
@@ -502,6 +518,7 @@ function ReachesSection({
       <div className="px-5 py-4 border-b border-border flex items-center gap-2">
         <Network className="size-4 text-muted-foreground" />
         <span className="text-sm font-medium">Reaches</span>
+        <span className="text-xs text-muted-foreground">for every role</span>
         {subAgents !== null && (
           <Badge variant="outline" className="ml-1 font-mono text-[11px]">
             {subAgents.length}

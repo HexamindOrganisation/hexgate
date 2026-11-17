@@ -63,12 +63,20 @@ export function rolesThatRun(
   const admits = new Map<string, PolicyGraph["edges"]>();
   for (const e of graph.edges)
     if (e.kind === "admission") push(admits, e.target, e);
+  // With admissions anywhere, running is role-gated: an agent the policy
+  // can't place at all (no node, no `*`) is run by no role.
+  const gated = admits.size > 0;
   const resolve = agentResolver(graph);
   for (const name of names) {
     const r = resolve(name);
-    // As agentSubgraph keeps them: into its node or the one standing for it.
-    const ids = r ? new Set([r.node.id, r.sourceId]) : new Set<string>();
-    out.set(name, runnersFrom([...ids].flatMap((id) => admits.get(id) ?? [])));
+    if (!r) {
+      out.set(name, gated ? new Set() : null);
+      continue;
+    }
+    out.set(
+      name,
+      runnersFrom([...r.admitIds].flatMap((id) => admits.get(id) ?? [])),
+    );
   }
   return out;
 }

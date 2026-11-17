@@ -76,6 +76,15 @@ describe("rolesThatRun", () => {
     expect([...(m.get("b") ?? [])]).toEqual(["guest"]);
   });
 
+  it("lets no role run an agent the policy can't place, once roles gate", () => {
+    const noStar: PolicyGraph = {
+      ...g,
+      nodes: g.nodes.filter((n) => n.id !== "agent:*"),
+      edges: g.edges.filter((e) => e.target !== "agent:*"),
+    };
+    expect(rolesThatRun(noStar, ["ghost"]).get("ghost")?.size).toBe(0);
+  });
+
   it("is unknown for every agent without a graph", () => {
     expect(rolesThatRun(undefined, ["a"]).get("a")).toBeNull();
   });

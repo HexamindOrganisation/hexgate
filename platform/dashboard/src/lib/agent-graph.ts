@@ -8,6 +8,10 @@ export const delegates = (e: { kind: string; verdict: string }) =>
 
 const STAR = "agent:*";
 
+/** Add `v` to the set at `k`, starting it if need be. */
+const add = (m: Map<string, Set<string>>, k: string, v: string) =>
+  (m.get(k) ?? m.set(k, new Set()).get(k)!).add(v);
+
 /** Resolves agents by name against one graph, indexing it once: each one's
  * node, and whose outbound edges stand for it. That's its own
  * `agent:<name>` when the policy declares it, else the generic `agent:*` it
@@ -38,9 +42,12 @@ export function agentResolver(graph: PolicyGraph) {
         : declared.has(own.id) || !touched.has(own.id));
     const source = isOwn || !star ? own : star;
     if (!source) return null;
+    const node = { ...(own ?? star!), label: agentName };
     return {
-      node: { ...(own ?? star!), label: agentName },
+      node,
       sourceId: source.id,
+      // Admission into its node or the one standing for it runs it.
+      admitIds: new Set([node.id, source.id]),
     };
   };
 }
@@ -60,7 +67,7 @@ export function agentSubgraph(
 ): PolicyGraph {
   const found = resolveAgent(graph, agentName);
   if (!found) return { nodes: [], edges: [], roles: graph.roles };
-  const { node, sourceId } = found;
+  const { node, sourceId, admitIds } = found;
   // Its stand-in's edges (`*`'s) are re-pointed at it, and a reach to itself
   // is no sub-agent.
   const repoint = (e: PolicyGraphEdge) => ({
@@ -73,8 +80,7 @@ export function agentSubgraph(
       (e) =>
         // A reach to `*` reaches no one: the engine denies every target.
         (e.source === sourceId && !(e.kind === "reach" && e.target === STAR)) ||
-        ((e.target === node.id || e.target === sourceId) &&
-          e.kind === "admission"),
+        (admitIds.has(e.target) && e.kind === "admission"),
     )
     .map(repoint)
     // A reach to itself (through `*` too) is no sub-agent.
@@ -129,8 +135,6 @@ export function agentReachMap(
   const resolve = agentResolver(graph);
   const reaches = new Map<string, Set<string>>();
   const calledBy = new Map<string, Set<string>>();
-  const add = (m: Map<string, Set<string>>, k: string, v: string) =>
-    (m.get(k) ?? m.set(k, new Set()).get(k)!).add(v);
   for (const name of all) {
     const source = resolve(name)?.sourceId;
     for (const e of (source && out.get(source)) || []) {
@@ -183,9 +187,7 @@ export function toolCounter(graph: PolicyGraph): (agent: string) => number {
     const k = kind.get(e.target);
     if (e.kind !== "call" || e.verdict === "deny") continue;
     if (k !== "tool" && k !== "mcp") continue;
-    (tools.get(e.source) ?? tools.set(e.source, new Set()).get(e.source)!).add(
-      e.target,
-    );
+    add(tools, e.source, e.target);
   }
   return (agent) => {
     const r = resolve(agent);
