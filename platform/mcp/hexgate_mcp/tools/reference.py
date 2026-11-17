@@ -5,6 +5,7 @@ no API call, so the tool needs no scope.
 """
 
 import logging
+import re
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -31,15 +32,37 @@ def find_docs_dir(start: Path = Path(__file__)) -> Path | None:
     return None
 
 
+# Where a link to a site page the tool does not serve is sent.
+DOCS_SITE = "https://docs.hexgate.ai"
+SITE_LINK = re.compile(r"\]\((/[^)\s]*)\)")
+SERVED_LINK = re.compile(r"/policy/([^/#]+)(#.*)?")
+
+
 def load_sections(docs_dir: Path | None) -> dict[str, str]:
     """Each ``.mdx`` file's text by its stem, which is also the slug of the
-    ``/policy/<section>`` links inside the docs."""
+    ``/policy/<section>`` links inside the docs. A link to any other site page
+    is made absolute, so it still leads somewhere for the client."""
     if docs_dir is None:
         return {}
-    return {
+    texts = {
         path.stem: path.read_text(encoding="utf-8")
         for path in sorted(docs_dir.glob("*.mdx"))
     }
+    return {name: absolute_links(text, set(texts)) for name, text in texts.items()}
+
+
+def absolute_links(text: str, served: set[str]) -> str:
+    """`text` with every site-relative link outside the `served` sections
+    pointed at the docs site; a link the tool can serve is kept as it is."""
+
+    def rewrite(match: re.Match[str]) -> str:
+        target = match.group(1)
+        page = SERVED_LINK.fullmatch(target)
+        if page is not None and page.group(1) in served:
+            return match.group(0)
+        return f"]({DOCS_SITE}{target})"
+
+    return SITE_LINK.sub(rewrite, text)
 
 
 def _frontmatter(text: str) -> dict[str, str]:
