@@ -31,7 +31,6 @@ import {
   usePolicyFiles,
   usePolicyGraph,
   usePolicyMatrix,
-  useRolesGraph,
 } from "@/lib/policy_files";
 import { isModular } from "@/lib/file_tree";
 import { roleModesOf, type RoleMode } from "@/lib/role-modes";
@@ -44,8 +43,6 @@ import {
   agentReachCounts,
   agentReachEdges,
   agentSubgraph,
-  standsFor,
-  toolCountOf,
 } from "@/lib/agent-graph";
 import { roleOptionsFor } from "@/lib/agent-graph-view";
 import { agentHubPath } from "@/lib/agent-paths";
@@ -156,31 +153,38 @@ export function AgentHub() {
     [graph, agent],
   );
 
-  // The roles the drawn graph is for ([] = every role): one fetch per role,
-  // merged as the engine combines a caller's roles. Each agent starts fresh.
-  const [roles, setRoles] = useState<string[]>([]);
-  const [rolesFor, setRolesFor] = useState(`${scope.projectId}:${name}`);
-  if (rolesFor !== `${scope.projectId}:${name}`) {
-    setRolesFor(`${scope.projectId}:${name}`);
-    setRoles([]);
+  // The role the drawn graph is for (null = every role); one at a time, as
+  // the graph API resolves one (#483). Each agent starts on every role.
+  const [role, setRole] = useState<string | null>(null);
+  const [roleFor, setRoleFor] = useState(`${scope.projectId}:${name}`);
+  if (roleFor !== `${scope.projectId}:${name}`) {
+    setRoleFor(`${scope.projectId}:${name}`);
+    setRole(null);
   }
-  const [pickingRoles, setPickingRoles] = useState(false);
-  const rolesGraph = useRolesGraph(
+  const [pickingRole, setPickingRole] = useState(false);
+  const roleQuery = usePolicyGraph(
     scope.projectId,
-    roles,
-    !!agent && roles.length > 0,
+    role ?? undefined,
+    !!agent && !!role,
   );
-  const filtered = roles.length > 0;
-  const view = useMemo(() => {
-    const g = filtered ? rolesGraph.data : graph;
-    return g && agent ? agentSubgraph(g, agent.name) : null;
-  }, [filtered, rolesGraph.data, graph, agent]);
-  const viewLoading = filtered
-    ? rolesGraph.isLoading
+  // The project graph for the picked role: what's drawn and its sub-agents'
+  // tool counts follow it.
+  const projectGraph = role
+    ? roleQuery.isPlaceholderData
+      ? undefined
+      : roleQuery.data
+    : graph;
+  const view = useMemo(
+    () =>
+      projectGraph && agent ? agentSubgraph(projectGraph, agent.name) : null,
+    [projectGraph, agent],
+  );
+  const viewLoading = role
+    ? roleQuery.isLoading || roleQuery.isPlaceholderData
     : graphQuery.isLoading || graphQuery.isPlaceholderData;
-  const viewError = filtered
-    ? rolesGraph.isError
-      ? graphErrorOf(rolesGraph.error)
+  const viewError = role
+    ? roleQuery.isError
+      ? graphErrorOf(roleQuery.error)
       : null
     : graphError;
   const roleOptions = useMemo(
@@ -188,11 +192,12 @@ export function AgentHub() {
     [graph, subgraph],
   );
   const navigate = useNavigate();
-  // The project graph for the picked roles: sub-agents' tool counts and
-  // bypass paths follow the same roles as the drawn graph.
-  const projectGraph = filtered ? rolesGraph.data : graph;
   const toolCount = useCallback(
-    (n: string) => (projectGraph ? toolCountOf(projectGraph, n) : 0),
+    (n: string) => {
+      if (!projectGraph) return 0;
+      const c = agentReachCounts(agentSubgraph(projectGraph, n));
+      return c.tools + c.mcpTools;
+    },
     [projectGraph],
   );
   const graphOptions = useMemo<AgentGraphOptions | null>(
@@ -205,26 +210,22 @@ export function AgentHub() {
               navigate(agentHubPath(n));
             },
             hasPage: (n) => !!manifests.data?.some((m) => m.name === n),
-            onMoreRoles: () => setPickingRoles(true),
+            onMoreRoles: () => setPickingRole(true),
             onMoreAgents: () => {
               setGraphOpen(false);
               navigate(`${agentHubPath(agent.name)}/resources`);
             },
-            projectGraph,
-            sourceId:
-              (projectGraph && standsFor(projectGraph, agent.name)) ??
-              undefined,
           }
         : null,
-    [agent, toolCount, navigate, projectGraph, manifests.data],
+    [agent, toolCount, navigate, manifests.data],
   );
-  // A new agent or role set is a new graph: start it fresh and fitted.
-  const flowKey = `${agent?.name}:${roles.join(",")}`;
+  // A new agent or role is a new graph: start it fresh and fitted.
+  const flowKey = `${agent?.name}:${role ?? ""}`;
   const rolesButton = (
     <RolesButton
       total={roleOptions.length}
-      picked={roles.length}
-      onClick={() => setPickingRoles(true)}
+      picked={role}
+      onClick={() => setPickingRole(true)}
     />
   );
   // Sub-agents come from the manifest (every project has one); the graph only
@@ -339,7 +340,7 @@ export function AgentHub() {
             view,
             graphOptions,
             rolesButton,
-            rolesPicked: roles.length,
+            role,
             flowKey,
             subAgents,
             // One dialog for every entry point; only when there's more than
@@ -366,20 +367,20 @@ export function AgentHub() {
           agent={agent.name}
           graph={viewLoading ? null : view}
           loading={viewLoading}
-          error={filtered ? rolesGraph.error : graphQuery.error}
+          error={role ? roleQuery.error : graphQuery.error}
           options={graphOptions}
           roleControl={rolesButton}
           flowKey={flowKey}
         />
       )}
-      {pickingRoles && (
+      {pickingRole && (
         <RolePickerDialog
           options={roleOptions}
-          picked={roles}
-          onClose={() => setPickingRoles(false)}
+          picked={role}
+          onClose={() => setPickingRole(false)}
           onApply={(next) => {
-            setRoles(next);
-            setPickingRoles(false);
+            setRole(next);
+            setPickingRole(false);
           }}
         />
       )}
@@ -406,8 +407,8 @@ export interface HubContext {
   graphOptions: AgentGraphOptions | null;
   /** Opens the role picker. */
   rolesButton: React.ReactNode;
-  /** How many roles the drawn graph is for (0 = every role). */
-  rolesPicked: number;
+  /** The role the drawn graph is for; null for every role. */
+  role: string | null;
   /** Changes with the agent and roles, to remount (and refit) the canvas. */
   flowKey: string;
   /** The manifest's sub-agents; null when it records none. */
@@ -794,7 +795,7 @@ function AgentOverview({
   view,
   graphOptions,
   rolesButton,
-  rolesPicked,
+  role,
   flowKey,
   graphLoading,
   graphError,
@@ -855,7 +856,12 @@ function AgentOverview({
         <span>
           What <span className="font-mono text-foreground">{agent.name}</span>{" "}
           can reach{hasGraph && ` — ${caption || "nothing it may use yet"}`}
-          {rolesPicked > 0 && ` as ${pluralise(rolesPicked, "picked role")}`}
+          {role && (
+            <>
+              {" "}
+              as <span className="font-mono text-foreground">{role}</span>
+            </>
+          )}
         </span>
         <span className="ml-auto" />
         {rolesButton}

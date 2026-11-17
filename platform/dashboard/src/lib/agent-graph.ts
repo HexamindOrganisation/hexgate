@@ -55,34 +55,6 @@ export function agentSubgraph(
   return { nodes: [node, ...nodes], edges, roles: graph.roles };
 }
 
-/** The project node whose edges stand for `agentName` (its own, or `*`'s
- * when the policy doesn't declare it); null when it isn't in the graph. */
-export function standsFor(
-  graph: PolicyGraph,
-  agentName: string,
-): string | null {
-  return resolveAgent(graph, agentName)?.sourceId ?? null;
-}
-
-/** How many tools each agent may call (never through a denied edge), by
- * label, resolved as the hub does; for a sub-agent's "N tools" caption. */
-export function toolCountOf(graph: PolicyGraph, agentName: string): number {
-  const found = resolveAgent(graph, agentName);
-  if (!found) return 0;
-  const kind = new Map(graph.nodes.map((n) => [n.id, n.kind]));
-  return new Set(
-    graph.edges
-      .filter(
-        (e) =>
-          e.source === found.sourceId &&
-          e.kind === "call" &&
-          e.verdict !== "deny" &&
-          (kind.get(e.target) === "tool" || kind.get(e.target) === "mcp"),
-      )
-      .map((e) => e.target),
-  ).size;
-}
-
 /** What the agent itself may use, from its own outbound edges in `sub`: tools,
  * MCP tools and agents, each counted once and never through a denied edge. */
 export function agentReachCounts(sub: PolicyGraph) {

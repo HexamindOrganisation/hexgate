@@ -38,6 +38,9 @@ export type AgentFacts = {
   activity: { all: number; deny: number; needs_approval: number } | null;
   reaches: boolean;
   calledBy: boolean;
+  /** The policy graph loaded: without it delegation and roles are unknown,
+   * so those filters don't apply. */
+  graphKnown: boolean;
   /** Roles that run it; null when no role gates running it, or the graph
    * isn't loaded: then the role filter keeps it. */
   runBy: Set<string> | null;
@@ -72,10 +75,16 @@ export function matches(f: AgentFilters, a: AgentFacts): boolean {
     return false;
   if (
     f.delegation.length &&
+    a.graphKnown &&
     !f.delegation.some((d) => (d === "reaches" ? a.reaches : a.calledBy))
   )
     return false;
-  if (f.roles.length && a.runBy && !f.roles.some((r) => a.runBy!.has(r)))
+  if (
+    f.roles.length &&
+    a.graphKnown &&
+    a.runBy &&
+    !f.roles.some((r) => a.runBy!.has(r))
+  )
     return false;
   return true;
 }

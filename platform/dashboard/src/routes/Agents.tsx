@@ -80,6 +80,8 @@ export function AgentsPage() {
       (manifests.data ?? []).map((a) => [a.name, rolesThatRun(g, a.name)]),
     );
   }, [graph.data, graph.isPlaceholderData, manifests.data]);
+  // A prior project's graph, kept while this one loads, isn't this one's.
+  const graphKnown = !!graph.data && !graph.isPlaceholderData;
   // What the filter reads off each agent.
   const facts = useMemo<AgentFacts[]>(
     () =>
@@ -93,9 +95,10 @@ export function AgentsPage() {
           reaches: !!reach?.reaches.length,
           calledBy: !!reach?.calledBy.length,
           runBy: runBy.get(a.name) ?? null,
+          graphKnown,
         };
       }),
-    [manifests.data, reachByAgent, activityOf, runBy],
+    [manifests.data, reachByAgent, activityOf, runBy, graphKnown],
   );
 
   // The 24h summary never loaded, so every count reads "—"; or a later poll
@@ -175,6 +178,12 @@ export function AgentsPage() {
   }
 
   const agents = manifests.data ?? [];
+  // Filters set whose data isn't there: kept, but said so.
+  const unapplied = [
+    filters.activity.length > 0 && !summary.data && "24h activity",
+    filters.delegation.length > 0 && !graphKnown && "delegation",
+    filters.roles.length > 0 && !graphKnown && "roles",
+  ].filter(Boolean) as string[];
   // Only while the toolbar is there: filters left from a bigger project
   // mustn't hide rows they can no longer clear.
   const toolbar = agents.length > AGENT_LIST_CAP;
@@ -247,19 +256,17 @@ export function AgentsPage() {
           <FilterChips f={filters} setF={setFilters} />
         </div>
       )}
-      {toolbar &&
-        ((filters.activity.length > 0 && !summary.data) ||
-          (filters.roles.length > 0 && !graph.data)) && (
-          <p className="-mt-1 mb-3 text-meta text-muted-foreground">
-            {filters.activity.length > 0 && !summary.data
-              ? "The last 24 hours haven't loaded, so the activity filters aren't applied."
-              : "The policy graph hasn't loaded, so the role filter isn't applied."}
-          </p>
-        )}
+      {toolbar && unapplied.length > 0 && (
+        <p className="-mt-1 mb-3 text-meta text-muted-foreground">
+          Not applied until their data loads: {unapplied.join(", ")}.
+        </p>
+      )}
       {filtering && (
         <AgentFilterDialog
           facts={facts}
-          roles={graph.data?.roles ?? []}
+          roles={graphKnown ? (graph.data?.roles ?? []) : []}
+          activityKnown={!!summary.data}
+          graphKnown={graphKnown}
           applied={filters}
           onApply={(next) => {
             setFilters(next);

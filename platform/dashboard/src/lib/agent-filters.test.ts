@@ -10,6 +10,7 @@ const facts = (over: Partial<AgentFacts> = {}): AgentFacts => ({
   reaches: false,
   calledBy: false,
   runBy: new Set(["ops"]),
+  graphKnown: true,
   ...over,
 });
 
@@ -23,6 +24,12 @@ describe("matches", () => {
   it("doesn't hide agents whose activity or roles aren't known", () => {
     const f = { ...NO_FILTERS, activity: ["deny" as const], roles: ["guest"] };
     expect(matches(f, facts({ activity: null, runBy: null }))).toBe(true);
+  });
+
+  it("doesn't apply delegation or roles without the graph", () => {
+    const f = { ...NO_FILTERS, delegation: ["reaches" as const], roles: ["x"] };
+    expect(matches(f, facts({ graphKnown: false }))).toBe(true);
+    expect(matches(f, facts())).toBe(false);
   });
 
   it("keeps an agent only if a picked role runs it", () => {

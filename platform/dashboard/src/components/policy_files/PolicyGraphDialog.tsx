@@ -16,16 +16,10 @@ import {
   ViewportPortal,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { AlertTriangle, Network, Play, X } from "lucide-react";
+import { Network, Play, X } from "lucide-react";
 
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { standsFor } from "@/lib/agent-graph";
-import {
-  GROUP_PREFIX,
-  compactAgentGraph,
-  type ShownGraph,
-  type Verdict,
-} from "@/lib/agent-graph-view";
+import { compactAgentGraph, type Verdict } from "@/lib/agent-graph-view";
 import {
   ApiError,
   type PolicyGraph,
@@ -34,7 +28,7 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { VerdictIcon } from "@/components/ui/verdict-icon";
-import { HEX_H, HEX_W, delegates, layeredLayout } from "@/lib/graph-layout";
+import { HEX_H, HEX_W, layeredLayout } from "@/lib/graph-layout";
 import { pluralise } from "@/lib/format";
 import { verdictLabel } from "@/lib/policy";
 
@@ -94,28 +88,6 @@ const KIND: Record<
     tag: "var(--gr-role-tag)",
     label: "role",
   },
-  // Tools grouped by verdict: tool colours, the verdict on the outline.
-  group: {
-    fill: "var(--gr-tool-fill)",
-    stroke: "var(--gr-tool-stroke)",
-    text: "var(--gr-tool-text)",
-    tag: "var(--gr-tool-tag)",
-    label: "tools",
-  },
-  "more-roles": {
-    fill: "var(--gr-role-fill)",
-    stroke: "var(--gr-role-stroke)",
-    text: "var(--gr-role-text)",
-    tag: "var(--gr-role-tag)",
-    label: "pick roles",
-  },
-  "more-agents": {
-    fill: "var(--gr-agent-fill)",
-    stroke: "var(--gr-agent-stroke)",
-    text: "var(--gr-agent-text)",
-    tag: "var(--gr-agent-tag)",
-    label: "sub-agents",
-  },
 };
 
 // A dimmed variant: recede a node by pulling its fill/border/text toward the
@@ -131,17 +103,14 @@ const DIM = {
 type NodeData = {
   label: string;
   kind: string;
-  /** A second line under the label ("6 tools", "9 with limits"). */
+  /** A second line under the label (a sub-agent's "6 tools"). */
   sub?: string;
-  /** A tool group's verdict, drawn on its outline. */
-  verdict?: string;
 };
 type EdgeData = Pick<
   PolicyGraphEdge,
   "kind" | "via" | "constraints" | "roles"
 > & {
-  /** "mixed" on the edge into "+N sub-agents" whose reaches differ. */
-  verdict: PolicyGraphEdge["verdict"] | "mixed";
+  verdict: PolicyGraphEdge["verdict"];
   /** The target's shape decides where the arrow stops. */
   targetKind: string;
   /** Points the edge passes through (layout coordinates), so it routes
@@ -177,12 +146,9 @@ const FocusCtx = createContext<FocusValue>({
 // Shape geometry in the node box (centre 68,59), shared with arrowGap.
 const AGENT_R = 56;
 const ROLE_HALF_W = 66;
-const PILL_HALF_W = 60;
-const PILL_R = 28;
 
 /** Each kind's outline in the node box, and a smaller inset one for hover:
- * agents are circles, roles rectangles, tools and MCP servers hexagons, and
- * "+N more" nodes dashed pills. */
+ * agents are circles, roles rectangles, tools and MCP servers hexagons. */
 function Shape({
   kind,
   inset,
@@ -204,17 +170,6 @@ function Shape({
         {...p}
       />
     );
-  if (kind === "more-roles" || kind === "more-agents")
-    return (
-      <rect
-        x={68 - PILL_HALF_W}
-        y={59 - PILL_R}
-        width={PILL_HALF_W * 2}
-        height={PILL_R * 2}
-        rx={PILL_R}
-        {...p}
-      />
-    );
   return inset ? (
     <polygon
       points="41.5,17.7 94.5,17.7 121,59 94.5,100.3 41.5,100.3 15,59"
@@ -228,7 +183,6 @@ function Shape({
 /** A node (SVG outline in its kind's shape + centered label). */
 function GraphNode({ id, data }: NodeProps<Node<NodeData>>) {
   const k = KIND[data.kind] ?? KIND.tool;
-  const more = data.kind === "more-roles" || data.kind === "more-agents";
   const focus = useContext(FocusCtx);
   const hovered = focus.hoverNode === id;
   // Both handles sit at the node CENTER (overlapping, invisible), so edges
@@ -251,12 +205,7 @@ function GraphNode({ id, data }: NodeProps<Node<NodeData>>) {
   // a cursor glitch on hover.
   const dim = focus.activeNodes ? !focus.activeNodes.has(id) : false;
   const fill = dim ? DIM.fill : k.fill;
-  // A tool group's outline carries its verdict.
-  const stroke = dim
-    ? DIM.stroke
-    : data.verdict
-      ? (VERDICT[data.verdict] ?? k.stroke)
-      : k.stroke;
+  const stroke = dim ? DIM.stroke : k.stroke;
   const text = dim ? DIM.text : k.text;
   const tag = dim ? DIM.tag : k.tag;
   const glow = hovered ? 20 : dim ? 0 : 6;
@@ -283,11 +232,10 @@ function GraphNode({ id, data }: NodeProps<Node<NodeData>>) {
             var() resolves in inline style but not in SVG attributes. */}
         <Shape
           kind={data.kind}
-          strokeWidth={hovered ? 2.6 : data.verdict ? 2.4 : 1.5}
-          strokeDasharray={more ? "5 4" : undefined}
+          strokeWidth={hovered ? 2.6 : 1.5}
           style={{ fill, stroke, transition: "fill 140ms, stroke 140ms" }}
         />
-        {hovered && !more && (
+        {hovered && (
           <Shape
             kind={data.kind}
             inset
@@ -337,14 +285,12 @@ function GraphNode({ id, data }: NodeProps<Node<NodeData>>) {
 // so the arrowhead sits on the outline, not under the node.
 const ARROW_GAP = HEX_W / 2 + 4;
 /** How far left of the target's centre the arrow stops, by its shape. Off the
- * centre line (a fanned edge) a hex's slanted side, a circle and a pill's
- * round end sit further in. */
+ * centre line (a fanned edge) a hex's slanted side and a circle sit further
+ * in. */
 function arrowGap(kind: string | undefined, dy: number): number {
   const round = (r: number) => Math.sqrt(Math.max(0, r * r - dy * dy));
   if (kind === "agent") return round(AGENT_R) + 4;
   if (kind === "role") return ROLE_HALF_W + 4;
-  if (kind === "more-roles" || kind === "more-agents")
-    return PILL_HALF_W - PILL_R + round(PILL_R) + 4;
   return ARROW_GAP - (Math.abs(dy) * 34) / 53;
 }
 
@@ -431,8 +377,7 @@ function PolicyEdge({
   // edge gets an icon-only label, so approval never relies on amber alone
   // (deny is dashed and dimmed; allow is the plain default).
   const verdict = data?.verdict ?? "allow";
-  const showLabel =
-    verdict !== "mixed" && (!!label || verdict === "approval_required");
+  const showLabel = !!label || verdict === "approval_required";
   const active = selected || hovered;
   // Resting width sits close to the focused width (3.4) so edges read clearly at
   // a glance; the focus state still stands out via its glow + full 3.4 stroke.
@@ -682,94 +627,11 @@ function NodePanel({
   );
 }
 
-type BypassWarning = {
-  toolId: string;
-  /** The node of the agent that escapes its limit. */
-  strictId: string;
-  tool: string;
-  strict: string;
-  loose: string;
-  strictC: string[];
-  looseC: string[];
+const GROUP_WORD: Record<Verdict, string> = {
+  allow: "allowed",
+  approval_required: "need approval",
+  deny: "denied",
 };
-
-/** Flag a constraint-bypass: a tool T is callable by two agents A and B with
- * *different* constraints, and A can (transitively) reach B — so A can delegate
- * to B to call T beyond its own limit. Computed from the graph's call/reach
- * edges + their constraints. */
-function bypassWarnings(
-  graph: PolicyGraph,
-  labelOf: (id: string) => string,
-  from?: string,
-): BypassWarning[] {
-  // A reached agent the policy doesn't declare calls through `*`'s edges, so
-  // reaching it reaches what `*` may call.
-  const standIn = new Map(
-    graph.nodes
-      .filter((n) => n.kind === "agent")
-      .map((n) => [n.id, standsFor(graph, n.label) ?? n.id]),
-  );
-  const reachOut = new Map<string, string[]>();
-  graph.edges.forEach((e) => {
-    // A denied reach can't be used to delegate, so it never enables a bypass.
-    if (delegates(e)) {
-      const a = reachOut.get(e.source) ?? [];
-      a.push(e.target);
-      reachOut.set(e.source, a);
-    }
-  });
-  const closure = (start: string) => {
-    const seen = new Set<string>();
-    const q = [...(reachOut.get(start) ?? [])];
-    while (q.length) {
-      const u = q.shift() as string;
-      if (seen.has(u)) continue;
-      seen.add(u);
-      const s = standIn.get(u);
-      if (s && s !== u) q.push(s);
-      for (const v of reachOut.get(u) ?? []) q.push(v);
-    }
-    return seen;
-  };
-  const callers = new Map<string, { agent: string; constraints: string[] }[]>();
-  graph.edges.forEach((e) => {
-    if (e.kind === "call" && e.verdict !== "deny") {
-      const arr = callers.get(e.target) ?? [];
-      arr.push({ agent: e.source, constraints: e.constraints });
-      callers.set(e.target, arr);
-    }
-  });
-  const out: BypassWarning[] = [];
-  const seen = new Set<string>();
-  callers.forEach((cs, toolId) => {
-    for (const a of cs) {
-      // Only the paths that start where this graph's agent stands.
-      if (from && a.agent !== from) continue;
-      const reach = closure(a.agent);
-      for (const b of cs) {
-        if (a.agent === b.agent || !reach.has(b.agent)) continue;
-        // Only a real bypass when `a` carries a limit `b` lacks — then delegating
-        // to `b` lets `a` escape it. If `b` is at least as restricted (or `a` is
-        // unconstrained) there is nothing to gain, so don't warn.
-        const escapes = a.constraints.some((c) => !b.constraints.includes(c));
-        if (a.constraints.length === 0 || !escapes) continue;
-        const key = `${toolId}|${a.agent}|${b.agent}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push({
-          toolId,
-          strictId: a.agent,
-          tool: labelOf(toolId),
-          strict: labelOf(a.agent),
-          loose: labelOf(b.agent),
-          strictC: a.constraints,
-          looseC: b.constraints,
-        });
-      }
-    }
-  });
-  return out;
-}
 
 const GROUP_TITLE: Record<Verdict, string> = {
   allow: "Allowed",
@@ -873,14 +735,8 @@ export type AgentGraphOptions = {
   hasPage?: (agent: string) => boolean;
   /** "+N more roles" was clicked. */
   onMoreRoles?: () => void;
-  /** "+N more" sub-agents was clicked. */
+  /** "+N more sub-agents" was clicked. */
   onMoreAgents?: () => void;
-  /** The project graph (for the picked roles), for constraint-bypass paths
-   * through sub-agents. */
-  projectGraph?: PolicyGraph;
-  /** The project node that stands for this agent: its own, or `agent:*`
-   * when the policy doesn't declare it. Its bypass paths are this agent's. */
-  sourceId?: string;
 };
 
 export function PolicyFlow({
@@ -902,65 +758,46 @@ export function PolicyFlow({
   );
   const [pinnedId, setPinned] = useState<string | null>(null);
   const [animate, setAnimate] = useState(false);
-  // The tool group whose names are listed beside the graph.
+  // The tool verdict whose names are listed beside the graph.
   const [group, setGroup] = useState<Verdict | null>(null);
-  const toolCount = agent?.toolCount;
-  const { graph: shown, groups } = useMemo(
+  const isAgent = !!agent;
+  const view = useMemo(
     () =>
-      toolCount
-        ? compactAgentGraph(graph, toolCount)
+      isAgent
+        ? compactAgentGraph(graph)
         : {
-            graph: graph as ShownGraph,
-            groups: new Map<Verdict, PolicyGraphEdge[]>(),
+            graph,
+            tools: new Map<Verdict, PolicyGraphEdge[]>(),
+            hiddenRoles: 0,
+            hiddenAgents: 0,
           },
-    [graph, toolCount],
+    [graph, isAgent],
   );
+  const shown = view.graph;
   const self = agent ? graph.nodes[0]?.id : undefined;
   const pinned =
     pinnedId && shown.nodes.some((n) => n.id === pinnedId) ? pinnedId : null;
-  const openGroup = group && groups.has(group) ? group : null;
+  const openGroup = group && view.tools.has(group) ? group : null;
   const lay = useMemo(() => layeredLayout(shown), [shown]);
-  // Project labels, then this graph's (its agent relabelled from a `*`
-  // stand-in), so every panel names the agent being viewed.
-  const projectGraph = agent?.projectGraph;
-  const sourceId = agent?.sourceId;
-  const labelOf = useMemo(() => {
-    const nodes = [...(projectGraph?.nodes ?? []), ...graph.nodes];
-    if (sourceId && graph.nodes[0])
-      nodes.push({ ...graph.nodes[0], id: sourceId });
-    return labelLookup({ nodes, edges: [], roles: [] });
-  }, [projectGraph, graph, sourceId]);
-  // One agent's graph has none of its sub-agents' tools: find bypass paths in
-  // the project graph, keeping those that start where this agent stands.
-  const warnings = useMemo(() => {
-    return bypassWarnings(projectGraph ?? graph, labelOf, sourceId ?? self);
-  }, [projectGraph, graph, labelOf, sourceId, self]);
+  const labelOf = useMemo(() => labelLookup(graph), [graph]);
   const kindOf = useMemo(
     () => new Map(shown.nodes.map((n) => [n.id, n.kind])),
     [shown],
   );
-  /** A warning's tool: pin it if drawn, else open the group that holds it. */
-  const showTool = (toolId: string) => {
-    if (kindOf.has(toolId)) return setPinned(toolId);
-    for (const [v, es] of groups)
-      if (es.some((e) => e.target === toolId)) setGroup(v);
-  };
+  const toolCount = agent?.toolCount;
+  const hasPage = agent?.hasPage;
+  const onOpenAgent = agent?.onOpenAgent;
 
-  const opens = (id: string) => {
-    const label = shown.nodes.find((n) => n.id === id)?.label;
-    return !!label && (agent?.hasPage?.(label) ?? true);
-  };
-  /** A click: a group lists its tools, "+N" nodes and sub-agents act, and
-   * anything else is pinned (or unpinned) to trace its paths. */
+  /** A sub-agent with a page opens it; anything else is pinned (or
+   * unpinned) to trace its paths. */
   const clickNode = (id: string) => {
-    const k = kindOf.get(id);
-    if (k === "group") {
-      const v = id.slice(GROUP_PREFIX.length) as Verdict;
-      setGroup((g) => (g === v ? null : v));
-    } else if (k === "more-roles") agent?.onMoreRoles?.();
-    else if (k === "more-agents") agent?.onMoreAgents?.();
-    else if (agent && k === "agent" && id !== self && opens(id))
-      agent.onOpenAgent(shown.nodes.find((n) => n.id === id)!.label);
+    const node = shown.nodes.find((n) => n.id === id);
+    const opens =
+      !!node &&
+      node.kind === "agent" &&
+      id !== self &&
+      (hasPage?.(node.label) ?? true);
+    if (onOpenAgent && node && opens) onOpenAgent(node.label);
     else setPinned((p) => (p === id ? null : id));
   };
 
@@ -1060,12 +897,15 @@ export function PolicyFlow({
         data: {
           label: n.label,
           kind: n.kind,
-          sub: "sub" in n ? n.sub : undefined,
-          verdict: "verdict" in n ? n.verdict : undefined,
+          // A sub-agent's caption: how many tools it may call.
+          sub:
+            toolCount && n.kind === "agent" && n.id !== self
+              ? pluralise(toolCount(n.label), "tool")
+              : undefined,
         },
         draggable: false,
       })),
-    [shown, lay],
+    [shown, lay, toolCount, self],
   );
 
   const edges: Edge<EdgeData>[] = useMemo(
@@ -1102,209 +942,240 @@ export function PolicyFlow({
     [focus, animate, lay],
   );
 
+  const tally = (v: Verdict) => view.tools.get(v)?.length ?? 0;
+  const toolTotal = [...view.tools.values()].reduce(
+    (n, es) => n + es.length,
+    0,
+  );
+  const summary =
+    !!agent && (toolTotal > 0 || view.hiddenRoles > 0 || view.hiddenAgents > 0);
   return (
     <FocusCtx.Provider value={ctxValue}>
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        onEdgeClick={(_, edge) => {
-          const e = shown.edges[Number(edge.id.slice(1))];
-          if (!e) return;
-          // An edge into a group or "+N" node acts like a click on it.
-          const k = kindOf.get(e.target);
-          if (k === "group" || k === "more-agents") return clickNode(e.target);
-          setSelected(e as PolicyGraphEdge);
-        }}
-        onNodeClick={(_, node) => clickNode(node.id)}
-        onPaneClick={() => {
-          setSelected(null);
-          setPinned(null);
-        }}
-        onNodeMouseEnter={(_, node) => setHover({ node: node.id })}
-        onNodeMouseLeave={() => setHover(null)}
-        onEdgeMouseEnter={(_, edge) =>
-          setHover({ edge: Number(edge.id.slice(1)) })
-        }
-        onEdgeMouseLeave={() => setHover(null)}
-        fitView
-        // Room above the top row for the column headings, which sit in the
-        // viewport rather than among the fitted nodes.
-        fitViewOptions={{
-          padding: { top: "96px", right: 0.2, bottom: 0.2, left: 0.2 },
-        }}
-        proOptions={{ hideAttribution: true }}
-        minZoom={0.3}
-        maxZoom={1.8}
-        // Map-like feel: drag empty space OR two-finger trackpad scroll to pan
-        // (drag only when embedded in a page, where the wheel scrolls it);
-        // pinch (or the +/- controls) to zoom. Default scroll-to-zoom reads as
-        // "can't pan" on a Mac trackpad.
-        panOnDrag
-        panOnScroll={!embedded}
-        preventScrolling={!embedded}
-        zoomOnScroll={false}
-        zoomOnPinch
-        style={{
-          background: "hsl(var(--editor))",
-          width: "100%",
-          height: "100%",
-        }}
-      >
-        <Background color="var(--gr-dots)" gap={22} />
-        <ColumnLabels columns={lay.columns} />
-        <Controls
-          showInteractive={false}
-          style={{
-            background: "hsl(var(--card))",
-            border: "1px solid hsl(var(--border))",
-            borderRadius: 8,
-          }}
-        />
-        <Panel position="top-right" className="flex flex-col items-end gap-2">
-          <button
-            onClick={() => setAnimate((a) => !a)}
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-mono text-[11px] backdrop-blur transition-colors",
-              animate
-                ? "border-primary/60 bg-primary/20 text-foreground"
-                : "border-border bg-card/90 text-muted-foreground hover:text-foreground",
-            )}
-            title={
-              pinned
-                ? "Animate invocation flow along the focused paths"
-                : "Animate invocation flow along every path"
-            }
-          >
-            <Play size={12} />
-            {animate ? "Animating…" : "Animate flow"}
-          </button>
-          {openGroup && (
-            <GroupList
-              verdict={openGroup}
-              groups={groups}
-              labelOf={labelOf}
-              onPick={setGroup}
-              onClose={() => setGroup(null)}
-            />
-          )}
-          {pinned && (
-            <NodePanel
-              graph={graph}
-              id={pinned}
-              labelOf={labelOf}
-              onClose={() => setPinned(null)}
-            />
-          )}
-          {/* Stacked under the node panel so the two never overlap. */}
-          {selected && (
-            // Capped and scrolling like the node panel, so the two together
-            // stay clear of the canvas bottom and the bypass warnings.
-            <div className="max-h-[25vh] w-64 overflow-y-auto rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur">
-              <div className="mb-2 flex items-center justify-between">
-                <VerdictTag verdict={selected.verdict} />
-                <button
-                  onClick={() => setSelected(null)}
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  <X size={13} />
-                </button>
-              </div>
-              <div className="mb-1 text-foreground">
-                {labelOf(selected.source)}
-                <span className="text-muted-foreground/50">
-                  {" "}
-                  {selected.kind === "reach"
-                    ? `→ ${selected.via} →`
-                    : selected.kind === "admission"
-                      ? "→ admits →"
-                      : "→ calls →"}{" "}
+      <div className="flex h-full flex-col">
+        {summary && (
+          // What the canvas leaves out, as real counts and links, never as
+          // nodes: tools by verdict past a few, and the extra roles and agents.
+          <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2 text-[11px]">
+            {toolTotal > 0 && (
+              <>
+                <span className="text-muted-foreground">
+                  {pluralise(toolTotal, "tool")}:
                 </span>
-                {labelOf(selected.target)}
-              </div>
-              {selected.roles.length > 0 && (
-                <div className="mb-2 text-[10px] text-muted-foreground">
-                  role{selected.roles.length > 1 ? "s" : ""}:{" "}
-                  {selected.roles.join(", ")}
-                </div>
-              )}
-              {selected.constraints.length > 0 ? (
-                <div className="space-y-1">
-                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    constraints
-                  </div>
-                  {selected.constraints.map((c, i) => (
-                    <div
-                      key={i}
-                      className="rounded bg-muted px-2 py-1 text-[10.5px] text-foreground"
+                {(["allow", "approval_required", "deny"] as const)
+                  .filter((v) => tally(v) > 0)
+                  .map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      aria-pressed={openGroup === v}
+                      onClick={() => setGroup((g) => (g === v ? null : v))}
+                      className={cn(
+                        "inline-flex h-7 items-center gap-1.5 rounded-md border px-2 font-medium transition-colors",
+                        openGroup === v
+                          ? "border-current"
+                          : "border-border hover:bg-accent",
+                      )}
+                      style={{ color: VERDICT[v] }}
                     >
-                      {c}
-                    </div>
+                      <VerdictIcon verdict={v} className="size-3" />
+                      {tally(v)} {GROUP_WORD[v]}
+                    </button>
                   ))}
-                </div>
-              ) : (
-                <div className="text-[10px] text-muted-foreground">
-                  no constraints
+              </>
+            )}
+            {view.hiddenRoles > 0 && agent?.onMoreRoles && (
+              <button
+                type="button"
+                onClick={agent.onMoreRoles}
+                className="inline-flex h-7 items-center rounded-md border border-dashed border-border px-2 font-medium text-muted-foreground hover:text-foreground"
+              >
+                +{pluralise(view.hiddenRoles, "more role")}
+              </button>
+            )}
+            {view.hiddenAgents > 0 && agent?.onMoreAgents && (
+              <button
+                type="button"
+                onClick={agent.onMoreAgents}
+                className="inline-flex h-7 items-center rounded-md border border-dashed border-border px-2 font-medium text-muted-foreground hover:text-foreground"
+              >
+                +{pluralise(view.hiddenAgents, "more sub-agent")}
+              </button>
+            )}
+          </div>
+        )}
+        <div className="relative min-h-0 flex-1">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            onEdgeClick={(_, edge) => {
+              setSelected(shown.edges[Number(edge.id.slice(1))] ?? null);
+            }}
+            onNodeClick={(_, node) => clickNode(node.id)}
+            onPaneClick={() => {
+              setSelected(null);
+              setPinned(null);
+            }}
+            onNodeMouseEnter={(_, node) => setHover({ node: node.id })}
+            onNodeMouseLeave={() => setHover(null)}
+            onEdgeMouseEnter={(_, edge) =>
+              setHover({ edge: Number(edge.id.slice(1)) })
+            }
+            onEdgeMouseLeave={() => setHover(null)}
+            fitView
+            // Room above the top row for the column headings, which sit in the
+            // viewport rather than among the fitted nodes.
+            fitViewOptions={{
+              padding: { top: "96px", right: 0.2, bottom: 0.2, left: 0.2 },
+            }}
+            proOptions={{ hideAttribution: true }}
+            minZoom={0.3}
+            maxZoom={1.8}
+            // Map-like feel: drag empty space OR two-finger trackpad scroll to pan
+            // (drag only when embedded in a page, where the wheel scrolls it);
+            // pinch (or the +/- controls) to zoom. Default scroll-to-zoom reads as
+            // "can't pan" on a Mac trackpad.
+            panOnDrag
+            panOnScroll={!embedded}
+            preventScrolling={!embedded}
+            zoomOnScroll={false}
+            zoomOnPinch
+            style={{
+              background: "hsl(var(--editor))",
+              width: "100%",
+              height: "100%",
+            }}
+          >
+            <Background color="var(--gr-dots)" gap={22} />
+            <ColumnLabels columns={lay.columns} />
+            <Controls
+              showInteractive={false}
+              style={{
+                background: "hsl(var(--card))",
+                border: "1px solid hsl(var(--border))",
+                borderRadius: 8,
+              }}
+            />
+            <Panel
+              position="top-right"
+              className="flex flex-col items-end gap-2"
+            >
+              <button
+                onClick={() => setAnimate((a) => !a)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-mono text-[11px] backdrop-blur transition-colors",
+                  animate
+                    ? "border-primary/60 bg-primary/20 text-foreground"
+                    : "border-border bg-card/90 text-muted-foreground hover:text-foreground",
+                )}
+                title={
+                  pinned
+                    ? "Animate invocation flow along the focused paths"
+                    : "Animate invocation flow along every path"
+                }
+              >
+                <Play size={12} />
+                {animate ? "Animating…" : "Animate flow"}
+              </button>
+              {openGroup && (
+                <GroupList
+                  verdict={openGroup}
+                  groups={view.tools}
+                  labelOf={labelOf}
+                  onPick={setGroup}
+                  onClose={() => setGroup(null)}
+                />
+              )}
+              {pinned && (
+                <NodePanel
+                  graph={graph}
+                  id={pinned}
+                  labelOf={labelOf}
+                  onClose={() => setPinned(null)}
+                />
+              )}
+              {/* Stacked under the node panel so the two never overlap. */}
+              {selected && (
+                // Capped and scrolling like the node panel, so the two together
+                // stay clear of the canvas bottom and the bypass warnings.
+                <div className="max-h-[25vh] w-64 overflow-y-auto rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur">
+                  <div className="mb-2 flex items-center justify-between">
+                    <VerdictTag verdict={selected.verdict} />
+                    <button
+                      onClick={() => setSelected(null)}
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                  <div className="mb-1 text-foreground">
+                    {labelOf(selected.source)}
+                    <span className="text-muted-foreground/50">
+                      {" "}
+                      {selected.kind === "reach"
+                        ? `→ ${selected.via} →`
+                        : selected.kind === "admission"
+                          ? "→ admits →"
+                          : "→ calls →"}{" "}
+                    </span>
+                    {labelOf(selected.target)}
+                  </div>
+                  {selected.roles.length > 0 && (
+                    <div className="mb-2 text-[10px] text-muted-foreground">
+                      role{selected.roles.length > 1 ? "s" : ""}:{" "}
+                      {selected.roles.join(", ")}
+                    </div>
+                  )}
+                  {selected.constraints.length > 0 ? (
+                    <div className="space-y-1">
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        constraints
+                      </div>
+                      {selected.constraints.map((c, i) => (
+                        <div
+                          key={i}
+                          className="rounded bg-muted px-2 py-1 text-[10.5px] text-foreground"
+                        >
+                          {c}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-muted-foreground">
+                      no constraints
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
-          )}
-        </Panel>
-        <Panel position="top-left">
-          <div className="flex flex-wrap gap-3 rounded-lg border border-border bg-card/90 px-3 py-2 font-mono text-[10px] text-muted-foreground backdrop-blur">
-            {(["allow", "approval_required", "deny"] as const).map((v) => (
-              <span key={v} className="inline-flex items-center gap-1.5">
-                <i
-                  className="inline-block h-2 w-4 rounded"
-                  style={{ background: VERDICT[v] }}
-                />
-                <VerdictIcon
-                  verdict={v}
-                  className="size-2.5"
-                  style={{ color: VERDICT[v] }}
-                />
-                {verdictLabel(v)}
-              </span>
-            ))}
-            <span className="text-muted-foreground/40">·</span>
-            <span>
-              {pinned
-                ? "focused — click empty space to reset"
-                : "click a node to trace its paths"}
-            </span>
-          </div>
-        </Panel>
-        {warnings.length > 0 && (
-          <Panel position="bottom-center">
-            <div className="max-w-[560px] rounded-lg border border-deny/50 bg-deny/10 px-3 py-2 font-mono text-[10.5px] text-deny shadow-xl backdrop-blur">
-              <div className="mb-1.5 flex items-center gap-1.5 font-semibold text-deny">
-                <AlertTriangle size={12} />
-                review carefully · {warnings.length} constraint-bypass path
-                {warnings.length > 1 ? "s" : ""}
-              </div>
-              <div className="space-y-1">
-                {warnings.slice(0, 3).map((w, i) => (
-                  <button
-                    key={i}
-                    onClick={() => showTool(w.toolId)}
-                    className="block w-full text-left leading-relaxed hover:text-deny"
-                  >
-                    <b className="text-deny">{w.strict}</b> can delegate to{" "}
-                    <b className="text-deny">{w.loose}</b> to call{" "}
-                    <b className="text-deny">{w.tool}</b> beyond its own limit
-                    <span className="text-muted-foreground">
-                      {" "}
-                      — {w.strict}: {w.strictC.join(" ∧ ") || "no limit"} ·{" "}
-                      {w.loose}: {w.looseC.join(" ∧ ") || "no limit"}
-                    </span>
-                  </button>
+            </Panel>
+            <Panel position="top-left">
+              <div className="flex flex-wrap gap-3 rounded-lg border border-border bg-card/90 px-3 py-2 font-mono text-[10px] text-muted-foreground backdrop-blur">
+                {(["allow", "approval_required", "deny"] as const).map((v) => (
+                  <span key={v} className="inline-flex items-center gap-1.5">
+                    <i
+                      className="inline-block h-2 w-4 rounded"
+                      style={{ background: VERDICT[v] }}
+                    />
+                    <VerdictIcon
+                      verdict={v}
+                      className="size-2.5"
+                      style={{ color: VERDICT[v] }}
+                    />
+                    {verdictLabel(v)}
+                  </span>
                 ))}
+                <span className="text-muted-foreground/40">·</span>
+                <span>
+                  {pinned
+                    ? "focused — click empty space to reset"
+                    : "click a node to trace its paths"}
+                </span>
               </div>
-            </div>
-          </Panel>
-        )}
-      </ReactFlow>
+            </Panel>
+          </ReactFlow>
+        </div>
+      </div>
     </FocusCtx.Provider>
   );
 }

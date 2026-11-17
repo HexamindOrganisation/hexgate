@@ -6,7 +6,6 @@ import {
   agentReachEdges,
   agentReachMap,
   agentSubgraph,
-  toolCountOf,
 } from "./agent-graph";
 
 const edge = (
@@ -195,13 +194,6 @@ describe("agentSubgraph", () => {
     expect(agentReachCounts(agentSubgraph(g, "locked")).tools).toBe(0);
   });
 });
-describe("toolCountOf", () => {
-  it("counts the tools an agent may call, not through a denial", () => {
-    expect(toolCountOf(G, "b")).toBe(1);
-    expect(toolCountOf(G, "ghost")).toBe(0);
-  });
-});
-
 const NONE = { reaches: [], calledBy: [] };
 const namesOf = (g: PolicyGraph) =>
   g.nodes

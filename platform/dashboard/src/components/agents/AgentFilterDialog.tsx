@@ -1,14 +1,14 @@
 /**
  * The /agents Filters dialog: a draft of every filter, with how many agents
- * each option keeps, applied in one go. Roles open the role picker.
+ * each option keeps, applied in one go. A section whose data hasn't loaded is
+ * off, and says why, rather than keep or hide agents on a guess.
  */
 
 import { useMemo, useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { RolePickerDialog } from "@/components/policy_files/RolePicker";
 import {
   type Activity,
   type AgentFacts,
@@ -38,6 +38,8 @@ const flip = <T,>(xs: T[], v: T) =>
 export function AgentFilterDialog({
   facts,
   roles,
+  activityKnown,
+  graphKnown,
   applied,
   onApply,
   onClose,
@@ -45,12 +47,16 @@ export function AgentFilterDialog({
   facts: AgentFacts[];
   /** Every role in the project. */
   roles: string[];
+  /** The 24h summary loaded. */
+  activityKnown: boolean;
+  /** The policy graph loaded (delegation and roles come from it). */
+  graphKnown: boolean;
   applied: AgentFilters;
   onApply: (f: AgentFilters) => void;
   onClose: () => void;
 }) {
   const [f, setF] = useState(applied);
-  const [pickingRoles, setPickingRoles] = useState(false);
+  const [roleQuery, setRoleQuery] = useState("");
   const frameworks = useMemo(
     () =>
       [
@@ -58,17 +64,11 @@ export function AgentFilterDialog({
       ].sort() as string[],
     [facts],
   );
+  const shownRoles = useMemo(() => {
+    const q = roleQuery.trim().toLowerCase();
+    return q ? roles.filter((r) => r.toLowerCase().includes(q)) : roles;
+  }, [roles, roleQuery]);
   const kept = facts.filter((a) => matches(f, a)).length;
-  const roleOptions = useMemo(
-    () =>
-      roles.map((name) => ({
-        name,
-        runs: null,
-        // Agents this role gates in: ungated ones stay in whatever is picked.
-        tools: facts.filter((a) => a.runBy?.has(name)).length,
-      })),
-    [roles, facts],
-  );
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -111,13 +111,17 @@ export function AgentFilterDialog({
               ))}
             </div>
           </Section>
-          <Section title="Last 24 hours">
+          <Section
+            title="Last 24 hours"
+            off={!activityKnown && "The last 24 hours haven't loaded."}
+          >
             {ACTIVITY.map(([v, label]) => (
               <Check
                 key={v}
                 label={label}
                 count={countWhere(facts, { activity: [v] })}
                 checked={f.activity.includes(v)}
+                disabled={!activityKnown}
                 onChange={() =>
                   setF((p) => ({ ...p, activity: flip(p.activity, v) }))
                 }
@@ -140,27 +144,59 @@ export function AgentFilterDialog({
               ))}
             </Section>
           )}
-          {roles.length > 0 && (
-            <Section title="Role">
-              <button
-                type="button"
-                onClick={() => setPickingRoles(true)}
-                className="flex h-10 items-center gap-2 rounded-lg border border-input px-3 text-left text-[13px] font-medium hover:bg-accent/60"
-              >
-                {f.roles.length
-                  ? `Agents ${f.roles.join(", ")} can run`
-                  : "Agents a role can run · pick roles…"}
-                <ChevronRight className="ml-auto size-3.5 text-muted-foreground" />
-              </button>
+          {(roles.length > 0 || !graphKnown) && (
+            <Section
+              title="Run by role"
+              off={!graphKnown && "The policy graph hasn't loaded."}
+            >
+              {roles.length > 8 && (
+                <label className="mb-1 flex h-9 items-center gap-2 rounded-lg border border-input px-3 focus-within:ring-2 focus-within:ring-ring">
+                  <Search
+                    className="size-3.5 text-muted-foreground"
+                    aria-hidden
+                  />
+                  <input
+                    type="search"
+                    value={roleQuery}
+                    onChange={(e) => setRoleQuery(e.target.value)}
+                    placeholder={`Search ${pluralise(roles.length, "role")}`}
+                    aria-label="Search roles"
+                    className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                  />
+                </label>
+              )}
+              <div className="max-h-56 overflow-y-auto">
+                {shownRoles.map((r) => (
+                  <Check
+                    key={r}
+                    label={r}
+                    mono
+                    // Agents this role gates in; ungated ones always stay.
+                    count={facts.filter((a) => a.runBy?.has(r)).length}
+                    checked={f.roles.includes(r)}
+                    disabled={!graphKnown}
+                    onChange={() =>
+                      setF((p) => ({ ...p, roles: flip(p.roles, r) }))
+                    }
+                  />
+                ))}
+              </div>
+              <p className="pt-1 text-xs text-muted-foreground">
+                An agent no role gates stays in whatever is picked.
+              </p>
             </Section>
           )}
-          <Section title="Delegation">
+          <Section
+            title="Delegation"
+            off={!graphKnown && "The policy graph hasn't loaded."}
+          >
             {DELEGATION.map(([v, label]) => (
               <Check
                 key={v}
                 label={label}
                 count={countWhere(facts, { delegation: [v] })}
                 checked={f.delegation.includes(v)}
+                disabled={!graphKnown}
                 onChange={() =>
                   setF((p) => ({ ...p, delegation: flip(p.delegation, v) }))
                 }
@@ -186,21 +222,6 @@ export function AgentFilterDialog({
             </Button>
           </div>
         </div>
-        {pickingRoles && (
-          <RolePickerDialog
-            options={roleOptions}
-            picked={f.roles}
-            title="Agents these roles can run"
-            description="Keeps the agents any picked role may run. An agent no role gates stays in."
-            meta={(o) => `runs ${pluralise(o.tools, "agent")}`}
-            applyLabel={(n) => (n ? `Use ${pluralise(n, "role")}` : "Any role")}
-            onClose={() => setPickingRoles(false)}
-            onApply={(next) => {
-              setF((p) => ({ ...p, roles: next }));
-              setPickingRoles(false);
-            }}
-          />
-        )}
       </DialogContent>
     </Dialog>
   );
@@ -208,16 +229,26 @@ export function AgentFilterDialog({
 
 function Section({
   title,
+  off,
   children,
 }: {
   title: string;
+  /** Why the section is off, or false. */
+  off?: string | false;
   children: React.ReactNode;
 }) {
   return (
-    <fieldset className="m-0 flex flex-col gap-0.5 border-0 p-0">
+    <fieldset
+      disabled={!!off}
+      className={cn(
+        "m-0 flex flex-col gap-0.5 border-0 p-0",
+        off && "opacity-60",
+      )}
+    >
       <legend className="pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
         {title}
       </legend>
+      {off && <p className="pb-1 text-xs text-muted-foreground">{off}</p>}
       {children}
     </fieldset>
   );
@@ -229,25 +260,36 @@ function Check({
   checked,
   onChange,
   mono,
+  disabled,
 }: {
   label: string;
   count: number;
   checked: boolean;
   onChange: () => void;
   mono?: boolean;
+  disabled?: boolean;
 }) {
   return (
-    <label className="flex min-h-10 cursor-pointer items-center gap-3">
+    <label
+      className={cn(
+        "flex min-h-10 items-center gap-3",
+        disabled ? "cursor-not-allowed" : "cursor-pointer",
+      )}
+    >
       <input
         type="checkbox"
         checked={checked}
         onChange={onChange}
+        disabled={disabled}
         className="size-4 accent-[hsl(var(--primary))]"
       />
       <span className={cn("text-sm", mono && "font-mono text-[13px]")}>
         {label}
       </span>
-      <span className="ml-auto text-xs text-muted-foreground">{count}</span>
+      {/* No count while the data behind it is missing. */}
+      {!disabled && (
+        <span className="ml-auto text-xs text-muted-foreground">{count}</span>
+      )}
     </label>
   );
 }

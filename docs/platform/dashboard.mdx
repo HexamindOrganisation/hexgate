@@ -14,7 +14,7 @@ pnpm dev
 ## Routes
 
 - `/agents` — every agent in the project, registered or not yet, with its 24h calls, denials and delegation; past 8 agents, a name search and a Filters dialog (status, 24h activity, framework, role, delegation); each row opens its hub
-- `/agents/:name` — one agent's hub: its graph, resources (tools, skills, guards, system prompt), resolved policy and decision log. The graph shows the roles that run the agent, its tools and the sub-agents it reaches (click one for its own graph); past 8 tools they're grouped by verdict with a list beside the graph, and a Roles dialog draws it for any set of roles
+- `/agents/:name` — one agent's hub: its graph, resources (tools, skills, guards, system prompt), resolved policy and decision log. The graph shows the roles that run the agent, its tools and the sub-agents it reaches (click one for its own graph); past 8 tools they leave the canvas for a count per verdict with a list of names, past 5 roles or sub-agents the rest are counted above it, and a Roles dialog draws it for one role
 - `/policies` — edit each agent's policy (roles × tools × argument constraints); its Graph button opens an agent's hub
 - `/playground` — chat with a serving agent, watch tool decisions stream live
 - `/audit` — every policy decision for the project

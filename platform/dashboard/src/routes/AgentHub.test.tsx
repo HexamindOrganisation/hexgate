@@ -584,15 +584,14 @@ describe("AgentHub", () => {
     expect(screen.getByTestId("agent-graph")).toBeInTheDocument();
   });
 
-  it("draws the graph for the roles picked in the role dialog", async () => {
+  it("draws the graph for the role picked in the role dialog", async () => {
     renderHub("support_bot");
     await userEvent.click(
       await screen.findByRole("button", { name: /Roles · all 2/ }),
     );
     const dialog = await screen.findByRole("dialog");
-    await userEvent.click(within(dialog).getByLabelText(/^support/));
     await userEvent.click(
-      within(dialog).getByRole("button", { name: "Show 1 role" }),
+      within(dialog).getByRole("button", { name: /^support/ }),
     );
     await vi.waitFor(() =>
       expect(
@@ -604,7 +603,7 @@ describe("AgentHub", () => {
       ).toBe(true),
     );
     expect(
-      await screen.findByRole("button", { name: /Roles · 1 of 2/ }),
+      await screen.findByRole("button", { name: /Role · support/ }),
     ).toBeInTheDocument();
   });
 

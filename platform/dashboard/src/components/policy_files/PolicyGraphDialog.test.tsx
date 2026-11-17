@@ -277,35 +277,14 @@ describe("PolicyGraphDialog", () => {
     expect(screen.getByText("deny")).toBeInTheDocument();
   });
 
-  it("flags the constraint-bypass path and focuses it on click", async () => {
-    renderFlow(GRAPH);
-    await waitFor(() =>
-      expect(screen.getByText(/constraint-bypass path/i)).toBeInTheDocument(),
-    );
-    // The warning names the strict + loose agents and the shared tool.
-    expect(screen.getByText(/can delegate to/i)).toBeInTheDocument();
-    await userEvent.click(screen.getByText(/can delegate to/i));
-    // Focusing swaps the legend hint to the reset copy.
-    await waitFor(() =>
-      expect(
-        screen.getByText(/click empty space to reset/i),
-      ).toBeInTheDocument(),
-    );
-  });
-
   it("opens the edge card with verdict, roles, and constraints", async () => {
     renderFlow(GRAPH);
     await waitFor(() =>
       expect(screen.getByTestId("edge-e2")).toBeInTheDocument(),
     );
-    // Edge 2 = supervisor → refund (approval, constrained, role admin). The
-    // constraint text now appears twice: the warning panel + the edge card.
+    // Edge 2 = supervisor → refund (approval, constrained, role admin).
     await userEvent.click(screen.getByTestId("edge-e2"));
-    await waitFor(() =>
-      expect(screen.getAllByText(/args\.amount <= 100/).length).toBeGreaterThan(
-        1,
-      ),
-    );
+    expect(await screen.findByText(/args\.amount <= 100/)).toBeInTheDocument();
     expect(screen.getByText(/calls/i)).toBeInTheDocument();
   });
 
@@ -446,71 +425,6 @@ describe("PolicyGraphDialog", () => {
     expect(onOpenAgent).toHaveBeenCalledWith("helper");
   });
 
-  it("groups many tools by verdict and lists a group's tools", async () => {
-    const tools = Array.from({ length: 10 }, (_, i) => `tool:t${i}`);
-    const big: PolicyGraph = {
-      roles: [],
-      nodes: [
-        { id: "agent:big", kind: "agent", label: "big" },
-        ...tools.map((id) => ({
-          id,
-          kind: "tool" as const,
-          label: id.slice(5),
-        })),
-      ],
-      edges: tools.map((target, i) => ({
-        source: "agent:big",
-        target,
-        kind: "call" as const,
-        via: null,
-        verdict: i < 7 ? ("allow" as const) : ("deny" as const),
-        constraints: i === 0 ? ["args.n < 5"] : [],
-        roles: [],
-      })),
-    };
-    renderFlow(big, options());
-    expect(screen.queryByTestId("node-tool:t0")).toBeNull();
-    const allowed = await screen.findByTestId("node-group:allow");
-    expect(allowed).toHaveTextContent("7 allowed");
-    expect(allowed).toHaveTextContent("1 with limits");
-    await userEvent.click(allowed);
-    const list = screen.getByRole("complementary", { name: "Allowed tools" });
-    expect(within(list).getByText("t0")).toBeInTheDocument();
-    expect(within(list).getByText("args.n < 5")).toBeInTheDocument();
-    await userEvent.type(within(list).getByLabelText("Filter tools"), "t6");
-    expect(within(list).queryByText("t0")).toBeNull();
-  });
-
-  it("folds roles past five into +N that opens the role picker", async () => {
-    const roles = Array.from({ length: 7 }, (_, i) => `role:r${i}`);
-    const g: PolicyGraph = {
-      roles: roles.map((r) => r.slice(5)),
-      nodes: [
-        { id: "agent:a", kind: "agent", label: "a" },
-        ...roles.map((id) => ({
-          id,
-          kind: "role" as const,
-          label: id.slice(5),
-        })),
-      ],
-      edges: roles.map((source) => ({
-        source,
-        target: "agent:a",
-        kind: "admission" as const,
-        via: null,
-        verdict: "allow" as const,
-        constraints: [],
-        roles: [],
-      })),
-    };
-    const onMoreRoles = vi.fn();
-    renderFlow(g, options({ onMoreRoles }));
-    const more = await screen.findByTestId("node-more:roles");
-    expect(more).toHaveTextContent("+2 more roles");
-    await userEvent.click(more);
-    expect(onMoreRoles).toHaveBeenCalled();
-  });
-
   it("shows the dialog's error states, keeping a cached graph", async () => {
     const err = new ApiError(422, null, "modules don't compose");
     const { rerender } = renderDialog({ graph: null, error: err });
@@ -539,91 +453,6 @@ describe("PolicyGraphDialog", () => {
     ).toBeInTheDocument();
   });
 
-  it("opens Resources from the edge into +N more sub-agents", async () => {
-    const subs = Array.from({ length: 6 }, (_, i) => `agent:s${i}`);
-    const g: PolicyGraph = {
-      roles: [],
-      nodes: [
-        { id: "agent:a", kind: "agent", label: "a" },
-        ...subs.map((id) => ({
-          id,
-          kind: "agent" as const,
-          label: id.slice(6),
-        })),
-      ],
-      edges: subs.map((target) => ({
-        source: "agent:a",
-        target,
-        kind: "reach" as const,
-        via: "tool" as const,
-        verdict: "allow" as const,
-        constraints: [],
-        roles: [],
-      })),
-    };
-    const onMoreAgents = vi.fn();
-    renderFlow(g, options({ onMoreAgents }));
-    await screen.findByTestId("node-more:agents");
-    // The last edge is the one into "+1 more".
-    const edges = screen.getAllByTestId(/^edge-e/);
-    await userEvent.click(edges[edges.length - 1]);
-    expect(onMoreAgents).toHaveBeenCalled();
-  });
-
-  it("warns about bypass paths of an agent that stands in through *", async () => {
-    const project: PolicyGraph = {
-      roles: [],
-      nodes: [
-        { id: "agent:*", kind: "agent", label: "*" },
-        { id: "agent:loose", kind: "agent", label: "loose" },
-        { id: "tool:refund", kind: "tool", label: "refund" },
-      ],
-      edges: [
-        {
-          source: "agent:*",
-          target: "agent:loose",
-          kind: "reach",
-          via: "tool",
-          verdict: "allow",
-          constraints: [],
-          roles: [],
-        },
-        {
-          source: "agent:*",
-          target: "tool:refund",
-          kind: "call",
-          via: null,
-          verdict: "allow",
-          constraints: ["args.amount < 10"],
-          roles: [],
-        },
-        {
-          source: "agent:loose",
-          target: "tool:refund",
-          kind: "call",
-          via: null,
-          verdict: "allow",
-          constraints: [],
-          roles: [],
-        },
-      ],
-    };
-    const sub: PolicyGraph = {
-      roles: [],
-      nodes: [
-        { id: "agent:*", kind: "agent", label: "bot" },
-        { id: "agent:loose", kind: "agent", label: "loose" },
-        { id: "tool:refund", kind: "tool", label: "refund" },
-      ],
-      edges: project.edges.slice(0, 2),
-    };
-    renderFlow(sub, options({ projectGraph: project, sourceId: "agent:*" }));
-    expect(
-      await screen.findByText(/constraint-bypass path/),
-    ).toBeInTheDocument();
-    expect(screen.getAllByText("bot").length).toBeGreaterThan(0);
-  });
-
   it("pins, not opens, a sub-agent with no page", async () => {
     const onOpenAgent = vi.fn();
     renderFlow(WORKER, options({ onOpenAgent, hasPage: () => false }));
@@ -634,47 +463,81 @@ describe("PolicyGraphDialog", () => {
     ).toBeInTheDocument();
   });
 
-  it("warns about a bypass through a sub-agent that runs as *", async () => {
-    // a (limited) reaches x; x isn't declared, so it calls through *.
-    const call = (source: string, constraints: string[]) => ({
-      source,
-      target: "tool:refund",
-      kind: "call" as const,
-      via: null,
-      verdict: "allow" as const,
-      constraints,
+  it("summarises many tools by verdict above the canvas, with a list", async () => {
+    const tools = Array.from({ length: 10 }, (_, i) => `tool:t${i}`);
+    const big: PolicyGraph = {
       roles: [],
-    });
-    const project: PolicyGraph = {
+      nodes: [
+        { id: "agent:big", kind: "agent", label: "big" },
+        ...tools.map((id) => ({
+          id,
+          kind: "tool" as const,
+          label: id.slice(5),
+        })),
+      ],
+      edges: tools.map((target, i) => ({
+        source: "agent:big",
+        target,
+        kind: "call" as const,
+        via: null,
+        verdict: i < 7 ? ("allow" as const) : ("deny" as const),
+        constraints: i === 0 ? ["args.n < 5"] : [],
+        roles: [],
+      })),
+    };
+    renderFlow(big, options());
+    // No tool, and no made-up node, on the canvas.
+    expect(screen.queryByTestId("node-tool:t0")).toBeNull();
+    expect(screen.getAllByTestId(/^node-/)).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: /7 allowed/ }));
+    const list = screen.getByRole("complementary", { name: "Allowed tools" });
+    expect(within(list).getByText("t0")).toBeInTheDocument();
+    expect(within(list).getByText("args.n < 5")).toBeInTheDocument();
+    await userEvent.type(within(list).getByLabelText("Filter tools"), "t6");
+    expect(within(list).queryByText("t0")).toBeNull();
+  });
+
+  it("counts roles and sub-agents left off the canvas, as buttons", async () => {
+    const roles = Array.from({ length: 7 }, (_, i) => `role:r${i}`);
+    const subs = Array.from({ length: 6 }, (_, i) => `agent:s${i}`);
+    const g: PolicyGraph = {
       roles: [],
       nodes: [
         { id: "agent:a", kind: "agent", label: "a" },
-        { id: "agent:x", kind: "agent", label: "x" },
-        { id: "agent:*", kind: "agent", label: "*" },
-        { id: "tool:refund", kind: "tool", label: "refund" },
+        ...roles.map((id) => ({ id, kind: "role" as const, label: id })),
+        ...subs.map((id) => ({ id, kind: "agent" as const, label: id })),
       ],
       edges: [
-        {
-          source: "agent:a",
-          target: "agent:x",
-          kind: "reach",
-          via: "tool",
-          verdict: "allow",
+        ...roles.map((source) => ({
+          source,
+          target: "agent:a",
+          kind: "admission" as const,
+          via: null,
+          verdict: "allow" as const,
           constraints: [],
           roles: [],
-        },
-        call("agent:a", ["args.amount < 10"]),
-        call("agent:*", []),
+        })),
+        ...subs.map((target) => ({
+          source: "agent:a",
+          target,
+          kind: "reach" as const,
+          via: "tool" as const,
+          verdict: "allow" as const,
+          constraints: [],
+          roles: [],
+        })),
       ],
     };
-    const sub: PolicyGraph = {
-      roles: [],
-      nodes: project.nodes.filter((n) => n.id !== "agent:*"),
-      edges: project.edges.slice(0, 2),
-    };
-    renderFlow(sub, options({ projectGraph: project, sourceId: "agent:a" }));
-    expect(
-      await screen.findByText(/constraint-bypass path/),
-    ).toBeInTheDocument();
+    const onMoreRoles = vi.fn();
+    const onMoreAgents = vi.fn();
+    renderFlow(g, options({ onMoreRoles, onMoreAgents }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "+2 more roles" }),
+    );
+    expect(onMoreRoles).toHaveBeenCalled();
+    await userEvent.click(
+      screen.getByRole("button", { name: "+1 more sub-agent" }),
+    );
+    expect(onMoreAgents).toHaveBeenCalled();
   });
 });
