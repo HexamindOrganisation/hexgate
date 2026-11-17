@@ -6,6 +6,7 @@
 
 import type { PolicyGraph } from "./api";
 import { agentSubgraph } from "./agent-graph";
+import { runnersOf } from "./agent-graph-view";
 
 export type Activity = "deny" | "approval" | "quiet";
 export type Delegation = "reaches" | "called";
@@ -48,18 +49,7 @@ export function rolesThatRun(
   graph: PolicyGraph | undefined,
   name: string,
 ): Set<string> | null {
-  if (!graph) return null;
-  const sub = agentSubgraph(graph, name);
-  const self = sub.nodes[0]?.id;
-  const admits = sub.edges.filter(
-    (e) => e.kind === "admission" && e.target === self,
-  );
-  if (!admits.length) return null;
-  return new Set(
-    admits
-      .filter((e) => e.verdict !== "deny")
-      .map((e) => e.source.slice("role:".length)),
-  );
+  return graph ? runnersOf(agentSubgraph(graph, name)) : null;
 }
 
 const ACTIVITY: Record<Activity, (a: AgentFacts["activity"]) => boolean> = {

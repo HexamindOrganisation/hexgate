@@ -64,7 +64,8 @@ export function AgentFilterDialog({
       roles.map((name) => ({
         name,
         runs: null,
-        tools: countWhere(facts, { roles: [name] }),
+        // Agents this role gates in: ungated ones stay in whatever is picked.
+        tools: facts.filter((a) => a.runBy?.has(name)).length,
       })),
     [roles, facts],
   );

@@ -13,21 +13,33 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useQuery } from "@tanstack/react-query";
+
+import { api } from "@/lib/api";
 import { agentHubPath } from "@/lib/agent-paths";
 import { pluralise } from "@/lib/format";
 
 export function AgentGraphPicker({
-  agents,
+  projectId,
   newTab = false,
   onClose,
 }: {
-  /** Agents the policy names. */
-  agents: string[];
+  projectId: string;
   /** Open the hub in a new tab, so the page's unsaved edits survive. */
   newTab?: boolean;
   onClose: () => void;
 }) {
   const navigate = useNavigate();
+  // The project's agents, each with a hub: not `*`, nor a name only an
+  // unsaved draft adds.
+  const manifests = useQuery({
+    queryKey: ["agent-manifests", projectId],
+    queryFn: () => api.listAgentManifests(projectId),
+  });
+  const agents = useMemo(
+    () => (manifests.data ?? []).map((m) => m.name).sort(),
+    [manifests.data],
+  );
   const [query, setQuery] = useState("");
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -50,7 +62,15 @@ export function AgentGraphPicker({
               " You have unsaved edits, so it opens in a new tab; it shows the saved policy."}
           </DialogDescription>
         </div>
-        {agents.length > 0 ? (
+        {manifests.isPending ? (
+          <p className="px-5 pb-5 text-sm text-muted-foreground">
+            Loading agents…
+          </p>
+        ) : manifests.isError ? (
+          <p className="px-5 pb-5 text-sm text-muted-foreground">
+            Couldn't load agents. Try again.
+          </p>
+        ) : agents.length > 0 ? (
           <>
             <form
               role="search"
@@ -96,7 +116,7 @@ export function AgentGraphPicker({
           </>
         ) : (
           <p className="px-5 pb-5 text-sm text-muted-foreground">
-            The policy names no agents yet. Open one from{" "}
+            No agents in this project yet. See{" "}
             <Link to="/agents" onClick={onClose} className="text-primary">
               Agents
             </Link>

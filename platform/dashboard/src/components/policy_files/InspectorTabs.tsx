@@ -197,7 +197,7 @@ export function InspectorTabs({
       {graphOpen && (
         // Graphs are per agent: pick one and open its hub.
         <AgentGraphPicker
-          agents={agentNames}
+          projectId={projectId}
           newTab={unsaved}
           onClose={() => setGraphOpen(false)}
         />

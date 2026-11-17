@@ -19,6 +19,7 @@ import "@xyflow/react/dist/style.css";
 import { AlertTriangle, Network, Play, X } from "lucide-react";
 
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { standsFor } from "@/lib/agent-graph";
 import {
   GROUP_PREFIX,
   compactAgentGraph,
@@ -699,7 +700,15 @@ type BypassWarning = {
 function bypassWarnings(
   graph: PolicyGraph,
   labelOf: (id: string) => string,
+  from?: string,
 ): BypassWarning[] {
+  // A reached agent the policy doesn't declare calls through `*`'s edges, so
+  // reaching it reaches what `*` may call.
+  const standIn = new Map(
+    graph.nodes
+      .filter((n) => n.kind === "agent")
+      .map((n) => [n.id, standsFor(graph, n.label) ?? n.id]),
+  );
   const reachOut = new Map<string, string[]>();
   graph.edges.forEach((e) => {
     // A denied reach can't be used to delegate, so it never enables a bypass.
@@ -716,6 +725,8 @@ function bypassWarnings(
       const u = q.shift() as string;
       if (seen.has(u)) continue;
       seen.add(u);
+      const s = standIn.get(u);
+      if (s && s !== u) q.push(s);
       for (const v of reachOut.get(u) ?? []) q.push(v);
     }
     return seen;
@@ -732,6 +743,8 @@ function bypassWarnings(
   const seen = new Set<string>();
   callers.forEach((cs, toolId) => {
     for (const a of cs) {
+      // Only the paths that start where this graph's agent stands.
+      if (from && a.agent !== from) continue;
       const reach = closure(a.agent);
       for (const b of cs) {
         if (a.agent === b.agent || !reach.has(b.agent)) continue;
@@ -855,6 +868,9 @@ export type AgentGraphOptions = {
   toolCount: (agent: string) => number;
   /** A sub-agent was clicked: open its own graph. */
   onOpenAgent: (agent: string) => void;
+  /** Whether a sub-agent has a page to open (`*` and agents the project
+   * doesn't list don't): those are pinned instead. */
+  hasPage?: (agent: string) => boolean;
   /** "+N more roles" was clicked. */
   onMoreRoles?: () => void;
   /** "+N more" sub-agents was clicked. */
@@ -917,9 +933,7 @@ export function PolicyFlow({
   // One agent's graph has none of its sub-agents' tools: find bypass paths in
   // the project graph, keeping those that start where this agent stands.
   const warnings = useMemo(() => {
-    const all = bypassWarnings(projectGraph ?? graph, labelOf);
-    const from = sourceId ?? self;
-    return from ? all.filter((w) => w.strictId === from) : all;
+    return bypassWarnings(projectGraph ?? graph, labelOf, sourceId ?? self);
   }, [projectGraph, graph, labelOf, sourceId, self]);
   const kindOf = useMemo(
     () => new Map(shown.nodes.map((n) => [n.id, n.kind])),
@@ -932,6 +946,10 @@ export function PolicyFlow({
       if (es.some((e) => e.target === toolId)) setGroup(v);
   };
 
+  const opens = (id: string) => {
+    const label = shown.nodes.find((n) => n.id === id)?.label;
+    return !!label && (agent?.hasPage?.(label) ?? true);
+  };
   /** A click: a group lists its tools, "+N" nodes and sub-agents act, and
    * anything else is pinned (or unpinned) to trace its paths. */
   const clickNode = (id: string) => {
@@ -941,10 +959,9 @@ export function PolicyFlow({
       setGroup((g) => (g === v ? null : v));
     } else if (k === "more-roles") agent?.onMoreRoles?.();
     else if (k === "more-agents") agent?.onMoreAgents?.();
-    else if (agent && k === "agent" && id !== self) {
-      const label = shown.nodes.find((n) => n.id === id)?.label;
-      if (label) agent.onOpenAgent(label);
-    } else setPinned((p) => (p === id ? null : id));
+    else if (agent && k === "agent" && id !== self && opens(id))
+      agent.onOpenAgent(shown.nodes.find((n) => n.id === id)!.label);
+    else setPinned((p) => (p === id ? null : id));
   };
 
   // Directed adjacency (out + in) for transitive reachability.

@@ -204,6 +204,7 @@ export function AgentHub() {
               setGraphOpen(false);
               navigate(agentHubPath(n));
             },
+            hasPage: (n) => !!manifests.data?.some((m) => m.name === n),
             onMoreRoles: () => setPickingRoles(true),
             onMoreAgents: () => {
               setGraphOpen(false);
@@ -215,7 +216,7 @@ export function AgentHub() {
               undefined,
           }
         : null,
-    [agent, toolCount, navigate, projectGraph],
+    [agent, toolCount, navigate, projectGraph, manifests.data],
   );
   // A new agent or role set is a new graph: start it fresh and fitted.
   const flowKey = `${agent?.name}:${roles.join(",")}`;

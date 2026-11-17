@@ -65,11 +65,12 @@ function columnsOf(graph: LayoutGraph): {
   nCols: number;
 } {
   const agents = graph.nodes.filter((n) => n.kind === "agent").map((n) => n.id);
-  // Only a permitted reach delegates; a self-loop adds no hop.
+  // Every reach is a hop, denied or not: in one agent's graph each sub-agent
+  // sits in the sub-agent column. A self-loop adds no hop.
   const out = new Map<string, string[]>();
   const reached = new Set<string>();
   for (const e of graph.edges) {
-    if (!delegates(e) || e.source === e.target) continue;
+    if (e.kind !== "reach" || e.source === e.target) continue;
     push(out, e.source, e.target);
     reached.add(e.target);
   }

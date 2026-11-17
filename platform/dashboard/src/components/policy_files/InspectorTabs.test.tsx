@@ -40,6 +40,17 @@ const MATRIX: PolicyMatrix = {
 
 const noop = () => undefined;
 
+/** The picker lists the project's agents from the manifest endpoint. */
+function stubAgents(names: string[]) {
+  vi.spyOn(window, "fetch").mockImplementation(
+    async () =>
+      new Response(JSON.stringify(names.map((name) => ({ name }))), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+  );
+}
+
 function renderInspector(
   props: Partial<Parameters<typeof InspectorTabs>[0]> = {},
 ) {
@@ -66,7 +77,8 @@ afterEach(() => vi.restoreAllMocks());
 describe("InspectorTabs", () => {
   it("opens the hub in a new tab while edits are unsaved", async () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
-    renderInspector({ agentNames: ["support_bot"], unsaved: true });
+    stubAgents(["support_bot"]);
+    renderInspector({ unsaved: true });
     await userEvent.click(screen.getByRole("button", { name: /Graph/ }));
     expect(screen.getByText(/unsaved edits/)).toBeInTheDocument();
     await userEvent.click(
@@ -80,6 +92,7 @@ describe("InspectorTabs", () => {
   });
 
   it("opens an agent's hub from the Graph picker", async () => {
+    stubAgents(["billing_bot", "support_bot"]);
     renderWithProviders(
       <Routes>
         <Route

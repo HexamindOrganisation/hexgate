@@ -623,4 +623,58 @@ describe("PolicyGraphDialog", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText("bot").length).toBeGreaterThan(0);
   });
+
+  it("pins, not opens, a sub-agent with no page", async () => {
+    const onOpenAgent = vi.fn();
+    renderFlow(WORKER, options({ onOpenAgent, hasPage: () => false }));
+    await userEvent.click(await screen.findByTestId("node-agent:helper"));
+    expect(onOpenAgent).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("complementary", { name: "agent helper" }),
+    ).toBeInTheDocument();
+  });
+
+  it("warns about a bypass through a sub-agent that runs as *", async () => {
+    // a (limited) reaches x; x isn't declared, so it calls through *.
+    const call = (source: string, constraints: string[]) => ({
+      source,
+      target: "tool:refund",
+      kind: "call" as const,
+      via: null,
+      verdict: "allow" as const,
+      constraints,
+      roles: [],
+    });
+    const project: PolicyGraph = {
+      roles: [],
+      nodes: [
+        { id: "agent:a", kind: "agent", label: "a" },
+        { id: "agent:x", kind: "agent", label: "x" },
+        { id: "agent:*", kind: "agent", label: "*" },
+        { id: "tool:refund", kind: "tool", label: "refund" },
+      ],
+      edges: [
+        {
+          source: "agent:a",
+          target: "agent:x",
+          kind: "reach",
+          via: "tool",
+          verdict: "allow",
+          constraints: [],
+          roles: [],
+        },
+        call("agent:a", ["args.amount < 10"]),
+        call("agent:*", []),
+      ],
+    };
+    const sub: PolicyGraph = {
+      roles: [],
+      nodes: project.nodes.filter((n) => n.id !== "agent:*"),
+      edges: project.edges.slice(0, 2),
+    };
+    renderFlow(sub, options({ projectGraph: project, sourceId: "agent:a" }));
+    expect(
+      await screen.findByText(/constraint-bypass path/),
+    ).toBeInTheDocument();
+  });
 });

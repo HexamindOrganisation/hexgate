@@ -165,4 +165,61 @@ describe("roleOptionsFor", () => {
     };
     expect(roleOptionsFor(["ops"], open)[0].runs).toBeNull();
   });
+
+  describe("round-2 regressions", () => {
+    it("says what applies outside a conditional allow", () => {
+      const g = (
+        verdict: PolicyGraphEdge["verdict"],
+        constraints: string[],
+      ) => ({
+        roles: [],
+        nodes: [{ id: "agent:a", kind: "agent" as const, label: "a" }],
+        edges: [edge("agent:a", "tool:t", "call", { verdict, constraints })],
+      });
+      const m = mergeRoleGraphs([
+        g("allow", ["x < 5"]),
+        g("approval_required", []),
+      ]);
+      expect(m.edges[0].verdict).toBe("allow");
+      expect(m.edges[0].constraints).toEqual([
+        "x < 5",
+        "otherwise needs approval",
+      ]);
+    });
+
+    it("counts a sub-agent reached two ways as one slot", () => {
+      const subs = Array.from({ length: 5 }, (_, i) => `agent:s${i}`);
+      const g: PolicyGraph = {
+        roles: [],
+        nodes: [
+          { id: "agent:a", kind: "agent", label: "a" },
+          ...subs.map((id) => ({ id, kind: "agent" as const, label: id })),
+        ],
+        edges: [
+          ...subs.map((s) => edge("agent:a", s, "reach")),
+          edge("agent:a", "agent:s0", "reach", { via: "handoff" }),
+        ],
+      };
+      const { graph } = compactAgentGraph(g);
+      expect(graph.nodes.some((n) => n.id === "more:agents")).toBe(false);
+    });
+
+    it("joins +N more roles to the agent", () => {
+      const roles = Array.from({ length: 6 }, (_, i) => `role:r${i}`);
+      const g: PolicyGraph = {
+        roles: [],
+        nodes: [
+          { id: "agent:a", kind: "agent", label: "a" },
+          ...roles.map((id) => ({ id, kind: "role" as const, label: id })),
+        ],
+        edges: roles.map((r) => edge(r, "agent:a", "admission")),
+      };
+      const { graph } = compactAgentGraph(g);
+      expect(
+        graph.edges.some(
+          (e) => e.source === "more:roles" && e.target === "agent:a",
+        ),
+      ).toBe(true);
+    });
+  });
 });

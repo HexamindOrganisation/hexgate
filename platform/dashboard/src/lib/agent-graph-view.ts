@@ -73,15 +73,43 @@ export function compactAgentGraph(
     groups.set(e.verdict, g);
   }
 
-  // Roles in and sub-agents out, permitted first, so a cut hides the least.
-  const roleEdges = sub.edges
-    .filter((e) => e.kind === "admission" && e.target === self.id)
-    .sort((a, b) => rank(a) - rank(b));
-  const agentEdges = sub.edges
-    .filter((e) => e.kind === "reach" && e.source === self.id)
-    .sort((a, b) => rank(a) - rank(b));
-  const cutRoles = new Set(roleEdges.slice(maxSide));
-  const cutAgents = new Set(agentEdges.slice(maxSide));
+  // Roles in and sub-agents out, permitted first, so a cut hides the least;
+  // counted by node, so two edges to one sub-agent are one slot.
+  const cutBy = (edges: PolicyGraphEdge[], end: "source" | "target") => {
+    const ranked = [...edges].sort((a, b) => rank(a) - rank(b));
+    const keep = new Set<string>();
+    for (const e of ranked)
+      if (keep.size < maxSide || keep.has(e[end])) keep.add(e[end]);
+    return new Set(ranked.filter((e) => !keep.has(e[end])));
+  };
+  const cutRoles = cutBy(
+    sub.edges.filter((e) => e.kind === "admission" && e.target === self.id),
+    "source",
+  );
+  const cutAgents = cutBy(
+    sub.edges.filter((e) => e.kind === "reach" && e.source === self.id),
+    "target",
+  );
+  const count = (es: Set<PolicyGraphEdge>, end: "source" | "target") =>
+    new Set([...es].map((e) => e[end])).size;
+  /** One edge for a "+N" node: the folded edges' verdict, or "mixed". */
+  const foldEdge = (
+    es: Set<PolicyGraphEdge>,
+    source: string,
+    target: string,
+    kind: PolicyGraphEdge["kind"],
+  ): ShownEdge => {
+    const verdicts = new Set([...es].map((e) => e.verdict));
+    return {
+      source,
+      target,
+      kind,
+      via: null,
+      verdict: verdicts.size === 1 ? [...verdicts][0] : "mixed",
+      constraints: [],
+      roles: [],
+    };
+  };
 
   const edges: ShownEdge[] = sub.edges.filter(
     (e) => !grouped.has(e) && !cutRoles.has(e) && !cutAgents.has(e),
@@ -122,25 +150,17 @@ export function compactAgentGraph(
     nodes.push({
       id: MORE_ROLES,
       kind: "more-roles",
-      label: `+${cutRoles.size} more roles`,
+      label: `+${count(cutRoles, "source")} more roles`,
     });
+    edges.push(foldEdge(cutRoles, MORE_ROLES, self.id, "admission"));
   }
   if (cutAgents.size) {
-    const verdicts = new Set([...cutAgents].map((e) => e.verdict));
     nodes.push({
       id: MORE_AGENTS,
       kind: "more-agents",
-      label: `+${cutAgents.size} more`,
+      label: `+${count(cutAgents, "target")} more`,
     });
-    edges.push({
-      source: self.id,
-      target: MORE_AGENTS,
-      kind: "reach",
-      via: null,
-      verdict: verdicts.size === 1 ? [...verdicts][0] : "mixed",
-      constraints: [],
-      roles: [],
-    });
+    edges.push(foldEdge(cutAgents, self.id, MORE_AGENTS, "reach"));
   }
   return { graph: { nodes, edges, roles: sub.roles }, groups };
 }
@@ -153,34 +173,60 @@ function eitherOf(a: string[], b: string[]): string[] {
   return a.join() === b.join() ? a : [`${all(a)} ∨ ${all(b)}`];
 }
 
+const FALLBACK: Record<Verdict, string> = {
+  allow: "allowed",
+  approval_required: "needs approval",
+  deny: "denied",
+};
+
 /** Graphs for several roles as one caller holding them all: the engine's
- * permissive union per edge, allow over approval over deny (decision.py
- * `combine_role_verdicts`). Equal verdicts keep either one's conditions. */
+ * permissive union per call, allow over approval over deny (decision.py
+ * `combine_role_verdicts`). An edge shows its most permissive verdict; when
+ * that one is conditional and a lesser grant still applies outside it, the
+ * constraints say so ("otherwise needs approval"). */
 export function mergeRoleGraphs(graphs: PolicyGraph[]): PolicyGraph {
   if (graphs.length === 1) return graphs[0];
   const nodes = new Map<string, PolicyGraphNode>();
-  const edges = new Map<string, PolicyGraphEdge>();
+  const grants = new Map<string, PolicyGraphEdge[]>();
   for (const g of graphs) {
     for (const n of g.nodes) nodes.set(n.id, n);
     for (const e of g.edges) {
       const key = `${e.source}>${e.target}:${e.kind}:${e.via ?? ""}`;
-      const had = edges.get(key);
-      if (!had) {
-        edges.set(key, e);
-        continue;
-      }
-      const roles = [...new Set([...had.roles, ...e.roles])];
-      const win = rank(e) < rank(had) ? e : had;
-      const constraints =
-        rank(e) === rank(had)
-          ? eitherOf(had.constraints, e.constraints)
-          : win.constraints;
-      edges.set(key, { ...win, roles, constraints });
+      grants.set(key, [...(grants.get(key) ?? []), e]);
     }
   }
+  const edges = [...grants.values()].map((es) => {
+    const byRank = [0, 1, 2].map((r) => es.filter((e) => rank(e) === r));
+    const tiers = byRank
+      .filter((t) => t.length)
+      .map((t) => ({
+        edge: t[0],
+        constraints: t
+          .slice(1)
+          .reduce((c, e) => eitherOf(c, e.constraints), t[0].constraints),
+      }));
+    const [win, ...rest] = tiers;
+    // Outside the winner's condition, the next grant that isn't a deny.
+    const next = win.constraints.length
+      ? rest.find((t) => t.edge.verdict !== "deny")
+      : undefined;
+    const constraints = next
+      ? [
+          ...win.constraints,
+          `otherwise ${FALLBACK[next.edge.verdict]}${
+            next.constraints.length ? ` if ${next.constraints.join(" ∧ ")}` : ""
+          }`,
+        ]
+      : win.constraints;
+    return {
+      ...win.edge,
+      constraints,
+      roles: [...new Set(es.flatMap((e) => e.roles))],
+    };
+  });
   return {
     nodes: [...nodes.values()],
-    edges: [...edges.values()],
+    edges,
     roles: graphs[0]?.roles ?? [],
   };
 }
@@ -198,9 +244,7 @@ export function roleOptionsFor(
 ): RoleOption[] {
   const self = sub.nodes[0];
   const kind = new Map(sub.nodes.map((n) => [n.id, n.kind]));
-  const admits = sub.edges.filter(
-    (e) => e.kind === "admission" && e.target === self?.id,
-  );
+  const runners = runnersOf(sub);
   const calls = sub.edges.filter(
     (e) =>
       e.source === self?.id &&
@@ -209,9 +253,7 @@ export function roleOptionsFor(
   );
   return roles.map((name) => ({
     name,
-    runs: admits.length
-      ? admits.some((e) => e.source === `role:${name}` && e.verdict !== "deny")
-      : null,
+    runs: runners ? runners.has(name) : null,
     // An edge listing no roles holds for every role.
     tools: new Set(
       calls
@@ -219,4 +261,19 @@ export function roleOptionsFor(
         .map((e) => e.target),
     ).size,
   }));
+}
+
+/** The roles that run the agent of `sub` (its graph, the agent first), from
+ * its admission edges; null when it has none (running it isn't gated). */
+export function runnersOf(sub: PolicyGraph): Set<string> | null {
+  const self = sub.nodes[0]?.id;
+  const admits = sub.edges.filter(
+    (e) => e.kind === "admission" && e.target === self,
+  );
+  if (!admits.length) return null;
+  return new Set(
+    admits
+      .filter((e) => e.verdict !== "deny")
+      .map((e) => e.source.slice("role:".length)),
+  );
 }
