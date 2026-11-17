@@ -397,7 +397,7 @@ def test_when_project_does_not_compose_then_422(client, monkeypatch):
     async def fail(*_):
         raise LinkError("cannot import nope.yaml")
 
-    monkeypatch.setattr(service, "resolve_every_agent", fail)
+    monkeypatch.setattr(service, "_agent_resolver", fail)
 
     r = client.get(f"/v1/projects/{pid}/policy/coverage")
 
