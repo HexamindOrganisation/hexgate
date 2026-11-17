@@ -21,6 +21,8 @@ import { makeQueryClient, renderWithProviders } from "@/test/render";
 // code executes and counts) and wires the interaction callbacks the component
 // relies on. Everything else is a no-op passthrough.
 vi.mock("@xyflow/react", () => {
+  // One stable instance, as the real hook returns.
+  const flow = { fitView: () => Promise.resolve(true) };
   type AnyProps = Record<string, unknown>;
   const ReactFlow = ({
     nodes,
@@ -131,6 +133,7 @@ vi.mock("@xyflow/react", () => {
     ),
     Position: { Left: "left", Right: "right", Top: "top", Bottom: "bottom" },
     MarkerType: { ArrowClosed: "arrowclosed" },
+    useReactFlow: () => flow,
   };
 });
 
@@ -352,7 +355,7 @@ describe("PolicyGraphDialog", () => {
     stubGraph({ ...GRAPH, roles: ["admin", "support", "guest"] });
     renderDialog({ agent: "supervisor" });
     await screen.findByTestId("node-agent:supervisor");
-    const options = within(screen.getByRole("combobox"))
+    const options = within(screen.getByRole("combobox", { name: /^role/ }))
       .getAllByRole("option")
       .map((o) => o.textContent);
     expect(options).toEqual(["all roles", "admin"]);
@@ -380,7 +383,7 @@ describe("PolicyGraphDialog", () => {
     });
     renderDialog({ agent: "bot" });
     await screen.findByTestId("node-agent:bot");
-    const options = within(screen.getByRole("combobox"))
+    const options = within(screen.getByRole("combobox", { name: /^role/ }))
       .getAllByRole("option")
       .map((o) => o.textContent);
     expect(options).toEqual(["all roles", "billing", "support"]);
@@ -411,7 +414,10 @@ describe("PolicyGraphDialog", () => {
     const spy = stubGraph(GRAPH);
     renderDialog();
     await screen.findByTestId("node-agent:worker");
-    await userEvent.selectOptions(screen.getByRole("combobox"), "admin");
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: /^role/ }),
+      "admin",
+    );
     await waitFor(() =>
       expect(spy.mock.calls.some(([u]) => u.includes("role=admin"))).toBe(true),
     );
@@ -518,5 +524,61 @@ describe("PolicyGraphDialog", () => {
       "worker → calls → demo-read",
     );
     expect(document.body).not.toHaveTextContent("mcp-demo-read");
+  });
+  it("draws agents as circles, roles as rectangles, tools as hexagons", async () => {
+    stubGraph(GRAPH);
+    renderDialog();
+    const agent = await screen.findByTestId("node-agent:worker");
+    expect(agent.querySelector("circle")).not.toBeNull();
+    expect(
+      screen.getByTestId("node-role:admin").querySelector("rect"),
+    ).not.toBeNull();
+    expect(
+      screen.getByTestId("node-tool:refund").querySelector("polygon"),
+    ).not.toBeNull();
+  });
+
+  it("folds extra tools into +N and opens them on click", async () => {
+    const tools = Array.from({ length: 15 }, (_, i) => `tool:t${i}`);
+    stubGraph({
+      roles: [],
+      nodes: [
+        { id: "agent:big", kind: "agent", label: "big" },
+        ...tools.map((id) => ({ id, kind: "tool", label: id.slice(5) })),
+      ],
+      edges: tools.map((target) => ({
+        source: "agent:big",
+        target,
+        kind: "call",
+        via: null,
+        verdict: "allow",
+        constraints: [],
+        roles: [],
+      })),
+    });
+    renderDialog();
+    await userEvent.click(await screen.findByTestId("node-more:agent:big"));
+    expect(screen.getByTestId("node-tool:t14")).toBeInTheDocument();
+    expect(screen.queryByTestId("node-more:agent:big")).toBeNull();
+  });
+
+  it("finds a node by name and can show only its paths", async () => {
+    stubGraph(GRAPH);
+    renderDialog();
+    await screen.findByTestId("node-agent:worker");
+    await userEvent.type(
+      screen.getByRole("combobox", { name: "Find a node" }),
+      "refund{Enter}",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Only this path" }),
+    );
+    expect(screen.getByTestId("node-agent:supervisor")).toBeInTheDocument();
+    // The worker's MCP reach isn't on a path through refund.
+    expect(screen.queryByTestId("node-mcp:search")).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show everything" }),
+    );
+    expect(screen.getByTestId("node-mcp:search")).toBeInTheDocument();
   });
 });

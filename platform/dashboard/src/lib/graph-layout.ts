@@ -7,16 +7,21 @@
  * Pure and deterministic, so it's testable without React Flow.
  */
 
-import type { PolicyGraph } from "./api";
+/** The shape the layout reads: any graph whose nodes have a kind (roles,
+ * agents, then everything else as the last column). */
+export type LayoutGraph = {
+  nodes: { id: string; kind: string }[];
+  edges: { source: string; target: string; kind: string; verdict: string }[];
+};
 
-/** A node's box (the graph's hexagon); positions are node centres. */
+/** A node's box (every shape fits in it); positions are node centres. */
 export const HEX_W = 136;
 export const HEX_H = 118;
 /** Least column pitch, and row pitch; both leave room for lanes beside the
  * hexes. A column with more loops than fit grows wider. */
 export const COL_W = 300;
 export const ROW_H = 150;
-/** First loop lane right of a column's centre, clear of the hex's side tip. */
+/** First loop lane right of a column's centre, clear of the node box. */
 const LOOP_X = HEX_W / 2 + 16;
 /** Gap between loop lanes: wider than a lane's label, so two never overlap. */
 export const LANE_W = 64;
@@ -55,7 +60,7 @@ export const push = <K, V>(m: Map<K, V[]>, k: K, v: V) => {
 
 /** Column per node — roles 0, agents 1 + their shortest permitted reach
  * depth, tools and MCP servers last — and the column count. */
-function columnsOf(graph: PolicyGraph): {
+function columnsOf(graph: LayoutGraph): {
   col: Record<string, number>;
   nCols: number;
 } {
@@ -105,7 +110,7 @@ function columnsOf(graph: PolicyGraph): {
   return { col, nCols: maxAgent + 3 };
 }
 
-export function layeredLayout(graph: PolicyGraph): LayeredLayout {
+export function layeredLayout(graph: LayoutGraph): LayeredLayout {
   const { col, nCols } = columnsOf(graph);
 
   // Each column holds nodes and bend slots, in the server's (stable) order.
@@ -182,7 +187,7 @@ export function layeredLayout(graph: PolicyGraph): LayeredLayout {
     col[e.source] != null && col[e.source] === col[e.target];
   const loops = Array.from({ length: nCols }, () => 0);
   for (const e of graph.edges) if (isLoop(e)) loops[col[e.source]]++;
-  // A column is as wide as its lanes plus the next column's half hex.
+  // A column is as wide as its lanes plus the next column's half node.
   const width = (c: number) =>
     Math.max(COL_W, LOOP_X + loops[c] * LANE_W + HEX_W / 2);
   const colX = [0];

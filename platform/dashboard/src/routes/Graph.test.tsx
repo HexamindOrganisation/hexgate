@@ -13,6 +13,8 @@ import { useActive } from "@/lib/active";
 import { renderWithProviders } from "@/test/render";
 
 vi.mock("@xyflow/react", () => {
+  // One stable instance, as the real hook returns.
+  const flow = { fitView: () => Promise.resolve(true) };
   type P = Record<string, unknown>;
   return {
     ReactFlow: ({ children }: P) => (
@@ -31,6 +33,7 @@ vi.mock("@xyflow/react", () => {
     ),
     Position: { Top: "top", Bottom: "bottom", Left: "left", Right: "right" },
     MarkerType: { ArrowClosed: "arrowclosed" },
+    useReactFlow: () => flow,
   };
 });
 
