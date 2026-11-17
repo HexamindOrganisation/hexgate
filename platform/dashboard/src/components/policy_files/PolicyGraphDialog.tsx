@@ -321,7 +321,11 @@ function arrowGap(kind: string | undefined, dy: number): number {
   if (kind === "agent")
     return Math.sqrt(Math.max(0, AGENT_R * AGENT_R - dy * dy)) + 4;
   if (kind === "role") return ROLE_HALF_W + 4;
-  if (kind === "more") return MORE_HALF_W + 4;
+  if (kind === "more") {
+    // The pill's ends are round (radius 28): off-centre they sit further in.
+    const r = 28;
+    return MORE_HALF_W - r + Math.sqrt(Math.max(0, r * r - dy * dy)) + 4;
+  }
   return ARROW_GAP - (Math.abs(dy) * 34) / 53;
 }
 
@@ -732,7 +736,11 @@ function bypassWarnings(
   return out;
 }
 
-/** Pans and zooms to `id` once it's drawn, then reports done. */
+/** FitTo's request to frame every drawn node. */
+const FIT_ALL = "\u0000all";
+
+/** Pans and zooms to `id` (or frames everything) once drawn, then reports
+ * done. */
 function FitTo({
   id,
   shown,
@@ -747,6 +755,11 @@ function FitTo({
   const measured = useNodesInitialized();
   useEffect(() => {
     if (!id || !measured) return;
+    if (id === FIT_ALL) {
+      void flow.fitView({ duration: 300, padding: 0.2 });
+      onDone();
+      return;
+    }
     // pin() unfolds in the same render, so a node still not drawn never will
     // be: drop the request rather than jump to it later.
     if (!shown.nodes.some((n) => n.id === id)) {
@@ -778,14 +791,17 @@ function FindNode({
       count.set(n.label, (count.get(n.label) ?? 0) + 1);
     return graph.nodes.map((n) => ({
       id: n.id,
+      label: n.label,
       value: count.get(n.label)! > 1 ? `${n.label} · ${n.kind}` : n.label,
     }));
   }, [graph]);
   const find = () => {
     const t = q.trim().toLowerCase();
     if (!t) return;
+    // An exact label wins over a suggestion that merely contains it.
     const hit =
       options.find((o) => o.value.toLowerCase() === t) ??
+      options.find((o) => o.label.toLowerCase() === t) ??
       options.find((o) => o.value.toLowerCase().includes(t));
     setMissed(!hit);
     if (hit) onFind(hit.id);
@@ -844,18 +860,27 @@ export function PolicyFlow({
   // node's paths, and the node the view last jumped to.
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [isolated, setIsolated] = useState(false);
+  // A node id to pan to, FIT_ALL to frame the whole graph, or null.
   const [fitTo, setFitTo] = useState<string | null>(null);
+  // Unfolding belongs to one graph: a new one (another role) starts folded.
+  const [forGraph, setForGraph] = useState(graph);
+  if (forGraph !== graph) {
+    setForGraph(graph);
+    setExpanded(new Set());
+  }
 
-  // Big graphs fold each agent's extra tools into a "+N tools" node.
+  // Big graphs fold each agent's extra tools into a "+N tools" node; calls
+  // into the pinned node are always drawn, so its callers are all there.
   const collapsed = useMemo(
-    () => collapseTools(graph, expanded),
-    [graph, expanded],
+    () => collapseTools(graph, expanded, pinnedId),
+    [graph, expanded, pinnedId],
+  );
+  const drawnIds = useMemo(
+    () => new Set(collapsed.nodes.map((n) => n.id)),
+    [collapsed],
   );
   // A pin on a node this graph doesn't draw (it changed) is no pin.
-  const pinned =
-    pinnedId && collapsed.nodes.some((n) => n.id === pinnedId)
-      ? pinnedId
-      : null;
+  const pinned = pinnedId && drawnIds.has(pinnedId) ? pinnedId : null;
   // A pin whose node stops being drawn is dropped, not revived later, and
   // "Only this path" belongs to a pin: losing the pin (any way) drops it.
   if (pinnedId && !pinned) setPinned(null);
@@ -885,44 +910,31 @@ export function PolicyFlow({
       return `${key}#${n}`;
     });
   }, [shown]);
-  // The edge card closes once its edge isn't drawn.
-  const shownSelected =
-    selected && (shown.edges as PolicyGraphEdge[]).includes(selected)
-      ? selected
-      : null;
+  const drawnEdges = useMemo(() => new Set<object>(shown.edges), [shown]);
+  // The edge card closes for good once its edge isn't drawn.
+  if (selected && !drawnEdges.has(selected)) setSelected(null);
   const folded = useMemo(
     () => collapsed.nodes.filter((n) => n.kind === "more").length,
     [collapsed],
   );
 
-  /** Unfold the agents whose call to `id` is folded, so every caller's edge
-   * is drawn. Whether it unfolded anything (the layout then moves). */
-  const reveal = (id: string) => {
-    const drawn = new Set(
-      collapsed.edges.filter((e) => e.target === id).map((e) => e.source),
-    );
-    const hidden = graph.edges
-      .filter((e) => e.target === id && e.kind === "call")
-      .map((e) => e.source)
-      .filter((a) => !drawn.has(a));
-    if (hidden.length) setExpanded((x) => new Set([...x, ...hidden]));
-    return hidden.length > 0;
-  };
   const clearFit = useCallback(() => setFitTo(null), []);
   // Unfolding unmounts the "+N" node under the pointer, so its mouseleave
-  // never fires: drop the hover with it.
+  // never fires: drop the hover with it. The layout moves, so reframe.
   const expand = (agent: string) => {
     setHover(null);
     setExpanded((x) => new Set([...x, agent]));
+    setFitTo(FIT_ALL);
   };
-  /** Pin `id` with every caller's edge to it drawn, so its paths are whole. */
+  /** Pin `id`; a tool's folded calls get drawn, so follow it if it moved. */
   const focusOn = (id: string) => {
-    // Unfolding re-lays the graph out: follow the node so it stays in view.
-    if (reveal(id)) setFitTo(id);
+    const calls = (g: { edges: { target: string; kind: string }[] }) =>
+      g.edges.filter((e) => e.target === id && e.kind === "call").length;
+    if (calls(collapsed) < calls(graph)) setFitTo(id);
     setPinned(id);
   };
   const pin = (id: string) => {
-    focusOn(id);
+    setPinned(id);
     setFitTo(id);
   };
 
@@ -1101,7 +1113,10 @@ export function PolicyFlow({
           {pinned && (
             <button
               type="button"
-              onClick={() => setIsolated((v) => !v)}
+              onClick={() => {
+                setIsolated((v) => !v);
+                setFitTo(FIT_ALL);
+              }}
               aria-pressed={isolated}
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-mono text-[11px] backdrop-blur transition-colors",
@@ -1140,12 +1155,12 @@ export function PolicyFlow({
             />
           )}
           {/* Stacked under the node panel so the two never overlap. */}
-          {shownSelected && (
+          {selected && (
             // Capped and scrolling like the node panel, so the two together
             // stay clear of the canvas bottom and the bypass warnings.
             <div className="max-h-[25vh] w-64 overflow-y-auto rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur">
               <div className="mb-2 flex items-center justify-between">
-                <VerdictTag verdict={shownSelected.verdict} />
+                <VerdictTag verdict={selected.verdict} />
                 <button
                   onClick={() => setSelected(null)}
                   className="text-muted-foreground hover:text-foreground"
@@ -1154,29 +1169,29 @@ export function PolicyFlow({
                 </button>
               </div>
               <div className="mb-1 text-foreground">
-                {labelOf(shownSelected.source)}
+                {labelOf(selected.source)}
                 <span className="text-muted-foreground/50">
                   {" "}
-                  {shownSelected.kind === "reach"
-                    ? `→ ${shownSelected.via} →`
-                    : shownSelected.kind === "admission"
+                  {selected.kind === "reach"
+                    ? `→ ${selected.via} →`
+                    : selected.kind === "admission"
                       ? "→ admits →"
                       : "→ calls →"}{" "}
                 </span>
-                {labelOf(shownSelected.target)}
+                {labelOf(selected.target)}
               </div>
-              {shownSelected.roles.length > 0 && (
+              {selected.roles.length > 0 && (
                 <div className="mb-2 text-[10px] text-muted-foreground">
-                  role{shownSelected.roles.length > 1 ? "s" : ""}:{" "}
-                  {shownSelected.roles.join(", ")}
+                  role{selected.roles.length > 1 ? "s" : ""}:{" "}
+                  {selected.roles.join(", ")}
                 </div>
               )}
-              {shownSelected.constraints.length > 0 ? (
+              {selected.constraints.length > 0 ? (
                 <div className="space-y-1">
                   <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
                     constraints
                   </div>
-                  {shownSelected.constraints.map((c, i) => (
+                  {selected.constraints.map((c, i) => (
                     <div
                       key={i}
                       className="rounded bg-muted px-2 py-1 text-[10.5px] text-foreground"
@@ -1224,7 +1239,10 @@ export function PolicyFlow({
                 {expanded.size > 0 && (
                   <button
                     type="button"
-                    onClick={() => setExpanded(new Set())}
+                    onClick={() => {
+                      setExpanded(new Set());
+                      setFitTo(FIT_ALL);
+                    }}
                     className="underline-offset-2 hover:text-foreground hover:underline"
                   >
                     fold tools again

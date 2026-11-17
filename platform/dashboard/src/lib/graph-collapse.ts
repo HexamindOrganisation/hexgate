@@ -28,12 +28,15 @@ export type ShownGraph = {
 export const MORE_PREFIX = "more:";
 const isTool = (kind: string) => kind === "tool" || kind === "mcp";
 
-/** Fold each agent's tools past `perAgent` into a `more:<agent>` node, unless
- * the agent is in `expanded` or the graph has `budget` tools or fewer. A tool
- * stays when any agent still lists it. */
+/** Fold each agent's tools past `perAgent` (distinct tools) into a
+ * `more:<agent>` node, unless the agent is in `expanded` or the graph has
+ * `budget` tools or fewer. Calls into `focus` are always drawn, so a focused
+ * tool shows every caller without unfolding them. A tool stays when any agent
+ * still lists it. */
 export function collapseTools(
   graph: PolicyGraph,
   expanded: ReadonlySet<string>,
+  focus: string | null = null,
   budget = TOOL_BUDGET,
   perAgent = TOOLS_PER_AGENT,
 ): ShownGraph {
@@ -48,7 +51,8 @@ export function collapseTools(
     if (
       e.kind === "call" &&
       isTool(kind.get(e.target) ?? "") &&
-      !expanded.has(e.source)
+      !expanded.has(e.source) &&
+      e.target !== focus
     )
       push(calls, e.source, e);
   const hidden = new Set<PolicyGraphEdge>();
@@ -57,10 +61,17 @@ export function collapseTools(
     const ranked = [...es].sort(
       (a, b) => Number(a.verdict === "deny") - Number(b.verdict === "deny"),
     );
-    for (const e of ranked.slice(perAgent)) {
-      hidden.add(e);
-      push(folded, agent, e);
+    // The cut counts tools, not edges: two edges to one tool are one slot.
+    const shownTools = new Set<string>();
+    for (const e of ranked) {
+      if (shownTools.has(e.target)) continue;
+      if (shownTools.size < perAgent) shownTools.add(e.target);
     }
+    for (const e of ranked)
+      if (!shownTools.has(e.target)) {
+        hidden.add(e);
+        push(folded, agent, e);
+      }
   }
   const kept: ShownEdge[] = graph.edges.filter((e) => !hidden.has(e));
   // A tool goes only when every edge to it was folded; one nothing may call
@@ -76,7 +87,7 @@ export function collapseTools(
     nodes.push({
       id,
       kind: "more",
-      label: `+${es.length} tools`,
+      label: `+${new Set(es.map((e) => e.target)).size} tools`,
     });
     const verdicts = new Set(es.map((e) => e.verdict));
     edges.push({

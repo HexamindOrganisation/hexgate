@@ -34,7 +34,7 @@ describe("collapseTools", () => {
   });
 
   it("folds an agent's tools past its share into one +N node", () => {
-    const shown = collapseTools(graph(20), new Set(), 12, 6);
+    const shown = collapseTools(graph(20), new Set(), null, 12, 6);
     const more = shown.nodes.find((n) => n.id === "more:agent:a");
     expect(more?.label).toBe("+14 tools");
     expect(shown.nodes.filter((n) => n.kind === "tool")).toHaveLength(6);
@@ -47,7 +47,7 @@ describe("collapseTools", () => {
   it("marks a fold of mixed verdicts as mixed", () => {
     const g = graph(20);
     g.edges[10] = { ...g.edges[10], verdict: "deny" };
-    const shown = collapseTools(g, new Set(), 12, 6);
+    const shown = collapseTools(g, new Set(), null, 12, 6);
     expect(shown.edges.find((e) => e.target === "more:agent:a")?.verdict).toBe(
       "mixed",
     );
@@ -57,22 +57,45 @@ describe("collapseTools", () => {
     const g = graph(20);
     // a's first six calls are denied: they fold, the allowed ones show.
     for (let i = 0; i < 6; i++) g.edges[i] = { ...g.edges[i], verdict: "deny" };
-    const shown = collapseTools(g, new Set(), 12, 6);
+    const shown = collapseTools(g, new Set(), null, 12, 6);
     const drawn = shown.edges.filter(
       (e) => e.source === "agent:a" && e.target.startsWith("tool:"),
     );
     expect(drawn.every((e) => e.verdict === "allow")).toBe(true);
   });
 
+  it("draws every call into a focused tool without unfolding its agent", () => {
+    const shown = collapseTools(graph(20), new Set(), "tool:t19", 12, 6);
+    expect(shown.edges.some((e) => e.target === "tool:t19")).toBe(true);
+    expect(shown.nodes.find((n) => n.id === "more:agent:a")?.label).toBe(
+      "+13 tools",
+    );
+  });
+
+  it("counts tools, not edges, toward an agent's share", () => {
+    const g = graph(20);
+    g.edges.push({ ...g.edges[0], roles: ["other"] });
+    const shown = collapseTools(g, new Set(), null, 12, 6);
+    const drawn = new Set(
+      shown.edges
+        .filter((e) => e.source === "agent:a" && e.target.startsWith("tool:"))
+        .map((e) => e.target),
+    );
+    expect(drawn.size).toBe(6);
+    expect(shown.nodes.find((n) => n.id === "more:agent:a")?.label).toBe(
+      "+14 tools",
+    );
+  });
+
   it("keeps a tool nothing may call", () => {
     const g = graph(20);
     g.nodes.push({ id: "mcp:orphan", kind: "mcp", label: "orphan" });
-    const shown = collapseTools(g, new Set(), 12, 6);
+    const shown = collapseTools(g, new Set(), null, 12, 6);
     expect(shown.nodes.some((n) => n.id === "mcp:orphan")).toBe(true);
   });
 
   it("keeps every tool of an expanded agent", () => {
-    const shown = collapseTools(graph(20), new Set(["agent:a"]), 12, 6);
+    const shown = collapseTools(graph(20), new Set(["agent:a"]), null, 12, 6);
     expect(shown.nodes.some((n) => n.kind === "more")).toBe(false);
     expect(shown.nodes.filter((n) => n.kind === "tool")).toHaveLength(20);
   });

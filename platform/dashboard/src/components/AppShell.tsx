@@ -47,6 +47,7 @@ import { VerifyEmailBanner } from "@/components/VerifyEmailBanner";
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
+import { AGENT_LIST_CAP } from "@/lib/agent-paths";
 import { useActive, useProjectScoped } from "@/lib/active";
 import { useActiveBanCount, useCanManageBans } from "@/lib/bans";
 import { useLogout, useUser } from "@/lib/auth";
@@ -284,9 +285,6 @@ function NavItem({
   );
 }
 
-/** How many agents the sidebar lists before "View all" takes over. */
-const SIDEBAR_AGENT_CAP = 8;
-
 /** The Agents nav row with an inline, expandable agent list. Hovering the icon
  * reveals a chevron; clicking it toggles the list (the label still navigates to
  * /agents). The list is fetched lazily, only once opened. */
@@ -316,10 +314,8 @@ function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
   // Past the cap, list the first few plus the agent being viewed, and link to
   // /agents for the rest: the sidebar navigates, it doesn't scroll.
   const current = hubMatch?.params.name ?? null;
-  const shown = rows.slice(0, SIDEBAR_AGENT_CAP);
-  const extra = rows.find(
-    (a, i) => i >= SIDEBAR_AGENT_CAP && a.name === current,
-  );
+  const shown = rows.slice(0, AGENT_LIST_CAP);
+  const extra = rows.find((a, i) => i >= AGENT_LIST_CAP && a.name === current);
   if (extra) shown.push(extra);
   return (
     <div className="group/agents relative flex flex-col gap-0.5">
@@ -399,7 +395,7 @@ function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
               No agents yet
             </span>
           )}
-          {rows.length > SIDEBAR_AGENT_CAP && (
+          {rows.length > AGENT_LIST_CAP && (
             <NavLink
               to="/agents"
               end

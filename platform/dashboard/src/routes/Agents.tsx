@@ -15,7 +15,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatStrip, type Stat } from "@/components/ui/stat-strip";
-import { agentHubPath } from "@/lib/agent-paths";
+import { AGENT_LIST_CAP, agentHubPath } from "@/lib/agent-paths";
 import { denyRatePct, useAgentActivity24h } from "@/lib/audit-summary";
 import { pluralise } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -32,8 +32,6 @@ import { cn } from "@/lib/utils";
  * Editing happens elsewhere: policy authoring in /policies, manifest
  * registration through the SDK's ``hexgate register``.
  */
-/** Past this many agents the list gets a name filter. */
-const FILTER_MIN = 8;
 
 export function AgentsPage() {
   const scope = useProjectScoped();
@@ -142,7 +140,7 @@ export function AgentsPage() {
   const agents = manifests.data ?? [];
   // Only while the box is there: a filter left from a bigger project mustn't
   // hide rows it can no longer clear.
-  const q = agents.length > FILTER_MIN ? query.trim().toLowerCase() : "";
+  const q = agents.length > AGENT_LIST_CAP ? query.trim().toLowerCase() : "";
   const shown = q
     ? agents.filter((a) => a.name.toLowerCase().includes(q))
     : agents;
@@ -183,7 +181,7 @@ export function AgentsPage() {
       </div>
 
       <Card className="overflow-hidden p-0">
-        {agents.length > FILTER_MIN && (
+        {agents.length > AGENT_LIST_CAP && (
           <div className="border-b border-border px-4 py-3">
             <Input
               type="search"

@@ -564,7 +564,7 @@ describe("PolicyGraphDialog", () => {
     expect(screen.queryByTestId("node-more:agent:big")).toBeNull();
   });
 
-  it("unfolds every caller of a tool pinned on the canvas", async () => {
+  it("draws every call into a tool pinned on the canvas", async () => {
     // big folds its 15th tool; small lists the same tool, so it's drawn.
     const tools = Array.from({ length: 15 }, (_, i) => `tool:t${i}`);
     const call = (source: string, target: string) => ({
@@ -589,9 +589,13 @@ describe("PolicyGraphDialog", () => {
       ],
     });
     renderDialog();
-    await userEvent.click(await screen.findByTestId("node-tool:t14"));
-    // big's edge to t14 is drawn now, so its path through t14 is whole.
-    expect(screen.queryByTestId("node-more:agent:big")).toBeNull();
+    const more = await screen.findByTestId("node-more:agent:big");
+    expect(more).toHaveTextContent("+9 tools");
+    await userEvent.click(screen.getByTestId("node-tool:t14"));
+    // big's call to t14 is drawn now, without unfolding big's other tools.
+    expect(screen.getByTestId("node-more:agent:big")).toHaveTextContent(
+      "+8 tools",
+    );
   });
 
   it("finds each of two nodes that share a name", async () => {
@@ -610,6 +614,25 @@ describe("PolicyGraphDialog", () => {
     );
     expect(
       await screen.findByRole("complementary", { name: "tool search" }),
+    ).toBeInTheDocument();
+  });
+
+  it("prefers an exact name over one that merely contains it", async () => {
+    stubGraph({
+      ...GRAPH,
+      nodes: [
+        { id: "tool:web-search", kind: "tool", label: "web-search" },
+        ...GRAPH.nodes,
+      ],
+    });
+    renderDialog();
+    await screen.findByTestId("node-agent:worker");
+    await userEvent.type(
+      screen.getByRole("combobox", { name: "Find a node" }),
+      "search{Enter}",
+    );
+    expect(
+      await screen.findByRole("complementary", { name: "mcp search" }),
     ).toBeInTheDocument();
   });
 
