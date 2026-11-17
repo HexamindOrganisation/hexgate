@@ -1,139 +1,501 @@
 ---
 title: "Quickstart"
-description: "Watch a role + arguments decide a tool call — first offline, then in your own agent."
+description: "You already have a refund agent. In about 15 minutes, put it under a role-aware policy that lives on the Hexgate platform."
 ---
 
-<Steps>
-  <Step title="Install the package">
-    ```bash
-    pip install hexgate
-    ```
+import { PolicyDecider } from "/snippets/policy-decider.jsx";
 
-    Or, for a local checkout:
+This guide follows one support team. Their agent works, but it will refund any
+amount to anyone who asks. They write down the rules they want, find they have
+nowhere to keep them, and put them on the Hexgate platform. By the end, **the
+same request gets two different answers depending on who is asking.**
 
-    ```bash
-    git clone https://github.com/HexamindOrganisation/hexgate.git
-    cd hexgate
-    pip install -e .
-    ```
-  </Step>
+<CardGroup cols={4}>
+  <Card title="1 · The agent" icon="robot" href="#1-the-agent">
+    It works. That's the problem.
+  </Card>
+  <Card title="2 · The policy" icon="file-code" href="#2-the-policy">
+    Write the rules down.
+  </Card>
+  <Card title="3 · The gap" icon="circle-question" href="#3-the-missing-piece">
+    A YAML file enforces nothing.
+  </Card>
+  <Card title="4 · The platform" icon="shield-halved" href="#4-the-hexgate-platform">
+    Five steps to enforced.
+  </Card>
+</CardGroup>
 
-  <Step title="See it enforce — no API keys needed">
-    Save this policy as `policy.yaml`. It gives two roles different limits on the
-    **same** `refund_order` tool:
+## 1. The agent
 
-    {/* Keep this refund_order policy example in sync with README.md */}
-    ```yaml
-    version: 1
-    roles:
-      support:                       # front-line: small USD refunds only
-        default_policy: { mode: deny }
-        tools:
-          refund_order:
-            mode: allow
-            constraints:
-              - args.amount <= 50
-              - args.currency == "USD"
-      billing:                       # larger refunds, major currencies
-        default_policy: { mode: deny }
-        tools:
-          refund_order:
-            mode: allow
-            constraints:
-              - args.amount <= 500
-              - args.currency in ["USD", "EUR"]
-    ```
+It has one tool, `refund_order`. Ask it to refund $400 on an order and it does,
+whether the person asking is a new support hire or the head of billing. Nothing
+in the code knows who is asking, and nothing caps the amount.
 
-    Ask Hexgate to decide the **same $400 refund** for each role. `hexgate policy
-    test` evaluates a policy offline — no model, no API keys:
+Pick the framework you use. **You won't change this file in the rest of the
+guide.**
 
-    ```bash
-    hexgate policy test policy.yaml --role support \
-        --tool refund_order --args '{"amount": 400, "currency": "USD"}'
-    # ✗ DENY · support → refund_order({"amount": 400, "currency": "USD"})
-    #   reason: Policy on "refund_order" denied: constraint failed — args.amount <= 50
-
-    hexgate policy test policy.yaml --role billing \
-        --tool refund_order --args '{"amount": 400, "currency": "USD"}'
-    # ✓ ALLOW · billing → refund_order({"amount": 400, "currency": "USD"})
-    ```
-
-    Same tool, same request — **the caller's role and the arguments decide.** The
-    limits live in the policy, outside the model, so a confused or prompt-injected
-    agent can't raise its own cap.
-  </Step>
-
-  <Step title="Enforce it in a live agent">
-    Now put the same policy in front of a real agent. Build one with
-    `create_agent`, apply the policy with `enforce_policy`, and run the **same
-    request** under two roles — the role comes from the `HexgateContext` scope:
-
-    ```python
+<Tabs>
+  <Tab title="LangChain / LangGraph">
+    ```python refund_agent.py
     import asyncio
-    from hexgate import agent_tool, create_agent, enforce_policy, stream_agent, HexgateContext
+    from langchain_core.tools import tool
+    from langchain_openai import ChatOpenAI
+    from langgraph.prebuilt import create_react_agent
 
-
-    @agent_tool(name="refund_order")
-    async def refund_order(order_id: str, amount: float, currency: str = "USD") -> str:
+    @tool
+    def refund_order(order_id: str, amount: float, currency: str = "USD") -> str:
         """Issue a refund against an order."""
         return f"Refunded {amount} {currency} on {order_id}"
 
-    agent, handler = create_agent(
-        model="openai:gpt-5.4",
-        tools=[refund_order],
-        system_prompt="You are a support agent. Use refund_order to issue refunds.",
+    TOOLS = [refund_order]
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    graph = create_react_agent(
+        llm,
+        TOOLS,
+        name="refund_agent",
+        prompt="You are a support agent. Use refund_order to issue refunds.",
     )
-    agent = enforce_policy(agent, "policy.yaml")   # the role-aware policy from step 2
 
-    async def refund_as(role: str):
-        print(f"\n[{role}]")
-        async with HexgateContext(user_id="u-1", user_roles=[role]):
-            async for event in stream_agent(agent, handler, "Refund $400 on order O-42"):
-                ...  # render events however you like
+    REQUEST = {"messages": [{"role": "user", "content": "Refund $400 on order O-42"}]}
 
-    asyncio.run(refund_as("support"))   # refund_order blocked → model sees [policy_denied]
-    asyncio.run(refund_as("billing"))   # refund_order allowed → the refund runs
+    if __name__ == "__main__":
+        result = asyncio.run(graph.ainvoke(REQUEST))
+        print(result["messages"][-1].content)
     ```
+  </Tab>
+  <Tab title="OpenAI Agents SDK">
+    ```python refund_agent.py
+    import asyncio
+    from agents import Agent, Runner, function_tool
 
-    ```bash
-    export OPENAI_API_KEY=sk-...
-    python support_demo.py
+    @function_tool
+    def refund_order(order_id: str, amount: float, currency: str = "USD") -> str:
+        """Issue a refund against an order."""
+        return f"Refunded {amount} {currency} on {order_id}"
+
+    agent = Agent(
+        name="refund_agent",
+        instructions="You are a support agent. Use refund_order to issue refunds.",
+        tools=[refund_order],
+        model="gpt-4o-mini",
+    )
+
+    REQUEST = "Refund $400 on order O-42"
+
+    if __name__ == "__main__":
+        result = asyncio.run(Runner.run(agent, REQUEST))
+        print(result.final_output)
     ```
+  </Tab>
+  <Tab title="Google ADK">
+    ```python refund_agent.py
+    import asyncio
+    from google.adk.agents import Agent
+    from google.adk.models.lite_llm import LiteLlm
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.genai import types
 
-    Same agent, same request — under `support` the model's `refund_order($400)`
-    call is **blocked** by the policy (over the $50 cap) and it receives a
-    `[policy_denied]` marker it can recover from; under `billing` it goes through.
-    That's `enforce_policy` + the per-call `HexgateContext` doing the work — no platform, no
-    extra services.
+    def refund_order(order_id: str, amount: float, currency: str = "USD") -> str:
+        """Issue a refund against an order."""
+        return f"Refunded {amount} {currency} on {order_id}"
+
+    agent = Agent(
+        name="refund_agent",
+        model=LiteLlm(model="openai/gpt-4o-mini"),
+        instruction="You are a support agent. Use refund_order to issue refunds.",
+        tools=[refund_order],
+    )
+
+    REQUEST = types.Content(role="user", parts=[types.Part(text="Refund $400 on order O-42")])
+
+    async def main():
+        sessions = InMemorySessionService()
+        await sessions.create_session(app_name="refunds", user_id="u-1", session_id="s-1")
+        runner = Runner(agent=agent, app_name="refunds", session_service=sessions)
+        async for event in runner.run_async(user_id="u-1", session_id="s-1", new_message=REQUEST):
+            if event.is_final_response():
+                print(event.content.parts[0].text)
+
+    if __name__ == "__main__":
+        asyncio.run(main())
+    ```
+  </Tab>
+  <Tab title="Pydantic AI">
+    ```python refund_agent.py
+    from pydantic_ai import Agent
+
+    agent = Agent(
+        "openai:gpt-4o-mini",
+        name="refund_agent",
+        instructions="You are a support agent. Use refund_order to issue refunds.",
+    )
+
+    @agent.tool_plain
+    def refund_order(order_id: str, amount: float, currency: str = "USD") -> str:
+        """Issue a refund against an order."""
+        return f"Refunded {amount} {currency} on {order_id}"
+
+    REQUEST = "Refund $400 on order O-42"
+
+    if __name__ == "__main__":
+        result = agent.run_sync(REQUEST)
+        print(result.output)
+    ```
+  </Tab>
+</Tabs>
+
+```bash Output (the model's wording will vary)
+$ python refund_agent.py
+Done. I refunded 400.0 USD on order O-42.
+```
+
+## 2. The policy
+
+Front-line support should refund small amounts in dollars. Billing can go
+higher and handle euros. Anything else is refused. As YAML, that's a policy with
+two roles:
+
+{/* Keep this refund_order policy example in sync with README.md and snippets/policy-decider.jsx */}
+```yaml policy.yaml
+version: 1
+roles:
+  support:                       # front-line: small USD refunds only
+    default_policy: { mode: deny }
+    tools:
+      refund_order:
+        mode: allow
+        constraints:
+          - args.amount <= 50
+          - args.currency == "USD"
+  billing:                       # larger refunds, major currencies
+    default_policy: { mode: deny }
+    tools:
+      refund_order:
+        mode: allow
+        constraints:
+          - args.amount <= 500
+          - args.currency in ["USD", "EUR"]
+```
+
+<PolicyDecider />
+
+You can check the file on your laptop with the CLI. `hexgate policy test`
+evaluates a policy offline: no model, no API keys.
+
+```bash
+pip install hexgate
+
+hexgate policy test policy.yaml --role support \
+    --tool refund_order --args '{"amount": 400, "currency": "USD"}'
+# ✗ DENY · support → refund_order({"amount": 400, "currency": "USD"})
+#   reason: Policy on "refund_order" denied: constraint failed — args.amount <= 50
+
+hexgate policy test policy.yaml --role billing \
+    --tool refund_order --args '{"amount": 400, "currency": "USD"}'
+# ✓ ALLOW · billing → refund_order({"amount": 400, "currency": "USD"})
+```
+
+The limits live in the policy, **outside the model**, so a confused or
+prompt-injected agent can't raise its own cap.
+
+## 3. The missing piece
+
+The rules are right, but they sit in a file next to your code. **A YAML file
+doesn't enforce anything.** Before you can trust it in production, a few
+questions need answers:
+
+- How does the running agent load this file and check every tool call against it?
+- Where does the file live, so the agent in production and the one on your laptop use the same version?
+- Who may change a limit, and does every change need a redeploy?
+- When a refund is refused, where do you see who asked, with which role and arguments, and why?
+
+> *"I wish I had a registry for this YAML: one place that holds each agent's
+> policy, serves it to the agent, and records every decision."*
+
+## 4. The Hexgate platform
+
+The Hexgate platform is that registry. **Your agent keeps its code. The platform
+keeps its policy.** The Hexgate SDK sits between the two: it wraps your agent,
+fetches the policy from the platform, checks each tool call before it runs, and
+reports the decision back.
+
+<CardGroup cols={3}>
+  <Card title="One home per policy" icon="house">
+    Every registered agent has its policy on the **Policies** page, editable in the browser.
+  </Card>
+  <Card title="Live without redeploy" icon="bolt">
+    The SDK checks for a new signed policy at the start of each run, so an edit applies to the next request.
+  </Card>
+  <Card title="Every decision recorded" icon="list-check">
+    The **Audit** log keeps each allow and deny with the user, role, tool, arguments and reason.
+  </Card>
+</CardGroup>
+
+<Tip>
+  Signed in to the dashboard already? Open **Quickstart** in the sidebar for an
+  animated walkthrough of these same five steps.
+</Tip>
+
+<Steps>
+  <Step title="Create your account">
+    Sign up at [app.hexgate.ai](https://app.hexgate.ai). Hexgate Cloud is the
+    hosted platform, so there is nothing to install on the server side. You get a
+    **project**, which groups your agents, policies, API keys and audit log.
+
+    Prefer your own infrastructure? [Self-host the platform](/platform/control-plane)
+    and point the SDK at it with `HEXGATE_API_URL`.
+  </Step>
+
+  <Step title="Mint an API key">
+    Open **API keys** and click **Mint new API key**. Copy it straight away: it is
+    shown in full only once. The key ties your agent to this project.
+
+    ```bash .env
+    HEXGATE_API_KEY=fty_live_<project>_<biscuit>
+    OPENAI_API_KEY=sk-...
+    # HEXGATE_API_URL is unset, so the SDK talks to https://app.hexgate.ai
+    ```
+  </Step>
+
+  <Step title="Register and wrap your agent">
+    First, **register** the agent so the platform knows its tools. On first
+    registration the platform creates a starter policy for it, which you'll
+    replace in the next step. Then **wrap** the agent with one adapter call.
+    `refund_agent.py` stays as it is.
+
+    <Tabs>
+      <Tab title="LangChain / LangGraph">
+        A compiled graph hides its tools, so name them:
+
+        ```bash
+        hexgate register --agent refund_agent:graph \
+            --tools refund_agent:TOOLS --model gpt-4o-mini
+        ```
+
+        ```python guarded_agent.py
+        import asyncio
+        from dotenv import load_dotenv
+        from hexgate.runtime import HexgateContext
+        from hexgate.adapters.langchain import wrap_langchain_agent
+
+        load_dotenv()
+        from refund_agent import graph, TOOLS, REQUEST
+
+        agent = wrap_langchain_agent(agent=graph, tools=TOOLS)  # reads HEXGATE_API_KEY
+
+        async def refund_as(role: str):
+            result = await agent.ainvoke(
+                REQUEST,
+                hexgate_context=HexgateContext(user_id=f"{role}-agent-1", user_roles=[role]),
+            )
+            print(f"[{role}]", result["messages"][-1].content)
+
+        asyncio.run(refund_as("support"))
+        asyncio.run(refund_as("billing"))
+        ```
+      </Tab>
+      <Tab title="OpenAI Agents SDK">
+        ```bash
+        hexgate register --agent refund_agent:agent
+        ```
+
+        `HexgateRunner` replaces `Runner`:
+
+        ```python guarded_agent.py
+        import asyncio
+        from dotenv import load_dotenv
+        from hexgate.runtime import HexgateContext
+        from hexgate.adapters.openai import HexgateRunner
+
+        load_dotenv()
+        from refund_agent import agent, REQUEST
+
+        runner = HexgateRunner()  # reads HEXGATE_API_KEY
+
+        async def refund_as(role: str):
+            result = await runner.run(
+                agent,
+                REQUEST,
+                hexgate_context=HexgateContext(user_id=f"{role}-agent-1", user_roles=[role]),
+            )
+            print(f"[{role}]", result.final_output)
+
+        asyncio.run(refund_as("support"))
+        asyncio.run(refund_as("billing"))
+        ```
+      </Tab>
+      <Tab title="Google ADK">
+        ```bash
+        hexgate register --agent refund_agent:agent
+        ```
+
+        `HexgateRunner` replaces `Runner`:
+
+        ```python guarded_agent.py
+        import asyncio
+        from dotenv import load_dotenv
+        from google.adk.sessions import InMemorySessionService
+        from hexgate.runtime import HexgateContext
+        from hexgate.adapters.google import HexgateRunner
+
+        load_dotenv()
+        from refund_agent import agent, REQUEST
+
+        async def refund_as(role: str):
+            ctx = HexgateContext(user_id=f"{role}-agent-1", session_id=f"s-{role}", user_roles=[role])
+            sessions = InMemorySessionService()
+            await sessions.create_session(
+                app_name="refunds", user_id=ctx.user_id, session_id=ctx.session_id
+            )
+            runner = HexgateRunner(agent=agent, app_name="refunds", session_service=sessions)
+            async for event in runner.run_async(new_message=REQUEST, hexgate_context=ctx):
+                if event.is_final_response():
+                    print(f"[{role}]", event.content.parts[0].text)
+
+        asyncio.run(refund_as("support"))
+        asyncio.run(refund_as("billing"))
+        ```
+      </Tab>
+      <Tab title="Pydantic AI">
+        ```bash
+        hexgate register --agent refund_agent:agent
+        ```
+
+        `wrap_pydantic_agent` returns a gated copy:
+
+        ```python guarded_agent.py
+        from dotenv import load_dotenv
+        from hexgate.runtime import HexgateContext
+        from hexgate.adapters.pydantic_ai import wrap_pydantic_agent
+
+        load_dotenv()
+        from refund_agent import agent, REQUEST
+
+        guarded = wrap_pydantic_agent(agent=agent)  # reads HEXGATE_API_KEY
+
+        for role in ["support", "billing"]:
+            result = guarded.run_sync(
+                REQUEST,
+                hexgate_context=HexgateContext(user_id=f"{role}-agent-1", user_roles=[role]),
+            )
+            print(f"[{role}]", result.output)
+        ```
+      </Tab>
+    </Tabs>
+
+    The `HexgateContext` says **who is asking**. In your app, fill it from the
+    signed-in user ([caller context and roles](/concepts/user-scope)).
+
+    <Warning>
+      Don't run the script yet: the agent is connected, but it still runs under
+      the starter policy. It now shows up on the **Agents** page with its tool list.
+    </Warning>
+  </Step>
+
+  <Step title="Put your policy on the platform">
+    Open **Policies**, select `refund_agent`, and replace the starter policy with
+    the YAML from [chapter 2](#2-the-policy). Save it. The platform signs it and
+    serves it to the agent from then on, so the file no longer ships with your
+    code.
 
     <Note>
-    **Already have an agent?** You don't rewrite it — you wrap it. An OpenAI Agents
-    SDK / LangChain / Google ADK / Pydantic AI agent is gated with a single
-    adapter call (e.g. `HexgateRunner` is a drop-in for `agents.Runner`). See
-    [Framework adapters](/adapters/overview).
+      Re-registering the agent later updates its tool list but keeps your policy edits.
     </Note>
+  </Step>
+
+  <Step title="Try it with two different roles">
+    Run the script from step 3. It sends the same request, "Refund $400 on order
+    O-42", once as `support` and once as `billing`.
+
+    ```bash
+    python guarded_agent.py
+    ```
+
+    ```text Output (the model's wording will vary)
+    [support] I can't issue this refund: $400 is above the $50 limit for your role.
+              Please pass it to the billing team.
+    [billing] Done. I refunded 400.0 USD on order O-42.
+    ```
+
+    Under `support`, `refund_order` never runs. Hexgate returns a
+    `[policy_denied]` message as the tool's answer, and the model explains it to
+    the user. Under `billing`, the call is within the limits and goes through.
+    Both decisions are now in the **Audit** log:
+
+    | Agent | User | Role | Tool call | Decision | Reason |
+    |---|---|---|---|---|---|
+    | `refund_agent` | `support-agent-1` | `support` | `refund_order(amount=400, currency="USD")` | ✗ **deny** | `args.amount <= 50` failed |
+    | `refund_agent` | `billing-agent-1` | `billing` | `refund_order(amount=400, currency="USD")` | ✓ **allow** | all constraints passed |
+
+    **Now change a rule without touching code.** On the Policies page, raise the
+    support limit to `args.amount <= 500` and save. Run the script again: the
+    support request goes through, because the SDK picked up the new signed policy
+    at the start of the run.
+
+    <Tip>
+      To chat with the agent in the browser and pick a role from a menu, start it
+      with [`hexgate serve`](/cli/serve) and open the **Playground**.
+    </Tip>
   </Step>
 </Steps>
 
-## Next steps
+<Accordion title="Prefer to stay local, with no platform?" icon="laptop-code">
+  The same policy file can gate an agent in-process. `enforce_policy` loads the
+  YAML, and the per-call `HexgateContext` picks the role. There's no registry,
+  no live edits and no shared audit log, which is exactly the gap chapter 3
+  describes, but it's the fastest inner loop while you author a policy.
 
-<CardGroup cols={2}>
-  <Card title="Wrap your framework's agent" icon="puzzle-piece" href="/adapters/overview">
-    OpenAI Agents, LangChain/LangGraph, Google ADK, Pydantic AI — same one-wrapper pattern.
+  ```python support_demo.py
+  import asyncio
+  from hexgate import agent_tool, create_agent, enforce_policy, stream_agent, HexgateContext
+
+
+  @agent_tool(name="refund_order")
+  async def refund_order(order_id: str, amount: float, currency: str = "USD") -> str:
+      """Issue a refund against an order."""
+      return f"Refunded {amount} {currency} on {order_id}"
+
+  agent, handler = create_agent(
+      model="openai:gpt-5.4",
+      tools=[refund_order],
+      system_prompt="You are a support agent. Use refund_order to issue refunds.",
+  )
+  agent = enforce_policy(agent, "policy.yaml")
+
+  async def refund_as(role: str):
+      print(f"\n[{role}]")
+      async with HexgateContext(user_id="u-1", user_roles=[role]):
+          async for event in stream_agent(agent, handler, "Refund $400 on order O-42"):
+              ...  # render events however you like
+
+  asyncio.run(refund_as("support"))   # refund_order blocked → model sees [policy_denied]
+  asyncio.run(refund_as("billing"))   # refund_order allowed → the refund runs
+  ```
+
+  See [Which path do I pick?](/two-paths) for when to use the local loop and when
+  to use the platform.
+</Accordion>
+
+## Go further
+
+<CardGroup cols={3}>
+  <Card title="Write richer policies" icon="shield" href="/policy/yaml-shape">
+    Approval mode, inheritance, more constraints.
   </Card>
-  <Card title="Author a policy" icon="shield" href="/policy/yaml-shape">
-    Roles, tools, modes, argument constraints, inheritance — the full spec.
+  <Card title="Caller context and roles" icon="user" href="/concepts/user-scope">
+    Pass your real users' identity and roles.
   </Card>
-  <Card title="Request context + roles" icon="user" href="/concepts/user-scope">
-    How the end user's identity + role reach the decision at call time.
+  <Card title="Platform workflow" icon="diagram-project" href="/platform/workflow">
+    Register, edit, test and deploy, in detail.
   </Card>
-  <Card title="Try the terminal REPL" icon="terminal" href="/cli/chat">
-    `hexgate chat --agent example_agent` — a local agent with inline decision panels.
+  <Card title="Framework adapters" icon="puzzle-piece" href="/adapters/overview">
+    How each wrapper works, and supported versions.
   </Card>
-  <Card title="Go remote with Hexgate Cloud" icon="cloud" href="/platform/hosted">
-    Remote policy enforcement + audit with zero infra — get a key, set one env var.
+  <Card title="Self-host the platform" icon="server" href="/platform/overview">
+    Run the registry and audit log in your own infra.
   </Card>
-  <Card title="Pick a path" icon="route" href="/two-paths">
-    Local `hexgate chat` vs platform-backed `hexgate serve` — decide here.
+  <Card title="Source on GitHub" icon="github" href="https://github.com/HexamindOrganisation/hexgate">
+    The SDK and platform are MIT licensed.
   </Card>
 </CardGroup>

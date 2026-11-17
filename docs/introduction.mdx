@@ -1,28 +1,42 @@
 ---
 title: "Introduction"
-description: "Runtime authorization for AI agents — decide who can run which tool, in which role, with which arguments."
+description: "Runtime authorization for AI agents: decide who can run which tool, in which role, with which arguments."
 ---
 
-**Hexgate is runtime authorization for AI agents.** On every tool call, it decides
-whether **this end user**, acting in **this role**, may run **this tool** with
-**these arguments** — and returns `allow`, `deny`, or `approval_required`. Drop it
-in front of an OpenAI Agents / LangChain / Google ADK / Pydantic AI agent without
-rewriting the agent.
+**You already have an agent. Now you want to control it.**
 
-The decision has three inputs and one output:
+Your agent can call tools that move money, change records or send email. It will
+call them for anyone who asks, with any arguments the model comes up with.
+Nothing in the agent's code knows *who* is asking, and nothing caps *what* they
+can do.
+
+**Hexgate is runtime authorization for AI agents.** On every tool call it decides
+whether **this end user**, acting in **this role**, may run **this tool** with
+**these arguments**, and returns `allow`, `deny` or `approval_required`. You wrap
+your existing OpenAI Agents, LangChain, Google ADK or Pydantic AI agent; you
+don't rewrite it.
 
 ```text
   end user (id + role)  ×  tool call (name + args)  ──►  allow · deny · approval
 ```
 
+<CardGroup cols={2}>
+  <Card title="Quickstart · 15 minutes" icon="rocket" href="/quickstart">
+    Take a refund agent from "refunds anything" to role-aware limits on the platform.
+  </Card>
+  <Card title="Framework adapters" icon="puzzle-piece" href="/adapters/overview">
+    OpenAI Agents, LangChain/LangGraph, Google ADK, Pydantic AI: one wrapper each.
+  </Card>
+</CardGroup>
+
 ## Same request, different answer
 
-Authorization isn't a property of the agent — it's a property of *who is calling*
-and *what they're trying to do*. A support agent and a billing agent can share the
-exact same code and the exact same `refund_order` tool, yet get different answers,
-because a **policy** maps roles → tools → argument limits:
+Authorization isn't a property of the agent. It's a property of *who is calling*
+and *what they're trying to do*. A support rep and a billing lead can use the
+exact same agent and the exact same `refund_order` tool, yet get different
+answers, because a **policy** maps roles to tools to argument limits:
 
-```yaml
+```yaml policy.yaml
 roles:
   support:                       # front-line: small USD refunds only
     default_policy: { mode: deny }
@@ -52,23 +66,27 @@ The **same** `refund_order($400)` call resolves differently per caller:
 | `billing` | `refund_order(amount=400, currency="EUR")` | ✓ **allow** | within billing's `amount <= 500` |
 | `support` | `issue_credit(amount=50)` | ⚠ **approval_required** | needs a human's OK |
 
-The caps live in the policy, **outside the model** — so a prompt-injected or
-confused agent can't talk its way past `amount <= 500`. It never even sees the
-tool result for a denied call; it gets a `[policy_denied]` marker it can recover
-from.
+The caps live in the policy, **outside the model**, so a prompt-injected or
+confused agent can't talk its way past `amount <= 500`. It never sees the result
+of a denied call; it gets a `[policy_denied]` marker it can recover from.
 
-<CardGroup cols={2}>
-  <Card title="See it enforce (no keys)" icon="rocket" href="/quickstart">
-    Install, then watch a role + arguments decide a tool call in one command.
+## A policy needs a home
+
+A YAML file on its own enforces nothing. To trust it in production you need the
+running agent to load it and check every call, one version shared by your laptop
+and production, a way to change a limit without a redeploy, and a record of every
+refusal. That's what the **Hexgate platform** is: a registry for your agents'
+policies.
+
+<CardGroup cols={3}>
+  <Card title="One home per policy" icon="house">
+    Each registered agent has its policy on the **Policies** page, edited in the browser and signed by the platform.
   </Card>
-  <Card title="Author a policy" icon="shield" href="/policy/yaml-shape">
-    Roles, tools, modes, and argument constraints — the full policy shape.
+  <Card title="Live without redeploy" icon="bolt">
+    The SDK checks for a new signed policy at the start of each run, so an edit applies to the next request.
   </Card>
-  <Card title="Request context + roles" icon="user" href="/concepts/user-scope">
-    How the end user's identity + role reach the decision at call time.
-  </Card>
-  <Card title="Framework adapters" icon="puzzle-piece" href="/adapters/overview">
-    OpenAI Agents, LangChain/LangGraph, Google ADK, Pydantic AI — wrap once.
+  <Card title="Every decision recorded" icon="list-check">
+    The **Audit** log keeps each allow and deny with the user, role, tool, arguments and reason.
   </Card>
 </CardGroup>
 
@@ -76,22 +94,23 @@ from.
 
 Hexgate is two things that move together:
 
-- **`hexgate` — the SDK.** A Python runtime that intercepts every tool call and
-  runs it through a `PolicyEnforcer`, resolving the caller's role at call time and
-  returning a typed `Decision`. It wraps your existing agent without rewriting it.
-- **The Hexgate platform** *(optional)* — a control plane + dashboard for editing
-  policy in a browser, minting per-project tokens, watching live decisions stream
-  from a serving agent, and shipping signed policy bundles to production. Available
-  as **[Hexgate Cloud](/platform/hosted)** (hosted — set one env var) or
-  self-hosted.
+- **`hexgate`, the SDK.** A Python runtime that intercepts every tool call and
+  runs it through a `PolicyEnforcer`, resolving the caller's role at call time
+  and returning a typed `Decision`. It wraps your existing agent without
+  rewriting it.
+- **The Hexgate platform.** A control plane and dashboard for editing policy in
+  a browser, minting per-project API keys, watching live decisions stream from a
+  serving agent, and shipping signed policy bundles to production. Use
+  **[Hexgate Cloud](/platform/hosted)** (hosted: set one env var) or
+  [self-host it](/platform/control-plane).
 
 Two things feed the decision, and one thing records it:
 
-- The **end user's identity and role** are a **decision input** — carried
-  per-request via [`HexgateContext`](/concepts/user-scope), they select which role's rules
-  apply. (They also tag traces, but that's secondary.)
-- The **policy** supplies the rules — a [YAML file or signed WASM
-  bundle](/policy/wasm-bundles), loaded locally or from the platform.
+- The **end user's identity and role** are a decision input. Carried per request
+  via [`HexgateContext`](/concepts/user-scope), they select which role's rules
+  apply.
+- The **policy** supplies the rules: a [YAML file or signed WASM
+  bundle](/policy/wasm-bundles), loaded from the platform or locally.
 - Every decision is written to an [**audit trail**](/concepts/audit-trail): who
   called what, and whether it was allowed.
 
@@ -102,13 +121,26 @@ Two things feed the decision, and one thing records it:
               └───────────────┬────────────────┘
                               ▼
                 PolicyEnforcer.decide()  ◄──  policy
-                              ▼                (local YAML / bundle,
-              allow  ·  deny  ·  approval        or signed cloud bundle)
+                              ▼                (signed bundle from the platform,
+              allow  ·  deny  ·  approval        or local YAML / bundle)
                               │
                               ▼
-        audit log — who called what, and whether it was allowed
+        audit log: who called what, and whether it was allowed
 ```
 
-New here? [Install and see a policy decide a tool call](/quickstart) in 60
-seconds — no API keys — then [pick a path](/two-paths) between the local chat REPL
-and the platform-backed serve loop.
+## Where to next
+
+<CardGroup cols={2}>
+  <Card title="Follow the quickstart" icon="rocket" href="/quickstart">
+    Agent, policy, platform: the whole loop with one refund tool.
+  </Card>
+  <Card title="Author a policy" icon="shield" href="/policy/yaml-shape">
+    Roles, tools, modes and argument constraints: the full policy shape.
+  </Card>
+  <Card title="Request context and roles" icon="user" href="/concepts/user-scope">
+    How the end user's identity and role reach the decision at call time.
+  </Card>
+  <Card title="Pick a path" icon="route" href="/two-paths">
+    Local `hexgate chat` vs platform-backed `hexgate serve`.
+  </Card>
+</CardGroup>
