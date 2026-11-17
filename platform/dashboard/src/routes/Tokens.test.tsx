@@ -5,6 +5,8 @@
  */
 
 import { act, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useActive } from "@/lib/active";
@@ -125,5 +127,33 @@ describe("TokensPage — mint deep link", () => {
       await screen.findByRole("button", { name: /mint new api key/i }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("opens from the link when /tokens is already showing", async () => {
+    stubFetch([]);
+    function GoMint() {
+      const navigate = useNavigate();
+      return (
+        <button type="button" onClick={() => navigate("/tokens?mint=1&name=x")}>
+          go mint
+        </button>
+      );
+    }
+    const user = userEvent.setup();
+    renderWithProviders(
+      <>
+        <TokensPage />
+        <GoMint />
+      </>,
+      { initialRoute: "/tokens" },
+    );
+    await screen.findByRole("button", { name: /mint new api key/i });
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "go mint" }));
+    expect(
+      await screen.findByRole("dialog", { name: "Mint API key" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Name")).toHaveValue("x");
   });
 });

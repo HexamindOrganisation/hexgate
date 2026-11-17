@@ -1,11 +1,12 @@
 /**
  * The quickstart dialog: the platform half of docs/quickstart.mdx as six short
  * steps, each with the copy-paste code on one side and an animated sketch of
- * what happens on the other. Opened from the sidebar (and once, unprompted, on
- * an empty Agents page); open/seen state lives in the `useUi` store.
+ * what happens on the other. Opened from the sidebar and Home's "Get started"
+ * checklist, and once unprompted by Home for a project with no agents.
+ * Open/step/seen state lives in the `useUi` store.
  */
 
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
@@ -262,6 +263,7 @@ export function QuickstartDialog() {
   const setIndex = useUi((s) => s.setQuickstartStep);
   // Bumped by "Replay" so the scene remounts and its animation restarts.
   const [replay, setReplay] = useState(0);
+  const primaryRef = useRef<HTMLButtonElement>(null);
   const [framework, setFramework] = useState<Framework>("langchain");
 
   const step = STEPS[index];
@@ -281,7 +283,14 @@ export function QuickstartDialog() {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="flex h-[min(680px,92vh)] max-w-5xl flex-col gap-0 overflow-hidden p-0"
+        // Ligatures would render <= and == as glyphs that differ from what Copy
+        // puts on the clipboard.
+        className="flex h-[min(680px,92vh)] max-w-5xl flex-col gap-0 overflow-hidden p-0 [font-variant-ligatures:none]"
+        onOpenAutoFocus={(e) => {
+          // Land on the primary action rather than the first button (Replay).
+          e.preventDefault();
+          primaryRef.current?.focus();
+        }}
         onKeyDown={(e) => {
           // Arrow keys page through the steps unless focus is in a control
           // that uses them itself.
@@ -392,11 +401,20 @@ export function QuickstartDialog() {
             ))}
           </ol>
           {last ? (
-            <Button size="sm" onClick={() => close({ reset: true })}>
+            <Button
+              ref={primaryRef}
+              size="sm"
+              onClick={() => close({ reset: true })}
+            >
               Done
             </Button>
           ) : (
-            <Button size="sm" onClick={() => go(index + 1)} className="gap-1.5">
+            <Button
+              ref={primaryRef}
+              size="sm"
+              onClick={() => go(index + 1)}
+              className="gap-1.5"
+            >
               Next
               <ArrowRight className="size-3.5" />
             </Button>

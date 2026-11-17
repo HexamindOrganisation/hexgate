@@ -12,6 +12,7 @@ import {
 import { Link } from "react-router-dom";
 
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
+import { QUICKSTART_STEP } from "@/components/quickstart/content";
 import { GetStarted } from "@/components/quickstart/GetStarted";
 import { burstFilters, rankAnomalies } from "@/components/audit/anomalies";
 import { OUTCOME_SERIES } from "@/components/audit/chart-tokens";
@@ -224,6 +225,15 @@ export function HomePage() {
     retry: 1,
     refetchInterval: SLOW_MS,
   });
+  // Has this project ever recorded a decision? One row over the longest audit
+  // window, so a set-up project with a quiet week isn't sent back to "Get
+  // started". Only the checklist reads it.
+  const everQ = useQuery({
+    queryKey: ["audit", "list", pid, { window: "90d", limit: 1 }],
+    enabled: on,
+    queryFn: () => api.listAuditDecisions({ window: "90d", limit: 1 }, pid!),
+    refetchInterval: SLOW_MS,
+  });
   // Usage is best-effort: a member without access just doesn't get it.
   const usageQ = useQuery({
     queryKey: ["usage", "summary", pid, { window: "24h" }],
@@ -299,10 +309,7 @@ export function HomePage() {
   const hasAgent = agentsQ.isSuccess
     ? agents.some((a) => a.manifest)
     : undefined;
-  const hasDecision =
-    feedQ.isSuccess || weekQ.isSuccess
-      ? (feedQ.data?.rows.length ?? 0) > 0 || week.all > 0
-      : undefined;
+  const hasDecision = everQ.isSuccess ? everQ.data.rows.length > 0 : undefined;
 
   // A project with no agents is where the quickstart helps most: offer it
   // unprompted once (closing it sets quickstartSeen); the checklist stays.
@@ -310,7 +317,7 @@ export function HomePage() {
   const quickstartSeen = useUi((s) => s.quickstartSeen);
   const noAgents = agentsQ.isSuccess && agents.length === 0;
   useEffect(() => {
-    if (noAgents && !quickstartSeen) openQuickstart(0);
+    if (noAgents && !quickstartSeen) openQuickstart(QUICKSTART_STEP.idea);
   }, [noAgents, quickstartSeen, openQuickstart]);
 
   const maxAgentCalls = Math.max(
@@ -529,7 +536,7 @@ export function HomePage() {
               No decisions in the last 24 hours.{" "}
               <button
                 type="button"
-                onClick={() => openQuickstart(0)}
+                onClick={() => openQuickstart(QUICKSTART_STEP.idea)}
                 className="text-primary hover:underline"
               >
                 Getting started
@@ -604,7 +611,7 @@ export function HomePage() {
               <span className="font-mono">hexgate register</span>, or{" "}
               <button
                 type="button"
-                onClick={() => openQuickstart(2)}
+                onClick={() => openQuickstart(QUICKSTART_STEP.register)}
                 className="text-primary hover:underline"
               >
                 follow the quickstart

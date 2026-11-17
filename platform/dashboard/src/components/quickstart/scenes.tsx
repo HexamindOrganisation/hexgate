@@ -10,7 +10,13 @@ import type { CSSProperties, ReactNode } from "react";
 import { MousePointer2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { REGISTER, type Framework } from "@/components/quickstart/content";
+import {
+  POLICY_YAML,
+  REGISTER,
+  RUN_COMMAND,
+  RUN_OUTPUT,
+  type Framework,
+} from "@/components/quickstart/content";
 
 /** Delay (seconds) for a qs-* animation. */
 function d(seconds: number, extra?: Record<string, string | number>) {
@@ -191,13 +197,13 @@ export function IdeaScene() {
       role: "support",
       verdict: "deny" as const,
       label: "DENY",
-      why: "args.amount <= 50 failed",
+      why: "amount <= 50 failed",
     },
     {
       role: "billing",
       verdict: "allow" as const,
       label: "ALLOW",
-      why: "within args.amount <= 500",
+      why: "amount <= 500 passed",
     },
   ];
   return (
@@ -362,26 +368,11 @@ export function RegisterScene({ framework }: { framework: Framework }) {
 
 // ── Step 4 · policy on the platform ─────────────────────────────────────────
 
-const YAML_LINES: [string, string?][] = [
-  ["version: 1"],
-  ["roles:"],
-  ["  support:", "# small USD refunds"],
-  ["    default_policy: { mode: deny }"],
-  ["    tools:"],
-  ["      refund_order:"],
-  ["        mode: allow"],
-  ["        constraints:"],
-  ["          - args.amount <= 50"],
-  ['          - args.currency == "USD"'],
-  ["  billing:", "# larger, major currencies"],
-  ["    default_policy: { mode: deny }"],
-  ["    tools:"],
-  ["      refund_order:"],
-  ["        mode: allow"],
-  ["        constraints:"],
-  ["          - args.amount <= 500"],
-  ['          - args.currency in ["USD", "EUR"]'],
-];
+// The policy as typed into the editor, split into code and trailing comment.
+const YAML_LINES: [string, string?][] = POLICY_YAML.split("\n").map((l) => {
+  const hash = l.indexOf("#");
+  return hash < 0 ? [l] : [l.slice(0, hash).trimEnd(), l.slice(hash)];
+});
 
 function Editor({ children }: { children: ReactNode }) {
   return (
@@ -492,7 +483,7 @@ function AuditRow({
 }
 
 export function RunScene() {
-  const cmd = "python guarded_agent.py";
+  const cmd = RUN_COMMAND;
   return (
     <div className="flex h-full flex-col justify-center gap-3">
       <Term>
@@ -500,14 +491,31 @@ export function RunScene() {
         <span className="qs-type" style={typed(0.2, cmd)}>
           {cmd}
         </span>
-        <div className="qs-in mt-1" style={d(1.3)}>
-          <span className="text-red-400">[support]</span> I can't issue this
-          refund: $400 is above the $50 limit for your role.
-        </div>
-        <div className="qs-in" style={d(2)}>
-          <span className="text-emerald-400">[billing]</span> Done. I refunded
-          400.0 USD on order O-42.
-        </div>
+        {RUN_OUTPUT.split("\n").map((line, i) => {
+          const role = line.match(/^\[(\w+)\]/)?.[1];
+          return (
+            <div
+              key={i}
+              className={cn("qs-in whitespace-pre-wrap", i === 0 && "mt-1")}
+              style={d(1.3 + i * 0.35)}
+            >
+              {role ? (
+                <>
+                  <span
+                    className={
+                      role === "support" ? "text-red-400" : "text-emerald-400"
+                    }
+                  >
+                    [{role}]
+                  </span>
+                  {line.slice(role.length + 2)}
+                </>
+              ) : (
+                line
+              )}
+            </div>
+          );
+        })}
       </Term>
       <Win url="app.hexgate.ai/audit" active="Audit">
         <div className="text-xs font-semibold">Audit</div>
@@ -517,13 +525,13 @@ export function RunScene() {
         <AuditRow
           role="support"
           verdict="deny"
-          reason="refund_order(400, USD) · amount <= 50 failed"
+          reason="$400 · amount <= 50 failed"
           delay={2.6}
         />
         <AuditRow
           role="billing"
           verdict="allow"
-          reason="refund_order(400, USD) · all constraints passed"
+          reason="$400 · all constraints passed"
           delay={3}
         />
       </Win>
@@ -550,25 +558,33 @@ export function LiveScene() {
         </div>
         <Editor>
           <Line n={3}>
-            <span className="text-sky-300"> support:</span>
+            <span className="text-sky-300">{"  support:"}</span>
           </Line>
           <Line n={6}>
-            <span className="text-sky-300"> refund_order:</span>
+            <span className="text-sky-300">{"      refund_order:"}</span>
           </Line>
           <Line n={8}>
-            <span className="text-sky-300"> constraints:</span>
+            <span className="text-sky-300">{"        constraints:"}</span>
           </Line>
           <Swap
             from={
               <Line n={9} className="qs-out" style={d(0.6)}>
-                <span className="text-sky-300"> - args.amount {"<="} </span>
+                <span className="text-sky-300">
+                  {"          - args.amount <= "}
+                </span>
                 <span className="text-amber-300">50</span>
               </Line>
             }
             to={
-              <Line n={9} className="qs-in qs-mark" style={d(0.8)}>
-                <span className="text-sky-300"> - args.amount {"<="} </span>
-                <span className="text-amber-300">500</span>
+              <Line n={9} className="qs-in" style={d(0.8)}>
+                {/* Its own element: one animation per element, or qs-mark
+                    would override qs-in and show the line during its delay. */}
+                <span className="qs-mark" style={d(0.8)}>
+                  <span className="text-sky-300">
+                    {"          - args.amount <= "}
+                  </span>
+                  <span className="text-amber-300">500</span>
+                </span>
               </Line>
             }
           />

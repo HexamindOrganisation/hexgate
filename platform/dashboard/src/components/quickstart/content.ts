@@ -79,8 +79,13 @@ async def refund_as(role: str):
     )
     print(f"[{role}]", result["messages"][-1].content)
 
-asyncio.run(refund_as("support"))
-asyncio.run(refund_as("billing"))`,
+async def main():
+    # One event loop for both runs: the model clients cache their HTTP
+    # connections, which a second asyncio.run would find on a closed loop.
+    await refund_as("support")
+    await refund_as("billing")
+
+asyncio.run(main())`,
   openai: `import asyncio
 from dotenv import load_dotenv
 from hexgate.runtime import HexgateContext
@@ -99,8 +104,13 @@ async def refund_as(role: str):
     )
     print(f"[{role}]", result.final_output)
 
-asyncio.run(refund_as("support"))
-asyncio.run(refund_as("billing"))`,
+async def main():
+    # One event loop for both runs: the model clients cache their HTTP
+    # connections, which a second asyncio.run would find on a closed loop.
+    await refund_as("support")
+    await refund_as("billing")
+
+asyncio.run(main())`,
   adk: `import asyncio
 from dotenv import load_dotenv
 from google.adk.sessions import InMemorySessionService
@@ -121,8 +131,13 @@ async def refund_as(role: str):
         if event.is_final_response():
             print(f"[{role}]", event.content.parts[0].text)
 
-asyncio.run(refund_as("support"))
-asyncio.run(refund_as("billing"))`,
+async def main():
+    # One event loop for both runs: the model clients cache their HTTP
+    # connections, which a second asyncio.run would find on a closed loop.
+    await refund_as("support")
+    await refund_as("billing")
+
+asyncio.run(main())`,
   pydantic: `from dotenv import load_dotenv
 from hexgate.runtime import HexgateContext
 from hexgate.adapters.pydantic_ai import wrap_pydantic_agent

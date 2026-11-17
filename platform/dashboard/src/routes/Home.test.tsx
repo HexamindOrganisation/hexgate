@@ -283,4 +283,19 @@ describe("HomePage", () => {
     expect(await screen.findByText(/No agents yet/)).toBeInTheDocument();
     expect(useUi.getState().quickstartOpen).toBe(false);
   });
+
+  it("asks for one decision over 90 days to tick the decision step", async () => {
+    stub();
+    renderWithProviders(<HomePage />);
+    await screen.findByText(/of 3 done/);
+    const urls = vi.mocked(window.fetch).mock.calls.map(([u]) => String(u));
+    expect(
+      urls.some(
+        (u) =>
+          u.includes("/audit/decisions") &&
+          u.includes("window=90d") &&
+          u.includes("limit=1"),
+      ),
+    ).toBe(true);
+  });
 });

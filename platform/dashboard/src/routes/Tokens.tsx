@@ -161,14 +161,25 @@ function MintDialog({
   projectId: string;
   onSuccess: (token: TokenMintResponse) => void;
 }) {
-  // `?mint=1` (optionally `&name=…`) deep-links straight into this dialog —
-  // the quickstart and the empty Agents page link here. The params are read
-  // once, then stripped so a reload or Back doesn't reopen it.
+  // `?mint=1` (optionally `&name=…`) deep-links straight into this dialog;
+  // the quickstart and Home's "Get started" checklist link here. It must also
+  // work when /tokens is already mounted (navigating to it from the quickstart
+  // keeps this component), so the request is picked up while rendering rather
+  // than only in the initial state, then stripped from the URL so a reload or
+  // Back doesn't reopen it. `handled` resets once the params are gone, so the
+  // same link works again later.
   const [params, setParams] = useSearchParams();
-  const [open, setOpen] = useState(() => params.get("mint") === "1");
-  const [name, setName] = useState(() =>
-    params.get("mint") === "1" ? (params.get("name") ?? "") : "",
-  );
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const mintRequest = params.get("mint") === "1" ? params.toString() : null;
+  const [handled, setHandled] = useState<string | null>(null);
+  if (mintRequest !== handled) {
+    setHandled(mintRequest);
+    if (mintRequest) {
+      setOpen(true);
+      setName(params.get("name") ?? "");
+    }
+  }
   useEffect(() => {
     if (!params.has("mint") && !params.has("name")) return;
     setParams(
