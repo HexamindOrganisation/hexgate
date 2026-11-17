@@ -1,0 +1,34 @@
+[project]
+name = "hexgate-assistant"
+version = "0.1.0"
+description = "Hexgate policy assistant — chat over the platform's policy tools, in its own container"
+requires-python = ">=3.13"
+dependencies = [
+    # Both imported directly (starlette by the app, uvicorn by __main__), so
+    # pinned the same way platform/mcp pins them.
+    "starlette>=0.40",
+    "uvicorn>=0.32",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    # Starlette's TestClient.
+    "httpx>=0.27.1",
+    # Exactly the ruff the root uv.lock locks: `make lint` and `make fmt-check`
+    # run the root's over platform/assistant, `make assistant-check` runs this
+    # one, and two versions would one day disagree on the same file.
+    "ruff==0.15.12",
+]
+
+[tool.ruff.lint]
+# Declaring a [tool.ruff] table stops inheritance from the repo root, so
+# isort is re-enabled here to match it.
+extend-select = ["I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.uv]
+package = false

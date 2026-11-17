@@ -694,14 +694,14 @@ goes through `platform/clickhouse/migrations/`, applied by `make platform-migrat
 ## Published images
 
 Each real release (`release.yml`, target `pypi`) also publishes `hexgate-api`,
-`hexgate-mcp` and `hexgate-collector` to both `ghcr.io/hexamindorganisation/`
+`hexgate-mcp`, `hexgate-assistant` and `hexgate-collector` to both `ghcr.io/hexamindorganisation/`
 and Docker Hub's `docker.io/hexgate/` (one build, so the digest is the same in
 both), through `.github/workflows/docker-publish.yml` behind the
 `docker-release` environment's reviewers. Docker Hub needs that environment's
 `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets; GHCR needs none. The
 Docker Hub namespace is the `DOCKERHUB_NAMESPACE` repository variable,
 `hexgate` when unset. The first push creates each GHCR package private: make
-`hexgate-api`, `hexgate-mcp` and `hexgate-collector` public once (Organization →
+`hexgate-api`, `hexgate-mcp`, `hexgate-assistant` and `hexgate-collector` public once (Organization →
 Packages → the package → Package settings → Change visibility), or pulls are
 `denied`.
 
