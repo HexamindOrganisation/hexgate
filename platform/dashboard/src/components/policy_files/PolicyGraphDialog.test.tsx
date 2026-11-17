@@ -75,12 +75,13 @@ vi.mock("@xyflow/react", () => {
           );
         })}
         <svg>
-          {edgeList.map((ed) => {
+          {edgeList.map((ed, i) => {
             const Cmp = et[ed.type as string];
             return (
               <g
                 key={ed.id as string}
-                data-testid={`edge-${ed.id}`}
+                // By position: real ids are edge keys.
+                data-testid={`edge-e${i}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   (onEdgeClick as (ev: unknown, edge: unknown) => void)?.(
@@ -134,6 +135,7 @@ vi.mock("@xyflow/react", () => {
     Position: { Left: "left", Right: "right", Top: "top", Bottom: "bottom" },
     MarkerType: { ArrowClosed: "arrowclosed" },
     useReactFlow: () => flow,
+    useNodesInitialized: () => true,
   };
 });
 
@@ -590,6 +592,25 @@ describe("PolicyGraphDialog", () => {
     await userEvent.click(await screen.findByTestId("node-tool:t14"));
     // big's edge to t14 is drawn now, so its path through t14 is whole.
     expect(screen.queryByTestId("node-more:agent:big")).toBeNull();
+  });
+
+  it("finds each of two nodes that share a name", async () => {
+    stubGraph({
+      ...GRAPH,
+      nodes: [
+        ...GRAPH.nodes,
+        { id: "tool:search", kind: "tool", label: "search" },
+      ],
+    });
+    renderDialog();
+    await screen.findByTestId("node-agent:worker");
+    await userEvent.type(
+      screen.getByRole("combobox", { name: "Find a node" }),
+      "search · tool{Enter}",
+    );
+    expect(
+      await screen.findByRole("complementary", { name: "tool search" }),
+    ).toBeInTheDocument();
   });
 
   it("finds a node by name and can show only its paths", async () => {

@@ -22,6 +22,7 @@ import {
   Position,
   ReactFlow,
   ViewportPortal,
+  useNodesInitialized,
   useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -135,6 +136,8 @@ type EdgeData = Pick<
   verdict: PolicyGraphEdge["verdict"] | "mixed";
   /** The target's shape decides where the arrow stops. */
   targetKind: string;
+  /** Index in the drawn graph's edges (ids are stable keys, not indices). */
+  idx: number;
   /** Points the edge passes through (layout coordinates), so it routes
    * around nodes it doesn't touch. */
   bends?: { x: number; y: number }[];
@@ -369,7 +372,6 @@ function bentPath(
 /** Verdict-colored routed edge with a small kind/via label. Deny + handoff
  * render dashed; a denied edge is dimmed. */
 function PolicyEdge({
-  id,
   source,
   sourceX,
   sourceY,
@@ -380,7 +382,7 @@ function PolicyEdge({
   markerEnd,
 }: EdgeProps<Edge<EdgeData>>) {
   const focus = useContext(FocusCtx);
-  const idx = Number(id.slice(1)) || 0;
+  const idx = data?.idx ?? 0;
   const dimmed = focus.activeEdges ? !focus.activeEdges.has(idx) : false;
   const hovered = focus.hoverEdge === idx;
   const inFocus = focus.activeEdges ? focus.activeEdges.has(idx) : true;
@@ -741,21 +743,19 @@ function FitTo({
   onDone: () => void;
 }) {
   const flow = useReactFlow();
+  // True once React Flow has measured every drawn node, new ones included.
+  const measured = useNodesInitialized();
   useEffect(() => {
-    if (!id) return;
+    if (!id || !measured) return;
     // pin() unfolds in the same render, so a node still not drawn never will
     // be: drop the request rather than jump to it later.
     if (!shown.nodes.some((n) => n.id === id)) {
       onDone();
       return;
     }
-    // After React Flow has measured the new nodes.
-    const t = setTimeout(() => {
-      void flow.fitView({ nodes: [{ id }], duration: 300, maxZoom: 1.2 });
-      onDone();
-    }, 50);
-    return () => clearTimeout(t);
-  }, [id, shown, flow, onDone]);
+    void flow.fitView({ nodes: [{ id }], duration: 300, maxZoom: 1.2 });
+    onDone();
+  }, [id, shown, flow, onDone, measured]);
   return null;
 }
 
@@ -770,16 +770,23 @@ function FindNode({
   const [q, setQ] = useState("");
   const [missed, setMissed] = useState(false);
   const listId = useId();
-  const labels = useMemo(
-    () => [...new Set(graph.nodes.map((n) => n.label))],
-    [graph],
-  );
+  // One suggestion per node; a label two nodes share gets its kind, so each
+  // stays findable ("search · tool", "search · mcp").
+  const options = useMemo(() => {
+    const count = new Map<string, number>();
+    for (const n of graph.nodes)
+      count.set(n.label, (count.get(n.label) ?? 0) + 1);
+    return graph.nodes.map((n) => ({
+      id: n.id,
+      value: count.get(n.label)! > 1 ? `${n.label} · ${n.kind}` : n.label,
+    }));
+  }, [graph]);
   const find = () => {
     const t = q.trim().toLowerCase();
     if (!t) return;
     const hit =
-      graph.nodes.find((n) => n.label.toLowerCase() === t) ??
-      graph.nodes.find((n) => n.label.toLowerCase().includes(t));
+      options.find((o) => o.value.toLowerCase() === t) ??
+      options.find((o) => o.value.toLowerCase().includes(t));
     setMissed(!hit);
     if (hit) onFind(hit.id);
   };
@@ -804,8 +811,8 @@ function FindNode({
         className="w-44 bg-transparent font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground"
       />
       <datalist id={listId}>
-        {labels.map((l) => (
-          <option key={l} value={l} />
+        {options.map((o) => (
+          <option key={o.id} value={o.value} />
         ))}
       </datalist>
       {missed && (
@@ -849,7 +856,9 @@ export function PolicyFlow({
     pinnedId && collapsed.nodes.some((n) => n.id === pinnedId)
       ? pinnedId
       : null;
+  // A pin whose node stops being drawn is dropped, not revived later, and
   // "Only this path" belongs to a pin: losing the pin (any way) drops it.
+  if (pinnedId && !pinned) setPinned(null);
   if (isolated && !pinned) setIsolated(false);
   const shown: ShownGraph = useMemo(
     () => (isolated && pinned ? isolate(collapsed, pinned) : collapsed),
@@ -865,18 +874,39 @@ export function PolicyFlow({
     () => new Map(shown.nodes.map((n) => [n.id, n.kind])),
     [shown],
   );
+  // Ids keyed on the edge, not its index, so folding or isolating doesn't
+  // hand one edge's React Flow state to another.
+  const edgeIds = useMemo(() => {
+    const seen = new Map<string, number>();
+    return shown.edges.map((e) => {
+      const key = `${e.source}>${e.target}:${e.kind}:${e.via ?? ""}`;
+      const n = seen.get(key) ?? 0;
+      seen.set(key, n + 1);
+      return `${key}#${n}`;
+    });
+  }, [shown]);
+  // The edge card closes once its edge isn't drawn.
+  const shownSelected =
+    selected && (shown.edges as PolicyGraphEdge[]).includes(selected)
+      ? selected
+      : null;
   const folded = useMemo(
     () => collapsed.nodes.filter((n) => n.kind === "more").length,
     [collapsed],
   );
 
-  /** Unfold every agent that calls `id`, so a hidden tool gets drawn. */
+  /** Unfold the agents whose call to `id` is folded, so every caller's edge
+   * is drawn. Whether it unfolded anything (the layout then moves). */
   const reveal = (id: string) => {
-    const callers = graph.edges
+    const drawn = new Set(
+      collapsed.edges.filter((e) => e.target === id).map((e) => e.source),
+    );
+    const hidden = graph.edges
       .filter((e) => e.target === id && e.kind === "call")
-      .map((e) => e.source);
-    if (callers.some((a) => !expanded.has(a)))
-      setExpanded((x) => new Set([...x, ...callers]));
+      .map((e) => e.source)
+      .filter((a) => !drawn.has(a));
+    if (hidden.length) setExpanded((x) => new Set([...x, ...hidden]));
+    return hidden.length > 0;
   };
   const clearFit = useCallback(() => setFitTo(null), []);
   // Unfolding unmounts the "+N" node under the pointer, so its mouseleave
@@ -887,7 +917,8 @@ export function PolicyFlow({
   };
   /** Pin `id` with every caller's edge to it drawn, so its paths are whole. */
   const focusOn = (id: string) => {
-    reveal(id);
+    // Unfolding re-lays the graph out: follow the node so it stays in view.
+    if (reveal(id)) setFitTo(id);
     setPinned(id);
   };
   const pin = (id: string) => {
@@ -965,7 +996,7 @@ export function PolicyFlow({
   const edges: Edge<EdgeData>[] = useMemo(
     () =>
       shown.edges.map((e, i) => ({
-        id: `e${i}`,
+        id: edgeIds[i],
         source: e.source,
         target: e.target,
         type: "policy",
@@ -982,11 +1013,12 @@ export function PolicyFlow({
           constraints: e.constraints,
           roles: e.roles,
           targetKind: kindOf.get(e.target) ?? "tool",
+          idx: i,
           bends: lay.bends[i],
           endDy: lay.endDy[i],
         },
       })),
-    [shown, lay, kindOf],
+    [shown, lay, kindOf, edgeIds],
   );
 
   const ctxValue = useMemo<FocusValue>(
@@ -1004,7 +1036,7 @@ export function PolicyFlow({
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onEdgeClick={(_, edge) => {
-          const e = shown.edges[Number(edge.id.slice(1))];
+          const e = shown.edges[(edge.data as EdgeData).idx];
           if (!e) return;
           // An edge into "+N tools" opens them; it has no single verdict.
           if (e.target.startsWith(MORE_PREFIX)) expand(e.source);
@@ -1026,7 +1058,7 @@ export function PolicyFlow({
         onNodeMouseEnter={(_, node) => setHover({ node: node.id })}
         onNodeMouseLeave={() => setHover(null)}
         onEdgeMouseEnter={(_, edge) =>
-          setHover({ edge: Number(edge.id.slice(1)) })
+          setHover({ edge: (edge.data as EdgeData).idx })
         }
         onEdgeMouseLeave={() => setHover(null)}
         fitView
@@ -1108,12 +1140,12 @@ export function PolicyFlow({
             />
           )}
           {/* Stacked under the node panel so the two never overlap. */}
-          {selected && (
+          {shownSelected && (
             // Capped and scrolling like the node panel, so the two together
             // stay clear of the canvas bottom and the bypass warnings.
             <div className="max-h-[25vh] w-64 overflow-y-auto rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur">
               <div className="mb-2 flex items-center justify-between">
-                <VerdictTag verdict={selected.verdict} />
+                <VerdictTag verdict={shownSelected.verdict} />
                 <button
                   onClick={() => setSelected(null)}
                   className="text-muted-foreground hover:text-foreground"
@@ -1122,29 +1154,29 @@ export function PolicyFlow({
                 </button>
               </div>
               <div className="mb-1 text-foreground">
-                {labelOf(selected.source)}
+                {labelOf(shownSelected.source)}
                 <span className="text-muted-foreground/50">
                   {" "}
-                  {selected.kind === "reach"
-                    ? `→ ${selected.via} →`
-                    : selected.kind === "admission"
+                  {shownSelected.kind === "reach"
+                    ? `→ ${shownSelected.via} →`
+                    : shownSelected.kind === "admission"
                       ? "→ admits →"
                       : "→ calls →"}{" "}
                 </span>
-                {labelOf(selected.target)}
+                {labelOf(shownSelected.target)}
               </div>
-              {selected.roles.length > 0 && (
+              {shownSelected.roles.length > 0 && (
                 <div className="mb-2 text-[10px] text-muted-foreground">
-                  role{selected.roles.length > 1 ? "s" : ""}:{" "}
-                  {selected.roles.join(", ")}
+                  role{shownSelected.roles.length > 1 ? "s" : ""}:{" "}
+                  {shownSelected.roles.join(", ")}
                 </div>
               )}
-              {selected.constraints.length > 0 ? (
+              {shownSelected.constraints.length > 0 ? (
                 <div className="space-y-1">
                   <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
                     constraints
                   </div>
-                  {selected.constraints.map((c, i) => (
+                  {shownSelected.constraints.map((c, i) => (
                     <div
                       key={i}
                       className="rounded bg-muted px-2 py-1 text-[10.5px] text-foreground"

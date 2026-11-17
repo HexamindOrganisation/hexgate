@@ -53,6 +53,17 @@ describe("collapseTools", () => {
     );
   });
 
+  it("folds denied calls before allowed ones", () => {
+    const g = graph(20);
+    // a's first six calls are denied: they fold, the allowed ones show.
+    for (let i = 0; i < 6; i++) g.edges[i] = { ...g.edges[i], verdict: "deny" };
+    const shown = collapseTools(g, new Set(), 12, 6);
+    const drawn = shown.edges.filter(
+      (e) => e.source === "agent:a" && e.target.startsWith("tool:"),
+    );
+    expect(drawn.every((e) => e.verdict === "allow")).toBe(true);
+  });
+
   it("keeps a tool nothing may call", () => {
     const g = graph(20);
     g.nodes.push({ id: "mcp:orphan", kind: "mcp", label: "orphan" });

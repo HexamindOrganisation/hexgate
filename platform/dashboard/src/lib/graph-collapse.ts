@@ -15,7 +15,7 @@ export const TOOLS_PER_AGENT = 6;
 /** A graph as drawn: the policy graph plus fold nodes and their edges. */
 export type ShownNode =
   | PolicyGraphNode
-  | { id: string; kind: "more"; label: string; agent: string; count: number };
+  | { id: string; kind: "more"; label: string };
 export type ShownEdge =
   | PolicyGraphEdge
   | (Omit<PolicyGraphEdge, "verdict"> & { verdict: "mixed" });
@@ -41,20 +41,28 @@ export function collapseTools(
   const tools = graph.nodes.filter((n) => isTool(n.kind)).length;
   if (tools <= budget) return graph;
 
-  const seen = new Map<string, number>();
+  // Per agent, what it may call shows first and denials fold first, so the
+  // drawn edges never understate what the agent can reach.
+  const calls = new Map<string, PolicyGraphEdge[]>();
+  for (const e of graph.edges)
+    if (
+      e.kind === "call" &&
+      isTool(kind.get(e.target) ?? "") &&
+      !expanded.has(e.source)
+    )
+      push(calls, e.source, e);
+  const hidden = new Set<PolicyGraphEdge>();
   const folded = new Map<string, PolicyGraphEdge[]>();
-  const kept: ShownEdge[] = [];
-  for (const e of graph.edges) {
-    const toTool = e.kind === "call" && isTool(kind.get(e.target) ?? "");
-    if (!toTool || expanded.has(e.source)) {
-      kept.push(e);
-      continue;
+  for (const [agent, es] of calls) {
+    const ranked = [...es].sort(
+      (a, b) => Number(a.verdict === "deny") - Number(b.verdict === "deny"),
+    );
+    for (const e of ranked.slice(perAgent)) {
+      hidden.add(e);
+      push(folded, agent, e);
     }
-    const n = seen.get(e.source) ?? 0;
-    seen.set(e.source, n + 1);
-    if (n < perAgent) kept.push(e);
-    else push(folded, e.source, e);
   }
+  const kept: ShownEdge[] = graph.edges.filter((e) => !hidden.has(e));
   // A tool goes only when every edge to it was folded; one nothing may call
   // (no edges at all) stays, as it was before folding.
   const used = new Set(kept.flatMap((e) => [e.source, e.target]));
@@ -63,24 +71,22 @@ export function collapseTools(
     (n) => !isTool(n.kind) || used.has(n.id) || !touched.has(n.id),
   );
   const edges = [...kept];
-  for (const [agent, hidden] of folded) {
+  for (const [agent, es] of folded) {
     const id = `${MORE_PREFIX}${agent}`;
     nodes.push({
       id,
       kind: "more",
-      label: `+${hidden.length} tools`,
-      agent,
-      count: hidden.length,
+      label: `+${es.length} tools`,
     });
-    const verdicts = new Set(hidden.map((e) => e.verdict));
+    const verdicts = new Set(es.map((e) => e.verdict));
     edges.push({
       source: agent,
       target: id,
       kind: "call",
       via: null,
-      verdict: verdicts.size === 1 ? hidden[0].verdict : "mixed",
+      verdict: verdicts.size === 1 ? es[0].verdict : "mixed",
       constraints: [],
-      roles: [...new Set(hidden.flatMap((e) => e.roles))],
+      roles: [...new Set(es.flatMap((e) => e.roles))],
     });
   }
   return { nodes, edges, roles: graph.roles };

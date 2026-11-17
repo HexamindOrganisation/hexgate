@@ -34,6 +34,7 @@ vi.mock("@xyflow/react", () => {
     Position: { Top: "top", Bottom: "bottom", Left: "left", Right: "right" },
     MarkerType: { ArrowClosed: "arrowclosed" },
     useReactFlow: () => flow,
+    useNodesInitialized: () => true,
   };
 });
 
