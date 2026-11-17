@@ -4,8 +4,9 @@
 -- it needs nothing here.
 --
 -- Same conventions as 0002: guarded per table, idempotent, no REFERENCES
--- clause. Apply BEFORE deploying the code that reads them: without them every
--- route that loads an organization or a policy_file 500s on UndefinedColumn.
+-- clause. Apply BEFORE deploying the code that reads them: without them the API
+-- does not boot, because its startup seed reads the default organization and
+-- fails on UndefinedColumn.
 --
 -- Safe to run early. The old code never selects either column, and
 -- assistant_mode carries a DEFAULT, so an org the old code inserts after this

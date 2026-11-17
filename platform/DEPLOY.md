@@ -477,8 +477,9 @@ plane is fine.
 while the rest of the control plane is fine.
 
 `postgres/0006` is not scoped: the API's startup seed reads the default
-`organization` row, so a build that has the new `organization` column fails at
-boot with `UndefinedColumn` and never serves a request, bearer routes included.
+`organization` row, so a build whose model has the new column fails at boot
+against an unmigrated database, with `UndefinedColumn`, and never serves a
+request, bearer routes included.
 Run `make platform-migrate` before `platform-up`.
 
 The ClickHouse migrations fail differently again — not a 500 on the routes that
