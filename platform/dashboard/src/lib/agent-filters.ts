@@ -4,11 +4,6 @@
  * within a section widen the match; sections narrow it. Pure.
  */
 
-import type { PolicyGraph } from "./api";
-import { agentResolver } from "./agent-graph";
-import { runnersFrom } from "./agent-graph-view";
-import { push } from "./graph-layout";
-
 export type Activity = "deny" | "approval" | "quiet";
 export type Delegation = "reaches" | "called";
 
@@ -46,40 +41,6 @@ export type AgentFacts = {
    * isn't loaded: then the role filter keeps it. */
   runBy: Set<string> | null;
 };
-
-/** The roles that run each of `names`, from the project graph's admission
- * edges, resolved as agentSubgraph resolves an agent (its own node when the
- * policy declares it, else `*`'s); null for one no role gates. One pass over
- * the edges, however many agents. */
-export function rolesThatRun(
-  graph: PolicyGraph | undefined,
-  names: string[],
-): Map<string, Set<string> | null> {
-  const out = new Map<string, Set<string> | null>();
-  if (!graph) {
-    for (const n of names) out.set(n, null);
-    return out;
-  }
-  const admits = new Map<string, PolicyGraph["edges"]>();
-  for (const e of graph.edges)
-    if (e.kind === "admission") push(admits, e.target, e);
-  // With admissions anywhere, running is role-gated: an agent the policy
-  // can't place at all (no node, no `*`) is run by no role.
-  const gated = admits.size > 0;
-  const resolve = agentResolver(graph);
-  for (const name of names) {
-    const r = resolve(name);
-    if (!r) {
-      out.set(name, gated ? new Set() : null);
-      continue;
-    }
-    out.set(
-      name,
-      runnersFrom([...r.admitIds].flatMap((id) => admits.get(id) ?? [])),
-    );
-  }
-  return out;
-}
 
 export const ACTIVITY_LABEL: Record<Activity, string> = {
   deny: "Has denials",

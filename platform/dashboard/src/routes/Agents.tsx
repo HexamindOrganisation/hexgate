@@ -1,11 +1,12 @@
 import { useId, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, X } from "lucide-react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 
+import { matchesQuery, normalizeQuery } from "@/lib/search";
+import { useAgentManifests } from "@/lib/agent-manifests";
 import { agentReachMap } from "@/lib/agent-graph";
 import { usePolicyGraph } from "@/lib/policy_files";
-import { ApiError, api } from "@/lib/api";
+import { ApiError } from "@/lib/api";
 import { useProjectScoped } from "@/lib/active";
 import { Badge } from "@/components/ui/badge";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
@@ -22,8 +23,8 @@ import {
   activeCount,
   matches,
   ACTIVITY_LABEL,
-  rolesThatRun,
 } from "@/lib/agent-filters";
+import { rolesThatRun } from "@/lib/agent-graph-view";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatStrip, type Stat } from "@/components/ui/stat-strip";
 import { AGENT_LIST_CAP, agentHubPath } from "@/lib/agent-paths";
@@ -57,20 +58,7 @@ export function AgentsPage() {
     setFilters(NO_FILTERS);
     setQuery("");
   }
-  const manifests = useQuery({
-    queryKey: ["agent-manifests", scope.projectId],
-    queryFn: () => api.listAgentManifests(scope.projectId as string),
-    enabled: !!scope.projectId,
-  });
-  // Below the cap the toolbar is gone: drop its filters rather than keep
-  // ones nobody can see, which would come back when the list grows. (The
-  // name search just stops applying: it's still in the box when it returns.)
-  if (
-    activeCount(filters) > 0 &&
-    manifests.data &&
-    manifests.data.length <= AGENT_LIST_CAP
-  )
-    setFilters(NO_FILTERS);
+  const manifests = useAgentManifests(scope.projectId);
   // 24h activity per agent; shares Home's cache entry.
   const { summary, activityOf } = useAgentActivity24h(scope.projectId);
   // Agent-to-agent delegation, from the policy graph (a classic project's
@@ -206,11 +194,11 @@ export function AgentsPage() {
   // Only while the toolbar is there: filters left from a bigger project
   // mustn't hide rows they can no longer clear.
   const toolbar = agents.length > AGENT_LIST_CAP;
-  const q = toolbar ? query.trim().toLowerCase() : "";
+  const q = toolbar ? normalizeQuery(query) : "";
   const f = toolbar ? filters : NO_FILTERS;
   const keep = new Set(facts.filter((a) => matches(f, a)).map((a) => a.name));
   const shown = agents.filter(
-    (a) => keep.has(a.name) && (!q || a.name.toLowerCase().includes(q)),
+    (a) => keep.has(a.name) && matchesQuery(a.name, q),
   );
 
   return (
@@ -281,7 +269,8 @@ export function AgentsPage() {
       )}
       {filtering && (
         <AgentFilterDialog
-          facts={facts}
+          // What the name search already keeps, so its counts match the list.
+          facts={q ? facts.filter((a) => matchesQuery(a.name, q)) : facts}
           roles={graphKnown ? (graph.data?.roles ?? []) : []}
           activityKnown={!!summary.data}
           graphKnown={graphKnown}

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { PolicyGraph, PolicyGraphEdge } from "./api";
-import { compactAgentGraph, roleOptionsFor } from "./agent-graph-view";
+import {
+  compactAgentGraph,
+  roleOptionsFor,
+  rolesThatRun,
+} from "./agent-graph-view";
 
 const edge = (
   source: string,
@@ -115,22 +119,27 @@ describe("compactAgentGraph", () => {
 
 describe("roleOptionsFor", () => {
   it("says which roles run the agent", () => {
-    expect(roleOptionsFor(["r0", "r1"], runBy(2, 1))).toEqual([
+    expect(roleOptionsFor(["r0", "r1"], new Set(["r1"]))).toEqual([
       { name: "r0", runs: false },
       { name: "r1", runs: true },
     ]);
   });
 
   it("leaves 'runs' unknown when no role gates running it", () => {
-    expect(roleOptionsFor(["ops"], agentWith(1))[0].runs).toBeNull();
+    expect(roleOptionsFor(["ops"], null)[0].runs).toBeNull();
+  });
+});
+
+describe("rolesThatRun (gating)", () => {
+  it("lets no role run an agent with no admission once any agent has one", () => {
+    const g = runBy(1);
+    g.nodes.push({ id: "agent:b", kind: "agent", label: "b" });
+    g.declared_agents = ["a", "b"];
+    expect(rolesThatRun(g, ["b"]).get("b")?.size).toBe(0);
+    expect([...(rolesThatRun(g, ["a"]).get("a") ?? [])]).toEqual(["r0"]);
   });
 
-  it("lists every role, as edges don't say which ones matter", () => {
-    const g = agentWith(2);
-    g.edges[0] = { ...g.edges[0], roles: ["ops"] };
-    expect(roleOptionsFor(["ops", "guest"], g)).toEqual([
-      { name: "ops", runs: null },
-      { name: "guest", runs: null },
-    ]);
+  it("is null for every agent when nothing gates running", () => {
+    expect(rolesThatRun(agentWith(1), ["a"]).get("a")).toBeNull();
   });
 });

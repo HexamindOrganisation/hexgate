@@ -179,18 +179,26 @@ export function agentReachEdges(
 
 /** How many tools each agent may call (never through a denied edge), by
  * name: one index over `graph`, then a lookup per agent. */
-export function toolCounter(graph: PolicyGraph): (agent: string) => number {
+export type ToolCounts = { tools: number; mcpTools: number };
+
+export function toolCounter(graph: PolicyGraph): (agent: string) => ToolCounts {
   const resolve = agentResolver(graph);
   const kind = new Map(graph.nodes.map((n) => [n.id, n.kind]));
   const tools = new Map<string, Set<string>>();
+  const mcp = new Map<string, Set<string>>();
   for (const e of graph.edges) {
     const k = kind.get(e.target);
     if (e.kind !== "call" || e.verdict === "deny") continue;
-    if (k !== "tool" && k !== "mcp") continue;
-    add(tools, e.source, e.target);
+    if (k === "tool") add(tools, e.source, e.target);
+    if (k === "mcp") add(mcp, e.source, e.target);
   }
+  // Counted as agentReachCounts counts them, so a sub-agent's caption here
+  // matches its own hub.
   return (agent) => {
-    const r = resolve(agent);
-    return r ? (tools.get(r.sourceId)?.size ?? 0) : 0;
+    const id = resolve(agent)?.sourceId;
+    return {
+      tools: (id && tools.get(id)?.size) || 0,
+      mcpTools: (id && mcp.get(id)?.size) || 0,
+    };
   };
 }

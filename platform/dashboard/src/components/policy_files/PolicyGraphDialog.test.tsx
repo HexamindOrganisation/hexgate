@@ -235,7 +235,7 @@ const WORKER: PolicyGraph = {
 };
 
 const options = (over: Partial<AgentGraphOptions> = {}): AgentGraphOptions => ({
-  toolCount: () => 3,
+  toolCount: () => ({ tools: 3, mcpTools: 0 }),
   onOpenAgent: vi.fn(),
   onMoreRoles: vi.fn(),
   ...over,

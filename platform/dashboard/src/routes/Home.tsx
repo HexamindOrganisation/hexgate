@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { type ChartBucket, StackedBars } from "@/components/ui/charts";
 import { PageHeader } from "@/components/ui/page-header";
+import { useAgentManifests } from "@/lib/agent-manifests";
 import { useProjectScoped } from "@/lib/active";
 import {
   api,
@@ -207,10 +208,8 @@ export function HomePage() {
     queryFn: () => api.getAuditAnomalies({ window: "7d" }, pid!),
     refetchInterval: SLOW_MS,
   });
-  const agentsQ = useQuery({
-    queryKey: ["agent-manifests", pid],
+  const agentsQ = useAgentManifests(pid, {
     enabled: on,
-    queryFn: () => api.listAgentManifests(pid!),
     refetchInterval: SLOW_MS,
   });
   // Any member can read keys, so a failure is a real one: retried once (not

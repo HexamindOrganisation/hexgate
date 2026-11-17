@@ -1,12 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { PolicyGraph } from "./api";
-import {
-  type AgentFacts,
-  NO_FILTERS,
-  matches,
-  rolesThatRun,
-} from "./agent-filters";
+import { type AgentFacts, NO_FILTERS, matches } from "./agent-filters";
+import { rolesThatRun } from "./agent-graph-view";
 
 const facts = (over: Partial<AgentFacts> = {}): AgentFacts => ({
   name: "a",

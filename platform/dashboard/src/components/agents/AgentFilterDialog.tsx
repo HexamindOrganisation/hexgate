@@ -19,6 +19,7 @@ import {
   countWhere,
   matches,
 } from "@/lib/agent-filters";
+import { matchesQuery, normalizeQuery } from "@/lib/search";
 import { pluralise } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -62,8 +63,8 @@ export function AgentFilterDialog({
     [facts],
   );
   const shownRoles = useMemo(() => {
-    const q = roleQuery.trim().toLowerCase();
-    return q ? roles.filter((r) => r.toLowerCase().includes(q)) : roles;
+    const q = normalizeQuery(roleQuery);
+    return q ? roles.filter((r) => matchesQuery(r, q)) : roles;
   }, [roles, roleQuery]);
   const kept = facts.filter((a) => matches(f, a)).length;
   // Each option's count, once per agent list: typing in the role search

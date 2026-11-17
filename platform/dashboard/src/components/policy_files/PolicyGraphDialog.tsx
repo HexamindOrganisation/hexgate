@@ -20,6 +20,8 @@ import { Network, Play, X } from "lucide-react";
 
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { SearchField } from "@/components/ui/search-field";
+import { matchesQuery, normalizeQuery } from "@/lib/search";
+import type { ToolCounts } from "@/lib/agent-graph";
 import {
   compactAgentGraph,
   graphErrorOf,
@@ -557,7 +559,7 @@ function NodePanel({
   onClose: () => void;
   /** Set for a sub-agent: its tool count. This graph holds none of its own
    * edges, so its tools are counted, not listed. */
-  subTools?: number;
+  subTools?: string;
 }) {
   const node = graph.nodes.find((n) => n.id === id);
   if (!node) return null;
@@ -567,7 +569,7 @@ function NodePanel({
   const open = calls.filter((e) => e.verdict !== "deny");
   const summary =
     subTools !== undefined
-      ? `A sub-agent this agent reaches. It may call ${pluralise(subTools, "tool")}; its own graph shows them.`
+      ? `A sub-agent this agent reaches. It may call ${subTools}; its own graph shows them.`
       : node.kind === "agent"
         ? `Calls ${open.length} of ${pluralise(calls.length, "tool")} — ${
             open.filter((e) => e.constraints.length > 0).length
@@ -659,9 +661,9 @@ function GroupList({
 }) {
   const [query, setQuery] = useState("");
   const edges = groups.get(verdict) ?? [];
-  const q = query.trim().toLowerCase();
+  const q = normalizeQuery(query);
   const rows = q
-    ? edges.filter((e) => labelOf(e.target).toLowerCase().includes(q))
+    ? edges.filter((e) => matchesQuery(labelOf(e.target), q))
     : edges;
   return (
     <aside
@@ -741,10 +743,8 @@ function SubAgentList({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
-  const q = query.trim().toLowerCase();
-  const rows = reaches.filter(
-    (e) => !q || labelOf(e.target).toLowerCase().includes(q),
-  );
+  const q = normalizeQuery(query);
+  const rows = reaches.filter((e) => matchesQuery(labelOf(e.target), q));
   return (
     <aside
       aria-label="Sub-agents"
@@ -808,12 +808,24 @@ function SubAgentList({
   );
 }
 
+/** "4 tools, 2 MCP tools", as the agent's own hub says it. */
+function toolsCaption(c: ToolCounts): string {
+  return (
+    [
+      c.tools && pluralise(c.tools, "tool"),
+      c.mcpTools && pluralise(c.mcpTools, "MCP tool"),
+    ]
+      .filter(Boolean)
+      .join(", ") || "no tools"
+  );
+}
+
 /** What PolicyFlow needs to draw one agent's graph (from agentSubgraph, the
  * agent first): big agents group their tools by verdict, and the extra nodes
  * act on click. */
 export type AgentGraphOptions = {
   /** Tools a sub-agent may call, for its caption. */
-  toolCount: (agent: string) => number;
+  toolCount: (agent: string) => ToolCounts;
   /** A sub-agent was clicked: open its own graph. */
   onOpenAgent: (agent: string) => void;
   /** Whether a sub-agent has a page to open (`*` and agents the project
@@ -865,8 +877,12 @@ export function PolicyFlow({
   const pinned =
     pinnedId && shown.nodes.some((n) => n.id === pinnedId) ? pinnedId : null;
   const openGroup = group && view.tools.has(group) ? group : null;
-  // An edge card whose edge a refetch dropped closes for good.
-  if (selected && !shown.edges.includes(selected)) setSelected(null);
+  // An edge card whose edge a refetch dropped closes for good. By key, not
+  // identity: every recompute rebuilds the edge objects.
+  const edgeKey = (e: PolicyGraphEdge) =>
+    `${e.source}>${e.target}:${e.kind}:${e.via ?? ""}`;
+  if (selected && !shown.edges.some((e) => edgeKey(e) === edgeKey(selected)))
+    setSelected(null);
   const lay = useMemo(() => layeredLayout(shown), [shown]);
   const labelOf = useMemo(() => labelLookup(graph), [graph]);
   const kindOf = useMemo(
@@ -989,7 +1005,7 @@ export function PolicyFlow({
           // A sub-agent's caption: how many tools it may call.
           sub:
             toolCount && n.kind === "agent" && n.id !== self
-              ? pluralise(toolCount(n.label), "tool")
+              ? toolsCaption(toolCount(n.label))
               : undefined,
         },
         draggable: false,
@@ -1196,7 +1212,7 @@ export function PolicyFlow({
                     toolCount &&
                     pinned !== self &&
                     kindOf.get(pinned) === "agent"
-                      ? toolCount(labelOf(pinned))
+                      ? toolsCaption(toolCount(labelOf(pinned)))
                       : undefined
                   }
                 />

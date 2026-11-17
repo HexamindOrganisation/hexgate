@@ -15,6 +15,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { matchesQuery, normalizeQuery } from "@/lib/search";
 import type { RoleOption } from "@/lib/agent-graph-view";
 import { pluralise } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -76,11 +77,9 @@ export function RolePickerDialog({
     gated && runners > 0 && pickedRuns !== false,
   );
   const shown = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = normalizeQuery(query);
     return options.filter(
-      (o) =>
-        (!onlyRunners || o.runs !== false) &&
-        (!q || o.name.toLowerCase().includes(q)),
+      (o) => (!onlyRunners || o.runs !== false) && matchesQuery(o.name, q),
     );
   }, [options, onlyRunners, query]);
   const hidden = options.length - shown.length;

@@ -13,9 +13,9 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useQuery } from "@tanstack/react-query";
 
-import { api } from "@/lib/api";
+import { matchesQuery, normalizeQuery } from "@/lib/search";
+import { useAgentManifests } from "@/lib/agent-manifests";
 import { agentHubPath } from "@/lib/agent-paths";
 import { pluralise } from "@/lib/format";
 
@@ -32,18 +32,15 @@ export function AgentGraphPicker({
   const navigate = useNavigate();
   // The project's agents, each with a hub: not `*`, nor a name only an
   // unsaved draft adds.
-  const manifests = useQuery({
-    queryKey: ["agent-manifests", projectId],
-    queryFn: () => api.listAgentManifests(projectId),
-  });
+  const manifests = useAgentManifests(projectId);
   const agents = useMemo(
     () => (manifests.data ?? []).map((m) => m.name).sort(),
     [manifests.data],
   );
   const [query, setQuery] = useState("");
   const shown = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return q ? agents.filter((a) => a.toLowerCase().includes(q)) : agents;
+    const q = normalizeQuery(query);
+    return q ? agents.filter((a) => matchesQuery(a, q)) : agents;
   }, [agents, query]);
   const open = (name: string) => {
     onClose();

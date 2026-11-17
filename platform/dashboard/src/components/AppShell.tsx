@@ -44,9 +44,8 @@ import { CreateOrgDialog } from "@/components/CreateOrgDialog";
 import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { PreviewBanner } from "@/components/PreviewBanner";
 import { VerifyEmailBanner } from "@/components/VerifyEmailBanner";
-import { useQuery } from "@tanstack/react-query";
 
-import { api } from "@/lib/api";
+import { useAgentManifests } from "@/lib/agent-manifests";
 import { AGENT_LIST_CAP } from "@/lib/agent-paths";
 import { useActive, useProjectScoped } from "@/lib/active";
 import { useActiveBanCount, useCanManageBans } from "@/lib/bans";
@@ -293,11 +292,7 @@ function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
   const [open, setOpen] = useState(false);
   // useMatch decodes the name safely; a raw decode throws on a stray "%".
   const hubMatch = useMatch("/agents/:name/*");
-  const agents = useQuery({
-    queryKey: ["agent-manifests", projectId],
-    queryFn: () => api.listAgentManifests(projectId as string),
-    enabled: !!projectId && open && !collapsed,
-  });
+  const agents = useAgentManifests(projectId, { enabled: open && !collapsed });
 
   // Collapsed rail: no room for an inline list — just the icon link.
   if (collapsed) {

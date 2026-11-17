@@ -6,6 +6,7 @@
  */
 
 import { ApiError, type PolicyGraph, type PolicyGraphEdge } from "./api";
+import { agentResolver } from "./agent-graph";
 import { push } from "./graph-layout";
 
 /** Past this many tools, they're summarised by verdict instead of drawn. */
@@ -88,39 +89,52 @@ export function compactAgentGraph(
   };
 }
 
-/** The roles that run the agent of `sub` (its graph, the agent first), from
- * its admission edges; null when it has none (running it isn't gated). */
-export function runnersOf(sub: PolicyGraph): Set<string> | null {
-  const self = sub.nodes[0]?.id;
-  return runnersFrom(
-    sub.edges.filter((e) => e.kind === "admission" && e.target === self),
-  );
-}
-
-/** The roles an agent's admission edges let run it; null when it has none
- * (running it isn't gated). The one copy of this rule. */
-export function runnersFrom(admits: PolicyGraphEdge[]): Set<string> | null {
-  if (!admits.length) return null;
-  return new Set(
-    admits
-      .filter((e) => e.verdict !== "deny")
-      .map((e) => e.source.slice("role:".length)),
-  );
+/** The roles that run each of `names`, as the engine admits them: when the
+ * policy gates running agents by role anywhere (it has admission edges),
+ * every agent is gated, so one with no admission of its own, or none the
+ * policy can place, is run by no role. With no admission anywhere, null:
+ * running isn't gated. Agents resolve as agentSubgraph resolves them. The one
+ * copy of this rule: the hub's role picker and the /agents filter both read
+ * it. */
+export function rolesThatRun(
+  graph: PolicyGraph | undefined,
+  names: string[],
+): Map<string, Set<string> | null> {
+  const out = new Map<string, Set<string> | null>();
+  const admits = new Map<string, PolicyGraphEdge[]>();
+  for (const e of graph?.edges ?? [])
+    if (e.kind === "admission") push(admits, e.target, e);
+  if (!graph || admits.size === 0) {
+    for (const n of names) out.set(n, null);
+    return out;
+  }
+  const resolve = agentResolver(graph);
+  for (const name of names) {
+    const ids = resolve(name)?.admitIds ?? new Set<string>();
+    out.set(
+      name,
+      new Set(
+        [...ids]
+          .flatMap((id) => admits.get(id) ?? [])
+          .filter((e) => e.verdict !== "deny")
+          .map((e) => e.source.slice("role:".length)),
+      ),
+    );
+  }
+  return out;
 }
 
 /** A role in the picker, and whether it runs the agent (null when no role
  * gates running it). */
 export type RoleOption = { name: string; runs: boolean | null };
 
-/** Every role in the project, as the role picker lists them for one agent;
- * `sub` is that agent's graph from the unfiltered project graph. */
+/** Every role in the project, as the role picker lists them for one agent,
+ * given the roles that run it (rolesThatRun). Every role, because which ones
+ * change what it may do isn't in the graph (#486). */
 export function roleOptionsFor(
   roles: string[],
-  sub: PolicyGraph,
+  runners: Set<string> | null,
 ): RoleOption[] {
-  // Every role: which ones change what it may do isn't in the graph
-  // (each edge keeps only its most permissive roles, #486).
-  const runners = runnersOf(sub);
   return roles.map((name) => ({
     name,
     runs: runners ? runners.has(name) : null,

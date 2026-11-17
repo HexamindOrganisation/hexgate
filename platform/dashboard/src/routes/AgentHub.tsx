@@ -31,6 +31,7 @@ import {
   usePolicyGraph,
   usePolicyMatrix,
 } from "@/lib/policy_files";
+import { useAgentManifests } from "@/lib/agent-manifests";
 import { isModular } from "@/lib/file_tree";
 import { roleModesOf, type RoleMode } from "@/lib/role-modes";
 import { useProjectScoped } from "@/lib/active";
@@ -47,6 +48,7 @@ import {
 import {
   graphErrorOf,
   roleOptionsFor,
+  rolesThatRun,
   type GraphError,
 } from "@/lib/agent-graph-view";
 import { agentHubPath } from "@/lib/agent-paths";
@@ -107,11 +109,7 @@ export function AgentHub() {
   const { name } = useParams<{ name: string }>();
   const scope = useProjectScoped();
 
-  const manifests = useQuery({
-    queryKey: ["agent-manifests", scope.projectId],
-    queryFn: () => api.listAgentManifests(scope.projectId as string),
-    enabled: !!scope.projectId,
-  });
+  const manifests = useAgentManifests(scope.projectId);
   const agent = manifests.data?.find((m) => m.name === name) ?? null;
 
   // 24h activity, by the same rule as Home and /agents.
@@ -199,13 +197,22 @@ export function AgentHub() {
       : null
     : graphError;
   const roleOptions = useMemo(
-    () => (graph && subgraph ? roleOptionsFor(graph.roles, subgraph) : []),
-    [graph, subgraph],
+    () =>
+      graph && agent
+        ? roleOptionsFor(
+            graph.roles,
+            rolesThatRun(graph, [agent.name]).get(agent.name) ?? null,
+          )
+        : [],
+    [graph, agent],
   );
   const navigate = useNavigate();
   // One index per graph, then a lookup per sub-agent.
   const toolCount = useMemo(
-    () => (projectGraph ? toolCounter(projectGraph) : () => 0),
+    () =>
+      projectGraph
+        ? toolCounter(projectGraph)
+        : () => ({ tools: 0, mcpTools: 0 }),
     [projectGraph],
   );
   const graphOptions = useMemo<AgentGraphOptions | null>(
@@ -364,10 +371,7 @@ export function AgentHub() {
             reachError: graphError,
             openAnyGraph:
               scope.projectId && subgraph && subgraph.nodes.length > 1
-                ? () => {
-                    setRole(null);
-                    setGraphOpen(true);
-                  }
+                ? () => setGraphOpen(true)
                 : null,
             classic: !!policyFiles.data && !modular,
             playgroundLive,
