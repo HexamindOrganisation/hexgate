@@ -564,14 +564,20 @@ class PolicyCheckResponse(BaseModel):
 class PolicyFileRead(BaseModel):
     name: str  # e.g. "policy.yaml", "caps/refunds.yaml"
     content: str
-    content_hash: str
+    content_hash: str  # hash of the parsed YAML: formatting and comments don't move it
+    text_hash: str  # sha256 of the stored text: any edit moves it
     updated_at: datetime
 
 
 class PolicyFileWrite(BaseModel):
-    """Body for upserting a policy file. The name comes from the URL."""
+    """Body for upserting a policy file. The name comes from the URL.
+
+    ``base_hash`` is the ``text_hash`` the caller read. When given and different
+    from the stored file's, the write is refused as stale; absent, it is not
+    checked."""
 
     content: str
+    base_hash: str | None = None
 
 
 class PolicyFileDraft(BaseModel):

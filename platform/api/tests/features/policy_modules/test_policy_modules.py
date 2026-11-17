@@ -2353,3 +2353,86 @@ async def test_when_an_agent_re_registers_then_its_latest_manifest_is_used(
             )
         manifests = await asvc.latest_manifests(s, DEFAULT_PROJECT_ID, ["bot"])
     assert [g.name for g in manifests["bot"].guards] == ["new_guard"]
+
+
+def test_when_a_comment_changes_then_text_hash_moves_and_content_hash_does_not(
+    client: TestClient,
+) -> None:
+    pid = _project(client)
+    first = _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    second = _put_file(
+        client, pid, "policy.yaml", "# why\ntools: { a: { mode: allow } }\n"
+    )
+    assert first.json()["content_hash"] == second.json()["content_hash"]
+    assert first.json()["text_hash"] != second.json()["text_hash"]
+    listed = client.get(f"/v1/projects/{pid}/policy-files").json()
+    assert listed[0]["text_hash"] == second.json()["text_hash"]
+
+
+def test_put_file_with_current_base_hash_happy_path(client: TestClient) -> None:
+    pid = _project(client)
+    read = _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    r = client.put(
+        f"/v1/projects/{pid}/policy-files/policy.yaml",
+        json={
+            "content": "tools: { a: { mode: approval_required } }\n",
+            "base_hash": read.json()["text_hash"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert "approval_required" in r.json()["content"]
+
+
+def test_when_base_hash_is_stale_then_409_stale_and_nothing_is_written(
+    client: TestClient,
+) -> None:
+    pid = _project(client)
+    read = _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    # a comment-only edit by someone else: content_hash is unchanged, text_hash is not
+    _put_file(client, pid, "policy.yaml", "# edit\ntools: { a: { mode: allow } }\n")
+    r = client.put(
+        f"/v1/projects/{pid}/policy-files/policy.yaml",
+        json={
+            "content": "tools: { a: { mode: approval_required } }\n",
+            "base_hash": read.json()["text_hash"],
+        },
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"] == {"code": "stale"}
+    stored = client.get(f"/v1/projects/{pid}/policy-files").json()[0]["content"]
+    assert stored == "# edit\ntools: { a: { mode: allow } }\n"
+
+
+def test_when_base_hash_is_given_for_a_missing_file_then_409_stale(
+    client: TestClient,
+) -> None:
+    pid = _project(client)
+    r = client.put(
+        f"/v1/projects/{pid}/policy-files/policy.yaml",
+        json={"content": "tools: { a: { mode: allow } }\n", "base_hash": "0" * 64},
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"] == {"code": "stale"}
+    assert client.get(f"/v1/projects/{pid}/policy-files").json() == []
+
+
+def test_put_file_without_base_hash_happy_path(client: TestClient) -> None:
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    r = _put_file(
+        client, pid, "policy.yaml", "tools: { a: { mode: approval_required } }\n"
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_when_base_hash_is_stale_and_content_is_invalid_then_409_stale_wins(
+    client: TestClient,
+) -> None:
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    r = client.put(
+        f"/v1/projects/{pid}/policy-files/policy.yaml",
+        json={"content": "tools: [not, a, mapping\n", "base_hash": "0" * 64},
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"] == {"code": "stale"}

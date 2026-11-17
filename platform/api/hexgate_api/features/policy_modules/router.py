@@ -88,6 +88,7 @@ def _file_read(row: PolicyFile) -> PolicyFileRead:
         name=row.name,
         content=row.content,
         content_hash=row.content_hash,
+        text_hash=service.text_hash(row.content),
         updated_at=row.updated_at,
     )
 
@@ -381,9 +382,15 @@ async def api_put_policy_file(
     session: AsyncSession = Depends(get_session),
 ) -> PolicyFileRead:
     """Create or replace one file. 422 if the content isn't a valid compose
-    document; 409 if, with this file, the project no longer resolves."""
+    document; 409 if, with this file, the project no longer resolves; 409
+    ``{"code": "stale"}`` if ``base_hash`` is given and the stored file changed."""
     caller, _member = membership
     async with project_lock(project_id):
+        prev = await service.get_file(session, project_id, name)
+        if body.base_hash is not None and (
+            prev is None or body.base_hash != service.text_hash(prev.content)
+        ):
+            raise HTTPException(status_code=409, detail={"code": "stale"})
         # Validate BEFORE writing (like the module PUT). Structural validity first
         # (422 — malformed compose document), then whether the project still
         # resolves with this file (409), so agents never hold a broken bundle.
@@ -391,7 +398,6 @@ async def api_put_policy_file(
             service.validate_compose_file(body.content)
         except service.InvalidModuleError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        prev = await service.get_file(session, project_id, name)
         prev_hash = prev.content_hash if prev else None
         was_modular = await service.is_modular(session, project_id)
         ok, detail = await service.project_resolves_with_file(
