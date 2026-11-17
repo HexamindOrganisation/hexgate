@@ -67,6 +67,7 @@ connection lacks. To change what a client may do, revoke it and connect again.
 | `policy_dry_run` | `policy:read` | Would this call be allowed, for a role and an agent, optionally against drafts. |
 | `policy_diff` | `policy:read` | What unsaved draft files would change against the saved policy: each agent, role and tool whose grant differs, before and after. |
 | `policy_coverage` | `policy:read` | Each agent's policy gaps: the manifest tools a role leaves to a default looser than deny or no rule names, and the sub-agents no rule names, for every agent or one. |
+| `policy_search_similar` | `policy:read` | The registered agents closest to one agent by shared tool names, words in tool names and roles, each with why it ranked and whether it has a policy to start from. |
 | `policy_save` | `policy:write` | Create or replace one policy file. Nothing is saved if the result is invalid. |
 | `policy_reference` | none | The policy documentation, so the client can learn the format. |
 
