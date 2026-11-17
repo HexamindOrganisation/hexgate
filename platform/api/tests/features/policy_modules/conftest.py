@@ -49,3 +49,32 @@ async def client(session_factory, tmp_path) -> TestClient:
     finally:
         app.dependency_overrides.clear()
         keystore_mod.keystore = original_keystore
+
+
+def _project(client: TestClient) -> str:
+    """Sign up (=> org owner), create a project, return its id."""
+    client.post(
+        "/v1/auth/register",
+        json={"email": "pol@example.com", "password": "correcthorsebattery"},
+    )
+    client.post(
+        "/v1/auth/cookie/login",
+        data={"username": "pol@example.com", "password": "correcthorsebattery"},
+    )
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    r = client.post(f"/v1/orgs/{org_id}/projects", json={"name": "modular"})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def _put_module(client, pid, tier, path, content) -> None:
+    r = client.put(
+        f"/v1/projects/{pid}/policy-modules/{tier}/{path}", json={"content": content}
+    )
+    assert r.status_code == 200, r.text
+
+
+def _put_file(client, pid, name, content):
+    return client.put(
+        f"/v1/projects/{pid}/policy-files/{name}", json={"content": content}
+    )

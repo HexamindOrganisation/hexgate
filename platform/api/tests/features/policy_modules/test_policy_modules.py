@@ -17,6 +17,7 @@ import yaml
 from fastapi.testclient import TestClient
 from sqlmodel import select
 
+from tests.features.policy_modules.conftest import _project, _put_file, _put_module
 from hexgate_api.constants import DEFAULT_USER_ID
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.features.policy_modules import service as svc
@@ -35,29 +36,6 @@ BOUNDARY = (
 )
 READ_ONLY = "tools:\n  view_orders: { mode: allow }\n"
 PAYMENTS = "tools:\n  refund_order: { mode: allow }\n"
-
-
-def _project(client: TestClient) -> str:
-    """Sign up (=> org owner), create a project, return its id."""
-    client.post(
-        "/v1/auth/register",
-        json={"email": "pol@example.com", "password": "correcthorsebattery"},
-    )
-    client.post(
-        "/v1/auth/cookie/login",
-        data={"username": "pol@example.com", "password": "correcthorsebattery"},
-    )
-    org_id = client.get("/v1/orgs").json()[0]["id"]
-    r = client.post(f"/v1/orgs/{org_id}/projects", json={"name": "modular"})
-    assert r.status_code == 201, r.text
-    return r.json()["id"]
-
-
-def _put_module(client, pid, tier, path, content) -> None:
-    r = client.put(
-        f"/v1/projects/{pid}/policy-modules/{tier}/{path}", json={"content": content}
-    )
-    assert r.status_code == 200, r.text
 
 
 def _seed_bundle(client, pid) -> None:
@@ -1053,12 +1031,6 @@ async def test_resolves_false_on_unparseable_stored_module(session_factory) -> N
 
 
 # --- compose file store (entry-file + import graph) --------------------------
-
-
-def _put_file(client, pid, name, content):
-    return client.put(
-        f"/v1/projects/{pid}/policy-files/{name}", json={"content": content}
-    )
 
 
 def test_put_and_list_policy_files(client):
