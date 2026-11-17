@@ -676,9 +676,10 @@ async def api_policy_similar_agents(
         has_manifest, matches = await similar.similar_agents(
             session, project_id, agent, limit
         )
-    except similar.UnknownAgentError as exc:
+    except service.UnknownAgentError as exc:
         raise HTTPException(
-            status_code=404, detail=f"agent {agent!r} is not registered"
+            status_code=404,
+            detail=f"agent {exc.args[0]!r} is not registered in this project",
         ) from exc
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

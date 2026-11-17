@@ -61,10 +61,6 @@ _GENERIC_VERBS = frozenset(
 )  # fmt: skip
 
 
-class UnknownAgentError(Exception):
-    """The agent to compare against is not registered in the project (→ 404)."""
-
-
 @dataclass(frozen=True)
 class Profile:
     """What an agent is compared on."""
@@ -228,14 +224,14 @@ async def similar_agents(
 ) -> tuple[bool, list[SimilarAgentOut]]:
     """Whether ``agent`` has a registered manifest, and the other registered
     agents with any signal in common, best first (ties by name), at most
-    ``limit``. Raises :class:`UnknownAgentError` for an agent that is not
+    ``limit``. Raises :class:`service.UnknownAgentError` for an agent that is not
     registered, and the SDK's compose errors when a project's entry file does
     not resolve."""
     from hexgate_api.features.agents.service import latest_manifests
 
     policies = await _agent_policies(session, project_id)
     if agent not in policies:
-        raise UnknownAgentError(agent)
+        raise service.UnknownAgentError(agent)
     manifests = await latest_manifests(session, project_id)
     profiles = {
         name: Profile.of(manifests.get(name), policy.roles)

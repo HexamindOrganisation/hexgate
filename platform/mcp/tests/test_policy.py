@@ -726,7 +726,7 @@ def test_policy_search_similar_happy_path(token):
 
 
 def test_when_agent_is_unknown_then_policy_search_similar_carries_the_404(token):
-    detail = "agent 'ghost' is not registered"
+    detail = "agent 'ghost' is not registered in this project"
     mock_api()
     respx.get(f"{API_URL}{BASE}/policy/similar-agents").respond(
         404, json={"detail": detail}
