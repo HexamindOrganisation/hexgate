@@ -2,6 +2,7 @@ import { act, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useActive } from "@/lib/active";
+import { useUi } from "@/lib/ui";
 import { HomePage } from "@/routes/Home";
 import { renderWithProviders } from "@/test/render";
 
@@ -107,6 +108,7 @@ function stall(path: string) {
 describe("HomePage", () => {
   beforeEach(() => {
     act(() => useActive.setState({ activeOrgId: "o1", activeProjectId: "p1" }));
+    useUi.setState({ quickstartOpen: false, quickstartSeen: false });
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -232,5 +234,53 @@ describe("HomePage", () => {
     expect(
       await screen.findByText("Nothing needs a look right now."),
     ).toBeInTheDocument();
+  });
+
+  it("shows the setup checklist while the project has no API key", async () => {
+    stub();
+    renderWithProviders(<HomePage />);
+    expect(await screen.findByText(/2 of 3 done/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /mint a key/i })).toHaveAttribute(
+      "href",
+      "/tokens?mint=1",
+    );
+  });
+
+  it("hides the checklist once a key, an agent and a decision exist", async () => {
+    stub({
+      "/v1/projects/p1/tokens": [
+        {
+          id: "k1",
+          name: "prod",
+          masked: "fty_live_…abcd",
+          scopes: [],
+          created_at: new Date(NOW).toISOString(),
+          last_used_at: new Date(NOW).toISOString(),
+          created_by_user_id: null,
+          created_by_email: null,
+          owner_user_id: null,
+          owner_email: null,
+        },
+      ],
+    });
+    renderWithProviders(<HomePage />);
+    expect(await screen.findByText(/refund_order/)).toBeInTheDocument();
+    // "Checking…" clears only once the keys (and every other signal) land.
+    await waitFor(() => expect(screen.queryByText("Checking…")).toBeNull());
+    expect(screen.queryByText(/of 3 done/)).toBeNull();
+  });
+
+  it("offers the quickstart once when the project has no agents", async () => {
+    stub({ "/v1/projects/p1/agents/manifest": [] });
+    renderWithProviders(<HomePage />);
+    await waitFor(() => expect(useUi.getState().quickstartOpen).toBe(true));
+  });
+
+  it("doesn't reopen the quickstart once it has been seen", async () => {
+    useUi.setState({ quickstartSeen: true });
+    stub({ "/v1/projects/p1/agents/manifest": [] });
+    renderWithProviders(<HomePage />);
+    expect(await screen.findByText(/No agents yet/)).toBeInTheDocument();
+    expect(useUi.getState().quickstartOpen).toBe(false);
   });
 });

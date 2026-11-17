@@ -13,6 +13,7 @@ import {
   Monitor,
   Moon,
   PanelLeft,
+  Rocket,
   Plug,
   Scale,
   ScrollText,
@@ -36,6 +37,7 @@ import {
 import { OrgProjectSwitcher } from "@/components/OrgProjectSwitcher";
 import { CreateOrgDialog } from "@/components/CreateOrgDialog";
 import { CreateProjectDialog } from "@/components/CreateProjectDialog";
+import { QuickstartDialog } from "@/components/quickstart/QuickstartDialog";
 import { PreviewBanner } from "@/components/PreviewBanner";
 import { VerifyEmailBanner } from "@/components/VerifyEmailBanner";
 import { useQuery } from "@tanstack/react-query";
@@ -557,6 +559,7 @@ export function AppShell() {
           </div>
         </nav>
 
+        {!inSettings && <QuickstartButton collapsed={sidebarCollapsed} />}
         <AccountChip collapsed={sidebarCollapsed} />
       </aside>
 
@@ -576,6 +579,30 @@ export function AppShell() {
         open={createProjectOpen}
         onOpenChange={setCreateProjectOpen}
       />
+      <QuickstartDialog />
+    </div>
+  );
+}
+
+/** Sidebar entry that opens the quickstart dialog (rendered at shell level). */
+function QuickstartButton({ collapsed }: { collapsed: boolean }) {
+  const openQuickstart = useUi((s) => s.openQuickstart);
+  return (
+    <div className="px-2">
+      <button
+        type="button"
+        onClick={() => openQuickstart()}
+        title={collapsed ? "Quickstart" : undefined}
+        aria-label={collapsed ? "Quickstart" : undefined}
+        className={cn(
+          "flex h-9 w-full items-center gap-2.5 rounded-lg text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          collapsed ? "justify-center px-0" : "px-2.5",
+        )}
+      >
+        <Rocket className="size-4 shrink-0" />
+        {!collapsed && "Quickstart"}
+      </button>
     </div>
   );
 }

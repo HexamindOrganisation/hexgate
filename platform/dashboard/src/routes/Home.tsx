@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -12,6 +12,7 @@ import {
 import { Link } from "react-router-dom";
 
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
+import { GetStarted } from "@/components/quickstart/GetStarted";
 import { burstFilters, rankAnomalies } from "@/components/audit/anomalies";
 import { OUTCOME_SERIES } from "@/components/audit/chart-tokens";
 import { argsPreview } from "@/components/audit/fmt";
@@ -33,6 +34,7 @@ import { agentHubPath } from "@/lib/agent-paths";
 import { denyRatePct, useAgentActivity24h } from "@/lib/audit-summary";
 import { fmtTokens, formatRelative, pluralise } from "@/lib/format";
 import { isStaleKey, STALE_KEY_DAYS } from "@/lib/keys";
+import { useUi } from "@/lib/ui";
 import { useNow } from "@/lib/use-now";
 import { cn } from "@/lib/utils";
 
@@ -292,6 +294,25 @@ export function HomePage() {
     };
   }, [weekQ.data]);
 
+  // The "Get started" checklist's signals; undefined until known.
+  const hasKey = tokensQ.isSuccess ? tokensQ.data.length > 0 : undefined;
+  const hasAgent = agentsQ.isSuccess
+    ? agents.some((a) => a.manifest)
+    : undefined;
+  const hasDecision =
+    feedQ.isSuccess || weekQ.isSuccess
+      ? (feedQ.data?.rows.length ?? 0) > 0 || week.all > 0
+      : undefined;
+
+  // A project with no agents is where the quickstart helps most: offer it
+  // unprompted once (closing it sets quickstartSeen); the checklist stays.
+  const openQuickstart = useUi((s) => s.openQuickstart);
+  const quickstartSeen = useUi((s) => s.quickstartSeen);
+  const noAgents = agentsQ.isSuccess && agents.length === 0;
+  useEffect(() => {
+    if (noAgents && !quickstartSeen) openQuickstart(0);
+  }, [noAgents, quickstartSeen, openQuickstart]);
+
   const maxAgentCalls = Math.max(
     ...agents.map((a) => activityOf(a.name)?.all ?? 0),
     1,
@@ -336,6 +357,12 @@ export function HomePage() {
             </Button>
           </>
         }
+      />
+
+      <GetStarted
+        hasKey={hasKey}
+        hasAgent={hasAgent}
+        hasDecision={hasDecision}
       />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
@@ -500,10 +527,13 @@ export function HomePage() {
           ) : (
             <PanelNote>
               No decisions in the last 24 hours.{" "}
-              {/* A deep link into an empty project: a clean slate. */}
-              <Link to={auditUrl()} className="text-primary hover:underline">
+              <button
+                type="button"
+                onClick={() => openQuickstart(0)}
+                className="text-primary hover:underline"
+              >
                 Getting started
-              </Link>
+              </button>
             </PanelNote>
           )}
         </Panel>
@@ -571,7 +601,15 @@ export function HomePage() {
           ) : (
             <PanelNote>
               No agents yet. Register one with{" "}
-              <span className="font-mono">hexgate register</span>.
+              <span className="font-mono">hexgate register</span>, or{" "}
+              <button
+                type="button"
+                onClick={() => openQuickstart(2)}
+                className="text-primary hover:underline"
+              >
+                follow the quickstart
+              </button>
+              .
             </PanelNote>
           )}
         </Panel>
