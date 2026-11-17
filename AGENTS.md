@@ -14,6 +14,7 @@ platform/api/         # FastAPI control plane (separate uv project)
 platform/api/tests/   # API tests
 platform/collector/   # OTLP ingestion Collector (Go)
 platform/mcp/         # MCP server (FastMCP, own uv project; never imports hexgate_api)
+platform/assistant/   # Policy assistant service (Starlette, own uv project)
 platform/dashboard/   # React/Vite frontend
 tests/                # hexgate package tests (agents, cli, security, tracing, streaming…)
 
