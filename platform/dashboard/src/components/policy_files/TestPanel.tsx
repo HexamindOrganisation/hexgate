@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { yaml } from "@codemirror/lang-yaml";
-import { CheckCircle2, MinusCircle, Play, ShieldAlert } from "lucide-react";
+import { CheckCircle2, Play, ShieldAlert, XCircle } from "lucide-react";
 
 import {
   ApiError,
@@ -42,7 +42,7 @@ const OUTCOME: Record<
   deny: {
     label: "DENY",
     className: "bg-deny/10 border-deny/40 text-deny",
-    Icon: MinusCircle,
+    Icon: XCircle,
   },
   approval_required: {
     label: "APPROVAL REQUIRED",

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from mcp.shared.auth import OAuthToken
 from sqlalchemy import case, delete, func, select, update
@@ -20,6 +20,7 @@ from hexgate_api.features.oauth.authorization import CheckedAuthorization
 from hexgate_api.models import (
     OAuthAuthorizationCode,
     OAuthRefreshToken,
+    as_utc,
     new_uuid_str,
     utcnow,
 )
@@ -396,8 +397,3 @@ def _tokens(row: OAuthRefreshToken, refresh_token: str) -> OAuthToken:
         scope=" ".join(scopes),
         refresh_token=refresh_token,
     )
-
-
-def as_utc(value: datetime) -> datetime:
-    """``value`` as an aware UTC datetime; SQLite hands timestamps back naive."""
-    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)

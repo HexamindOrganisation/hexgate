@@ -13,7 +13,7 @@ from hexgate_api.features.members.service import (
     _can_invite_role,
     find_member,
 )
-from hexgate_api.models import Invitation, OrganizationMember, User, utcnow
+from hexgate_api.models import Invitation, OrganizationMember, User, as_utc, utcnow
 
 # Default lifetime — a week is enough for "I'll get to it on Monday" but
 # short enough that an exfiltrated email link 6 months later is dead.
@@ -134,27 +134,11 @@ async def list_pending_invitations(
     return [(i, u) for i, u in (await session.exec(stmt)).all()]
 
 
-def _ensure_utc_aware(dt):
-    """Re-attach UTC tz to a datetime that lost it during a DB round-trip.
-
-    SQLite stores TIMESTAMP as a string with no timezone info, so a
-    value written as ``utcnow()`` (tz-aware UTC) comes back naive.
-    Comparing a naive value against a tz-aware ``utcnow()`` raises
-    ``TypeError``. The fix: treat naive DB-loaded values as already-
-    UTC and attach the tz before any comparison.
-    """
-    from datetime import timezone
-
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
-
-
 def _is_invitation_terminal(invitation: Invitation) -> bool:
     """True if the invitation is already accepted, revoked, or expired."""
     if invitation.accepted_at is not None or invitation.revoked_at is not None:
         return True
-    return _ensure_utc_aware(invitation.expires_at) < utcnow()
+    return as_utc(invitation.expires_at) < utcnow()
 
 
 async def accept_invitation(
@@ -186,7 +170,7 @@ async def accept_invitation(
     """
     if invitation.accepted_at is not None or invitation.revoked_at is not None:
         raise InvitationAlreadyConsumed("invitation already accepted or revoked")
-    if _ensure_utc_aware(invitation.expires_at) < utcnow():
+    if as_utc(invitation.expires_at) < utcnow():
         raise InvitationExpired("invitation expired")
     if invitation.email.lower() != accepting_user.email.lower():
         # Don't echo ``invitation.email`` back: the route forwards
@@ -259,9 +243,7 @@ async def send_invitation_email(
     link = f"{get_settings().dashboard_url}/invites/{invitation.id}/accept"
     ttl_hours = max(
         1,
-        int(
-            (_ensure_utc_aware(invitation.expires_at) - utcnow()).total_seconds() / 3600
-        ),
+        int((as_utc(invitation.expires_at) - utcnow()).total_seconds() / 3600),
     )
 
     body = (

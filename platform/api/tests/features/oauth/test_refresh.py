@@ -17,8 +17,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from hexgate_api.constants import DEFAULT_PROJECT_ID
 from hexgate_api.core.oauth_tokens import verify_access_token
 from hexgate_api.features.oauth import client_cache
-from hexgate_api.features.oauth.grants import as_utc
-from hexgate_api.models import OAuthRefreshToken
+from hexgate_api.models import OAuthRefreshToken, as_utc
 from tests.features.oauth.consent_flow import (
     CLIENT_ID,
     DOCUMENT,

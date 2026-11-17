@@ -13,12 +13,14 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     # Trust X-Forwarded-Proto from the box's reverse proxy (TLS terminates
     # upstream), as platform/api/Dockerfile does: otherwise the redirect from
-    # /mcp/ to /mcp points at http:// and the client's retry fails.
+    # /mcp/ to /mcp points at http:// and the client's retry fails. Only from
+    # the addresses in FORWARDED_ALLOW_IPS (uvicorn reads it; loopback when
+    # unset), never from everyone: the published image may run without a
+    # proxy in front, where any client could forge the headers.
     settings = Settings.from_env()
     uvicorn.run(
         create_app(settings),
         host=settings.bind_host,
         port=8080,
         proxy_headers=True,
-        forwarded_allow_ips="*",
     )

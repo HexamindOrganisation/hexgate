@@ -193,19 +193,21 @@ async def _agent_policies(
     something only where the project policy names the agent: an agent it does
     not name runs under the ``"*"`` view, whose roles every such agent shares,
     and without a project policy each agent's own is seeded with the same
-    platform roles. Only the entry file is resolved, to read its sections: the
-    bindings are read as stored, and an agent's own policy is not read."""
+    platform roles. Only the entry file is resolved, for the sections of the
+    registered agents it declares: the bindings are read as stored, and an
+    agent's own policy is not read."""
     agents = (
         await session.exec(
             select(Agent.name, Agent.policy_yaml).where(Agent.project_id == project_id)
         )
     ).all()
-    if await service.has_entry_file(session, project_id):
+    files = await service._files_map(session, project_id)
+    if service.ENTRY_FILE in files:
         # Resolved, not parsed: a section's roles may come from its imports.
-        resolved = await service.resolve_every_agent(session, project_id)
+        declared, resolve, _ = await service._agent_resolver(session, project_id, files)
         return {
-            name: AgentPolicy(True, resolved[name].policy_set.roles)
-            if name in resolved
+            name: AgentPolicy(True, resolve(name).policy_set.roles)
+            if name in declared
             else AgentPolicy(False, [])
             for name, _ in agents
         }

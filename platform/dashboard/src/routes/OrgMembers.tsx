@@ -3,6 +3,9 @@ import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Mail, Plus, X } from "lucide-react";
 
+import { BackToOrgs } from "@/components/BackToOrgs";
+import { Card } from "@/components/ui/card";
+import { EmailAvatar } from "@/components/ui/email-avatar";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { InviteMemberDialog } from "@/components/InviteMemberDialog";
 import { RoleSelect } from "@/components/RoleSelect";
@@ -31,6 +34,7 @@ import {
   type MemberRead,
 } from "@/lib/members";
 import { useOrgs, type Role } from "@/lib/orgs";
+import { PageHeader } from "@/components/ui/page-header";
 
 /**
  * `/orgs/:orgId/members` — two adjacent tables in one page.
@@ -76,10 +80,7 @@ export function OrgMembersPage() {
   if (!org) {
     return (
       <div className="mx-auto max-w-4xl space-y-4 p-6">
-        <Button variant="ghost" size="sm" onClick={() => navigate("/orgs")}>
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Back to organizations
-        </Button>
+        <BackToOrgs />
         <Alert variant="destructive">
           <AlertDescription>
             Organization not found, or you no longer have access.
@@ -157,25 +158,21 @@ export function OrgMembersPage() {
         Back to {org.name}
       </Button>
 
-      <header className="flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Members of {org.name}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Manage who can access this organization.
-          </p>
-        </div>
-        {canManage && (
-          <Button onClick={() => setInviteOpen(true)}>
-            <Plus className="h-4 w-4" />
-            Invite member
-          </Button>
-        )}
-      </header>
+      <PageHeader
+        title={`Members of ${org.name}`}
+        description="Manage who can access this organization."
+        actions={
+          canManage && (
+            <Button onClick={() => setInviteOpen(true)}>
+              <Plus className="h-4 w-4" />
+              Invite member
+            </Button>
+          )
+        }
+      />
 
       {/* ----- Members table ----- */}
-      <section className="rounded-lg border border-border bg-card">
+      <Card>
         <div className="border-b border-border px-4 py-3">
           <h2 className="text-sm font-semibold">
             Members ({membersQuery.data?.length ?? 0})
@@ -201,12 +198,17 @@ export function OrgMembersPage() {
                 return (
                   <TableRow key={member.user_id}>
                     <TableCell>
-                      <span className="font-mono text-xs">{member.email}</span>
-                      {isSelf && (
-                        <span className="ml-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-                          you
+                      <div className="flex items-center gap-2.5">
+                        <EmailAvatar email={member.email} />
+                        <span className="font-mono text-xs">
+                          {member.email}
                         </span>
-                      )}
+                        {isSelf && (
+                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                            you
+                          </span>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       {canManage ? (
@@ -247,11 +249,11 @@ export function OrgMembersPage() {
             </TableBody>
           </Table>
         )}
-      </section>
+      </Card>
 
       {/* ----- Pending invitations table (admin/owner only) ----- */}
       {canManage && (
-        <section className="rounded-lg border border-border bg-card">
+        <Card>
           <div className="border-b border-border px-4 py-3">
             <h2 className="text-sm font-semibold">
               Pending invitations ({invitationsQuery.data?.length ?? 0})
@@ -315,7 +317,7 @@ export function OrgMembersPage() {
               </TableBody>
             </Table>
           )}
-        </section>
+        </Card>
       )}
 
       <InviteMemberDialog

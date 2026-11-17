@@ -42,9 +42,11 @@ bindings in the compose to publish on a shared Docker network or a
 non-loopback port instead (republishing only the api leaves every
 `/v1/traces` POST and every MCP call 502ing while `/v1/*` works).
 
-Images build **on the box** — no registry. amd64 throughout (the API bundles
-the amd64-only OPA binary; the image also runs a Node build stage to bundle the
-dashboard SPA).
+Images build **on the box** — the box pulls nothing from a registry. The box is
+amd64, and the compose pins `platform: linux/amd64` (the API image also runs a
+Node build stage to bundle the dashboard SPA). Releases also publish the same
+images, for amd64 and arm64, to GHCR and Docker Hub for self-hosters: see
+[Published images](#published-images).
 
 ## 1. DNS
 
@@ -203,7 +205,10 @@ the running config is still the old one.
 Each hostname is one nginx `server` block proxying to its loopback ports.
 Forward `X-Forwarded-Proto: https` — the API trusts it, via uvicorn
 `--proxy-headers`, for correct https OAuth callbacks — and set
-`proxy_set_header Host $host`. `/v1` includes WebSocket endpoints, so the
+`proxy_set_header Host $host`. The images trust those headers only from
+the peers in `FORWARDED_ALLOW_IPS` (loopback by default); the deploy compose
+sets it to `*` on the api and mcp services, which is safe only because their
+ports are published on `127.0.0.1`. `/v1` includes WebSocket endpoints, so the
 server block also needs the `Upgrade`/`Connection` headers set.
 
 **The MCP routes and rate limits** are in the same files. `/mcp` (a `^~`
@@ -685,6 +690,69 @@ healthcheck.
 **Schema changes** apply only on an empty volume; changing one after first boot
 goes through `platform/clickhouse/migrations/`, applied by `make platform-migrate`
 (§6).
+
+## Published images
+
+Each real release (`release.yml`, target `pypi`) also publishes `hexgate-api`,
+`hexgate-mcp` and `hexgate-collector` to both `ghcr.io/hexamindorganisation/`
+and Docker Hub's `docker.io/hexgate/` (one build, so the digest is the same in
+both), through `.github/workflows/docker-publish.yml` behind the
+`docker-release` environment's reviewers. Docker Hub needs that environment's
+`DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets; GHCR needs none. The
+Docker Hub namespace is the `DOCKERHUB_NAMESPACE` repository variable,
+`hexgate` when unset. The first push creates each GHCR package private: make
+`hexgate-api`, `hexgate-mcp` and `hexgate-collector` public once (Organization →
+Packages → the package → Package settings → Change visibility), or pulls are
+`denied`.
+
+Each image is built from the tag for `linux/amd64` and `linux/arm64`, each
+architecture scanned (a fixable HIGH/CRITICAL finding fails it), pushed as one
+multi-arch image with SBOM and provenance attestations, and signed with cosign
+(the multi-arch digest and each architecture's). Docker picks the host's
+architecture on pull. To run them with the deploy compose on an arm64 host,
+drop its `platform: linux/amd64` pins.
+
+- **The scan runs twice.** `release.yml` first runs the workflow as a dry run
+  (build and scan, no credentials, no push) before publishing anything, so a
+  finding stops the release before PyPI. The publish job scans again, right
+  before its push.
+- **Accepting a finding:** list it, with a reason, a path scope and an expiry
+  date, in `.trivyignore.yaml` on
+  `main`. The workflow reads that file from its own commit, not from the tag,
+  so it also unblocks a tag that already exists.
+- **By hand:** dispatch the workflow from `main` with a tag to (re)publish it,
+  without a tag to publish `main`'s commit as `sha-<commit>` only (no version
+  tag, still scanned, approved and signed), or with `dry-run` to scan without
+  publishing. Tags cut before image publishing existed (v0.3.4 and earlier)
+  are refused: their Dockerfiles are amd64-only and trust every proxy.
+
+Tags are the version (`0.4.0`, or `0.4.0rc1` for a pre-release; only for a
+release tag) and the commit (`sha-<commit>`); there is no `latest`. Pull by
+digest, after checking the signature:
+
+```bash
+# or docker.io/hexgate/hexgate-api@sha256:<digest>, same identity
+cosign verify ghcr.io/hexamindorganisation/hexgate-api@sha256:<digest> \
+  --certificate-identity https://github.com/HexamindOrganisation/hexgate/.github/workflows/docker-publish.yml@refs/heads/main \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The deploy compose can run them instead of building:
+`REGISTRY=ghcr.io/hexamindorganisation` (or `REGISTRY=hexgate` for Docker Hub)
+and `TAG=<version>`, then
+`docker compose ... pull` and `up --no-build`.
+
+Running them anywhere else:
+
+- **`FORWARDED_ALLOW_IPS`** (api, mcp): the peers whose `X-Forwarded-*`
+  headers are trusted, loopback by default. Set it to your proxy's address,
+  never `*` on a port the internet can reach.
+- **Volumes** (api): `/keys` holds the signing keys and must persist; `/data`
+  holds the SQLite database, used only when no Postgres is configured.
+- **`HEXGATE_DEMO`** (api): leave it unset. It enables a passwordless admin
+  login for throwaway demo containers.
+- **Collector:** set `HEXGATE_COLLECTOR_POSTGRES_DSN`. The default in its
+  config is the local dev password, which it refuses on a non-local host.
 
 ## Consumer SDK
 

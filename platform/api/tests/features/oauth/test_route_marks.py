@@ -46,6 +46,8 @@ REGISTRY = {
     ("GET", f"{_P}/policy/graph"): _READ,
     ("GET", f"{_P}/policy/coverage"): _READ,
     ("GET", f"{_P}/policy/similar-agents"): _READ,
+    ("POST", f"{_P}/policy/diff"): _READ,
+    ("GET", f"{_P}/policy/risk-facts"): _READ,
     ("POST", f"{_P}/policy/test"): _READ,
     ("PUT", f"{_P}/policy-files/{{name:path}}"): {OAUTH_SCOPE_KEY: "policy:write"},
     ("GET", f"{_P}/audit/decisions"): {OAUTH_SCOPE_KEY: "audit:read"},
@@ -144,7 +146,8 @@ def test_when_route_is_marked_then_require_user_accepts_the_token(
     r = _call(client, method, route, token)
     # 422: no body was sent, and FastAPI validates it only after the
     # dependencies passed. 503: the audit route with an unreachable or broken ClickHouse.
-    assert r.status_code < 400 or r.status_code in (422, 503), r.text
+    # 409: policy risk facts on a project with no policy store.
+    assert r.status_code < 400 or r.status_code in (409, 422, 503), r.text
 
 
 @pytest.mark.parametrize(("method", "route"), UNMARKED_USER)

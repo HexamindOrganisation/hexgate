@@ -14,6 +14,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
+from hexgate_api.models import as_utc
+
 _log = logging.getLogger(__name__)
 
 
@@ -48,11 +50,7 @@ def validate_event_window(occurred_at: datetime) -> None:
 
 
 def _ensure_utc(dt: datetime | None) -> datetime | None:
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+    return None if dt is None else as_utc(dt).astimezone(timezone.utc)
 
 
 def prepare_date_range(

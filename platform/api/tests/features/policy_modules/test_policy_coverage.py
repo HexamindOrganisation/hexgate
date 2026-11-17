@@ -48,6 +48,7 @@ async def test_policy_coverage_happy_path(client, register, add_bare_agent):
         "agent": "bot",
         "has_policy": True,
         "has_manifest": True,
+        "policy_error": False,
         "default_policy": "deny",
         "reach_gated": True,
         # export_tickets is covered by `auditor` alone.
@@ -239,21 +240,98 @@ async def test_when_classic_agent_has_no_manifest_then_has_manifest_is_false(
 
 @pytest.mark.parametrize(
     "stored",
-    ["tools: { read_ticket: { mode: maybe_secret } }\n", "- maybe_secret\n"],
-    ids=["invalid-mode", "not-a-mapping"],
+    [
+        "tools: { read_ticket: { mode: maybe_secret } }\n",
+        "- maybe_secret\n",
+        # YAML reads `on` as True: a role key the SDK cannot sort with the rest.
+        "roles:\n  on: { default_policy: { mode: allow } }\n",
+        "roles:\n  1: {}\n  admin: {}\n",
+    ],
+    ids=["invalid-mode", "not-a-mapping", "bool-role-key", "int-role-key"],
 )
-async def test_when_own_policy_does_not_load_then_422_names_the_agent(
+async def test_when_own_policy_does_not_load_then_only_that_agent_is_marked(
     client, register, set_own_policy, stored
 ):
     pid = _project(client)
     await register(pid, "bot", ["read_ticket"])
+    # Seeded from its first tools; drop_table came after, so it is a gap.
+    await register(pid, "triage_bot", ["read_ticket"])
+    await register(pid, "triage_bot", ["read_ticket", "drop_table"])
     await set_own_policy(pid, "bot", stored)
 
-    r = client.get(f"/v1/projects/{pid}/policy/coverage")
+    agents = _coverage(client, pid)
 
-    assert r.status_code == 422
-    assert "'bot'" in r.json()["detail"]
-    assert "maybe_secret" not in r.json()["detail"]
+    assert agents["bot"] == {
+        "agent": "bot",
+        "has_policy": True,
+        "has_manifest": True,
+        "policy_error": True,
+        "default_policy": None,
+        "reach_gated": None,
+        "uncovered_tools": [],
+        "uncovered_subagents": [],
+    }
+    assert agents["triage_bot"]["policy_error"] is False
+    assert [t["tool"] for t in agents["triage_bot"]["uncovered_tools"]] == [
+        "drop_table"
+    ]
+
+
+async def test_when_a_role_left_to_an_allow_default_lacks_the_rule_then_tool_is_uncovered(
+    client, register, set_own_policy
+):
+    pid = _project(client)
+    await register(pid, "bot", ["drop_table", "read_ticket"])
+    await set_own_policy(
+        pid,
+        "bot",
+        "roles:\n"
+        "  auditor: { tools: { drop_table: { mode: deny } } }\n"
+        "  admin:\n"
+        "    default_policy: { mode: allow }\n"
+        "    tools: { read_ticket: { mode: allow } }\n",
+    )
+
+    agents = _coverage(client, pid)
+
+    # admin has no rule for drop_table and allows it by default; read_ticket
+    # is left only to `auditor` and `default`, whose defaults deny.
+    assert [t["tool"] for t in agents["bot"]["uncovered_tools"]] == ["drop_table"]
+
+
+async def test_when_agents_share_an_own_policy_then_it_is_loaded_once(
+    client, register, monkeypatch
+):
+    import hexgate.security
+
+    pid = _project(client)
+    await register(pid, "bot", ["read_ticket"])
+    await register(pid, "triage_bot", ["read_ticket"])
+    load = hexgate.security.load_policy_set_from_dict
+    calls = []
+    monkeypatch.setattr(
+        hexgate.security,
+        "load_policy_set_from_dict",
+        lambda doc: calls.append(doc) or load(doc),
+    )
+
+    _coverage(client, pid)
+
+    # Both agents were seeded from the same tools, so with the same policy.
+    assert len(calls) == 1
+
+
+async def test_when_agent_is_given_then_only_its_entry_is_returned(client, register):
+    pid = _project(client)
+    await register(pid, "bot", ["read_ticket"])
+    await register(pid, "triage_bot", ["read_ticket"])
+
+    r = client.get(
+        f"/v1/projects/{pid}/policy/coverage", params={"agent": "triage_bot"}
+    )
+
+    assert r.status_code == 200, r.text
+    assert [a["agent"] for a in r.json()["agents"]] == ["triage_bot"]
 
 
 def test_when_project_does_not_compose_then_422(client, monkeypatch):
@@ -267,7 +345,7 @@ def test_when_project_does_not_compose_then_422(client, monkeypatch):
     async def fail(*_):
         raise LinkError("cannot import nope.yaml")
 
-    monkeypatch.setattr(service, "resolve_every_agent", fail)
+    monkeypatch.setattr(service, "_agent_resolver", fail)
 
     r = client.get(f"/v1/projects/{pid}/policy/coverage")
 

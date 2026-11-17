@@ -1,45 +1,40 @@
+import { useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import {
-  Activity,
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  Sigma,
-} from "lucide-react";
 import { api } from "@/lib/api";
-import { useActive, useProjectScoped } from "@/lib/active";
-import { useProjects } from "@/lib/projects";
+import { useProjectScoped } from "@/lib/active";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { DashboardRangePicker } from "@/components/ui/dashboard-range-picker";
-import { KpiCard } from "@/components/audit/pieces";
 import { displayNoValue, scopeNoValue } from "@/components/audit/chart-tokens";
-import { rangeDays } from "@/lib/date-range";
+import { rangePhrase } from "@/lib/date-range";
 import {
   UsageActiveChips,
   UsageBreakdownCard,
   UsageFilterBar,
+  UsageStatStrip,
 } from "@/components/usage/pieces";
 import { TopUsersCard } from "@/components/usage/top-users";
-import { useUsageFilters } from "@/lib/usage-filters";
-
-// Compact token counts (1.2M / 84.6K) — KpiCard values elsewhere use
-// toLocaleString() directly, but raw token counts run into the millions
-// and read poorly uncompacted at this tile size.
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return n.toLocaleString();
-}
+import { fromUsageSearch, useUsageFilters } from "@/lib/usage-filters";
+import { PageHeader } from "@/components/ui/page-header";
+import { fmtTokens, pluralise } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 export function UsagePage() {
   const projectScope = useProjectScoped();
   const projectId = projectScope.projectId;
-  const activeOrgId = useActive((s) => s.activeOrgId);
-  const projectsQ = useProjects(activeOrgId);
-  const projectName =
-    projectsQ.data?.find((p) => p.id === projectId)?.name ?? projectId;
+  const projectName = projectScope.projectName ?? projectId;
 
   const f = useUsageFilters((s) => s.filters);
   const setF = useUsageFilters((s) => s.setFilters);
+  // A link with filters (e.g. the agent hub's drill-down) seeds the store
+  // once; the query is then dropped so the store stays the source of truth.
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    const linked = fromUsageSearch(params);
+    if (!linked) return;
+    setF(() => linked);
+    setParams({}, { replace: true });
+  }, [params, setF, setParams]);
 
   const scope = {
     window: f.range,
@@ -76,19 +71,8 @@ export function UsagePage() {
     total_tokens: 0,
   };
   const options = optionsQ.data;
+  const scopeFiltered = !!(f.agent || f.model || f.user);
   const rangeTotal = options?.totals.calls ?? 0;
-
-  const nDays = rangeDays(f.range, f.start_date, f.end_date);
-  const avgLabel = (count: number) =>
-    !f.start_date && f.range === "24h"
-      ? `${(count / 24).toFixed(1)}/hr avg`
-      : `${(count / nDays).toFixed(0)}/day avg`;
-  const inputPct = totals.total_tokens
-    ? Math.round((totals.input_tokens / totals.total_tokens) * 100)
-    : 0;
-  const outputPct = totals.total_tokens
-    ? Math.round((totals.output_tokens / totals.total_tokens) * 100)
-    : 0;
 
   if (projectScope.status === "no-project") {
     return <NoProjectEmptyState resource="LLM usage" />;
@@ -96,16 +80,57 @@ export function UsagePage() {
 
   return (
     <div className="mx-auto max-w-[1400px]">
-      <header className="mb-6 flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Usage</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            LLM token usage for project{" "}
-            <span className="font-mono text-foreground">{projectName}</span>
-          </p>
-        </div>
-        <DashboardRangePicker f={f} setF={setF} />
-      </header>
+      <PageHeader
+        title="Usage"
+        description={
+          // The previous range's totals stay on screen while the new ones
+          // load; don't word them as the new range's.
+          summaryQ.isPlaceholderData || !summaryQ.data ? (
+            <>
+              LLM token usage for project{" "}
+              <span className="font-mono text-foreground">{projectName}</span>
+            </>
+          ) : totals.calls > 0 ? (
+            <>
+              <span className="font-semibold text-foreground">
+                {fmtTokens(totals.total_tokens)} tokens
+              </span>{" "}
+              over {pluralise(totals.calls, "model call")}{" "}
+              {rangePhrase(f.range, f.start_date)}
+              {scopeFiltered ? (
+                " matching these filters"
+              ) : (
+                <>
+                  {" "}
+                  for{" "}
+                  <span className="font-mono text-foreground">
+                    {projectName}
+                  </span>
+                </>
+              )}
+              .
+            </>
+          ) : (
+            <>
+              No model calls {rangePhrase(f.range, f.start_date)}
+              {/* Only blame the filters when the range has calls at all. */}
+              {scopeFiltered && rangeTotal > 0 ? (
+                " match these filters"
+              ) : (
+                <>
+                  {" "}
+                  for{" "}
+                  <span className="font-mono text-foreground">
+                    {projectName}
+                  </span>
+                </>
+              )}
+              .
+            </>
+          )
+        }
+        actions={<DashboardRangePicker f={f} setF={setF} />}
+      />
 
       <UsageFilterBar
         f={f}
@@ -118,40 +143,36 @@ export function UsagePage() {
       />
       <UsageActiveChips f={f} setF={setF} />
 
-      <div className="mb-4 grid grid-cols-4 gap-4">
-        <KpiCard
-          label="Calls"
-          icon={Activity}
-          value={totals.calls.toLocaleString()}
-          sub={avgLabel(totals.calls)}
-        />
-        <KpiCard
-          label="Input tokens"
-          icon={ArrowDownToLine}
-          value={fmtTokens(totals.input_tokens)}
-          sub={`${inputPct}% of total`}
-        />
-        <KpiCard
-          label="Output tokens"
-          icon={ArrowUpFromLine}
-          value={fmtTokens(totals.output_tokens)}
-          sub={`${outputPct}% of total`}
-        />
-        <KpiCard
-          label="Total tokens"
-          icon={Sigma}
-          value={fmtTokens(totals.total_tokens)}
-          sub={avgLabel(totals.total_tokens)}
+      {/* The previous range's numbers stay while the new ones load: dim them
+          so they don't read as the new range's. */}
+      <div
+        className={cn(
+          "mb-4 transition-opacity",
+          summaryQ.isPlaceholderData && "opacity-50",
+        )}
+      >
+        <UsageStatStrip
+          totals={totals}
+          range={f.range}
+          start_date={f.start_date}
+          end_date={f.end_date}
         />
       </div>
 
-      <UsageBreakdownCard
-        byModel={summaryQ.data?.by_model ?? []}
-        byAgent={summaryQ.data?.by_agent ?? []}
-        byUser={summaryQ.data?.by_user.map(displayNoValue) ?? []}
-        f={f}
-        setF={setF}
-      />
+      <div
+        className={cn(
+          "transition-opacity",
+          summaryQ.isPlaceholderData && "opacity-50",
+        )}
+      >
+        <UsageBreakdownCard
+          byModel={summaryQ.data?.by_model ?? []}
+          byAgent={summaryQ.data?.by_agent ?? []}
+          byUser={summaryQ.data?.by_user.map(displayNoValue) ?? []}
+          f={f}
+          setF={setF}
+        />
+      </div>
       {projectId && (
         <div className="mt-4">
           <TopUsersCard projectId={projectId} f={f} setF={setF} />

@@ -13,7 +13,7 @@ import { MemoryRouter } from "react-router-dom";
 
 /** Build a fresh QueryClient per test so cached requests don't leak
  * between cases (React Query caches by reference, not by request URL). */
-function makeQueryClient(): QueryClient {
+export function makeQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
       queries: {
@@ -41,10 +41,13 @@ export function renderWithProviders(
   { initialRoute = "/", client, ...rest }: Options = {},
 ) {
   const qc = client ?? makeQueryClient();
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={[initialRoute]}>{ui}</MemoryRouter>
-    </QueryClientProvider>,
-    rest,
-  );
+  // A wrapper, not wrapped JSX, so the returned rerender keeps the providers.
+  return render(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={[initialRoute]}>{children}</MemoryRouter>
+      </QueryClientProvider>
+    ),
+    ...rest,
+  });
 }

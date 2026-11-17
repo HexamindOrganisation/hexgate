@@ -1,549 +1,326 @@
+import { useId, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useAgentSelection } from "@/lib/agent_param";
-import {
-  Ban,
-  BookOpen,
-  Bot,
-  FileText,
-  ShieldCheck,
-  Wrench,
-} from "lucide-react";
-import { Link } from "react-router-dom";
-import {
-  api,
-  type AgentManifestView,
-  type GuardDefinition,
-  type InputSchema,
-  type SkillDefinition,
-  type SkillResources,
-  type ToolDefinition,
-} from "@/lib/api";
+import { ChevronRight } from "lucide-react";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
+
+import { agentReachMap } from "@/lib/agent-graph";
+import { usePolicyGraph } from "@/lib/policy_files";
+import { ApiError, api } from "@/lib/api";
 import { useProjectScoped } from "@/lib/active";
-import { useCanManageBans } from "@/lib/bans";
 import { Badge } from "@/components/ui/badge";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { DocsLink } from "@/components/DocsLink";
 import { DOC_PATHS } from "@/lib/docs";
+import { Card } from "@/components/ui/card";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatStrip, type Stat } from "@/components/ui/stat-strip";
+import { agentHubPath } from "@/lib/agent-paths";
+import { denyRatePct, useAgentActivity24h } from "@/lib/audit-summary";
+import { pluralise } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 /**
- * /agents — read-only manifest view.
+ * /agents — the agent list, the workspace's landing for agents.
  *
- * Renders each agent's *registered* manifest, reconstructed from the
- * JSON snapshot stored on the latest AgentVersion row in Postgres (not
- * from the legacy agent.yaml text). When an Agent row exists but no
- * version has been registered yet (e.g. YAML-seeded fixtures), the view
- * degrades to an empty-state telling the user to register first.
+ * One row per registered agent; each opens its hub at /agents/:name,
+ * where the manifest, graph, resolved policy and decisions live. A row
+ * carries just enough to choose between agents: registration status,
+ * model / framework, tool & skill counts, agent-to-agent delegation
+ * (reaches / called by), and 24h call / denial volume.
  *
- * Editing happens elsewhere: policy authoring lives in /policies,
- * manifest registration goes through the SDK's ``hexgate register``.
+ * Editing happens elsewhere: policy authoring in /policies, manifest
+ * registration through the SDK's ``hexgate register``.
  */
 export function AgentsPage() {
   const scope = useProjectScoped();
+  const [searchParams] = useSearchParams();
   const manifests = useQuery({
     queryKey: ["agent-manifests", scope.projectId],
     queryFn: () => api.listAgentManifests(scope.projectId as string),
     enabled: !!scope.projectId,
   });
-  // ?agent= drives selection so a link from /policies (or a shared URL
-  // /agents?agent=support_bot) lands on the right agent. Falls back to
-  // the first agent when the URL is unset or references a stale name.
-  // resetOn=projectId means the URL clears on a real project change,
-  // but NOT on the initial mount — so /agents?agent=beta from an
-  // incoming link isn't stomped before the user sees it.
-  const { selected: selectedName, set: setSelected } = useAgentSelection(
-    manifests.data,
-    { resetOn: scope.projectId },
+  // 24h activity per agent; shares Home's cache entry.
+  const { summary, activityOf } = useAgentActivity24h(scope.projectId);
+  // Agent-to-agent delegation, from the policy graph (a classic project's
+  // comes from its tier store): who each agent may reach and who may reach
+  // it. Without a graph the rows omit it, and a note says why.
+  const graph = usePolicyGraph(scope.projectId);
+  const graphFailed = graph.isError && !graph.data;
+  const rowId = useId();
+  const reachByAgent = useMemo(
+    // Not a prior project's graph kept while this one loads.
+    () =>
+      graph.data && !graph.isPlaceholderData
+        ? agentReachMap(
+            graph.data,
+            (manifests.data ?? []).map((a) => a.name),
+          )
+        : new Map(),
+    [graph.data, graph.isPlaceholderData, manifests.data],
   );
+  // The 24h summary never loaded, so every count reads "—"; or a later poll
+  // (of it or the agent list) failed, so what's shown is the last loaded.
+  const summaryFailed = summary.isError && !summary.data;
+  const stale =
+    (summary.isError && !!summary.data) ||
+    (manifests.isError && !!manifests.data) ||
+    (graph.isError && !!graph.data);
 
-  const active = manifests.data?.find((m) => m.name === selectedName);
-  const canManageBans = useCanManageBans();
+  // Portfolio KPIs across the project's agents, memoised
+  // (the 24h summary polls, so don't re-derive every render). Volume reads
+  // "—" (never a fake "0") until the summary loads or on error; the count
+  // comes from the manifest list. No live/offline tile — agent connection
+  // status isn't a signal the backend exposes yet.
+  const kpis = useMemo<Stat[]>(() => {
+    const list = manifests.data ?? [];
+    const totals = summary.data?.totals;
+    const vol = (n?: number) =>
+      summary.data ? (n ?? 0).toLocaleString() : "—";
+    const registered = list.filter((a) => a.manifest).length;
+    const unregistered = list.length - registered;
+    const denyRate = totals ? denyRatePct(totals.deny, totals.all) : null;
+    const topTool = (field: "deny" | "needs_approval") =>
+      (summary.data?.by_tool ?? [])
+        .filter((r) => r[field] > 0)
+        .sort((a, b) => b[field] - a[field])[0] ?? null;
+    const topDeny = topTool("deny");
+    const topApproval = topTool("needs_approval");
+    return [
+      {
+        key: "agents",
+        label: "Agents",
+        value: manifests.data ? `${list.length}` : "—",
+        sub: manifests.data
+          ? `${registered} registered${unregistered ? ` · ${unregistered} not registered` : ""}`
+          : undefined,
+      },
+      {
+        key: "calls",
+        label: "Calls · 24h",
+        value: vol(totals?.all),
+        sub: "across all agents",
+      },
+      {
+        key: "denied",
+        label: "Denied · 24h",
+        value: vol(totals?.deny),
+        valueClass: totals && totals.deny > 0 ? "text-deny" : undefined,
+        sub: summary.data
+          ? `${denyRate ? `${denyRate}%` : "—"}${topDeny ? ` · mostly ${topDeny.key}` : ""}`
+          : undefined,
+      },
+      {
+        key: "approvals",
+        // Sent for approval in the window, approved since or not.
+        label: "Needs approval · 24h",
+        value: vol(totals?.needs_approval),
+        valueClass:
+          totals && totals.needs_approval > 0 ? "text-approval" : undefined,
+        sub: topApproval
+          ? `${topApproval.key} ×${topApproval.needs_approval}`
+          : undefined,
+      },
+    ];
+  }, [manifests.data, summary.data]);
 
   if (scope.status === "no-project") {
     return <NoProjectEmptyState resource="agents" />;
   }
 
-  return (
-    <div className="-mx-8 -my-6 h-[calc(100vh-56px)] flex flex-col overflow-hidden">
-      <header className="flex items-center gap-3 px-6 py-3 border-b border-border bg-card">
-        <Bot className="size-4 text-muted-foreground" />
-        <span className="text-sm font-medium">Agents</span>
-        <AgentPicker
-          agents={manifests.data ?? []}
-          value={selectedName}
-          onChange={setSelected}
-          loading={manifests.isLoading}
-        />
-        <div className="flex-1" />
-        <DocsLink
-          path={DOC_PATHS.registerAgent}
-          label="register an agent →"
-          compact
-        />
-        {active && (
-          <div className="flex items-center gap-4">
-            <Link
-              to={`/policies?agent=${encodeURIComponent(active.name)}`}
-              className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1.5"
-            >
-              <ShieldCheck className="size-3" />
-              edit policy →
-            </Link>
-            {canManageBans && (
-              <Link
-                to={`/bans?ban_agent=${encodeURIComponent(active.name)}`}
-                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-destructive"
-              >
-                <Ban className="size-3" />
-                ban agent →
-              </Link>
-            )}
-          </div>
-        )}
-      </header>
-
-      <div className="flex-1 overflow-y-auto px-8 py-6 scrollbar-thin">
-        {active ? (
-          <ManifestView agent={active} />
-        ) : (
-          <div className="h-full grid place-items-center text-sm text-muted-foreground">
-            {manifests.isLoading ? "Loading agents…" : "No agents to inspect."}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function AgentPicker({
-  agents,
-  value,
-  onChange,
-  loading,
-}: {
-  agents: { name: string }[];
-  value: string | null;
-  onChange: (name: string) => void;
-  loading: boolean;
-}) {
-  if (loading)
-    return <span className="text-xs text-muted-foreground">loading…</span>;
-  return (
-    <select
-      value={value ?? ""}
-      onChange={(e) => onChange(e.target.value)}
-      className="h-8 rounded-md border border-border bg-background px-3 text-sm font-mono focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-    >
-      {agents.map((a) => (
-        <option key={a.name} value={a.name}>
-          {a.name}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-function ManifestView({ agent }: { agent: AgentManifestView }) {
-  return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <ManifestSummary agent={agent} />
-      <ToolsSection
-        tools={agent.manifest?.tools ?? []}
-        unregistered={agent.manifest === null}
-      />
-      <GuardsSection
-        guards={agent.manifest?.guards ?? null}
-        unregistered={agent.manifest === null}
-      />
-      <SkillsSection
-        skills={agent.manifest?.skills ?? null}
-        unregistered={agent.manifest === null}
-      />
-      <SystemPromptSection
-        prompt={agent.manifest?.system_prompt ?? null}
-        unregistered={agent.manifest === null}
-      />
-    </div>
-  );
-}
-
-function ManifestSummary({ agent }: { agent: AgentManifestView }) {
-  const versionLabel =
-    agent.version !== null ? `v${agent.version}` : "not registered";
-  return (
-    <section className="rounded-lg border border-border bg-card">
-      <div className="px-5 py-4 border-b border-border flex items-center gap-2">
-        <Bot className="size-4 text-primary" />
-        <span className="text-sm font-medium">Manifest</span>
-        <Badge variant="outline" className="ml-1 font-mono text-[11px]">
-          {versionLabel}
-        </Badge>
-      </div>
-      <dl className="divide-y divide-border text-sm">
-        <ManifestRow label="Name" value={agent.name} mono />
-        <ManifestRow
-          label="Model"
-          value={agent.manifest?.model?.trim() || "—"}
-          mono
-        />
-        <ManifestRow
-          label="Description"
-          value={agent.manifest?.description?.trim() || "—"}
-        />
-        <ManifestRow
-          label="Framework"
-          value={agent.manifest?.framework?.trim() || "—"}
-          mono
-        />
-        <ManifestRow
-          label="Last updated"
-          value={formatDate(agent.updated_at)}
-        />
-      </dl>
-    </section>
-  );
-}
-
-function ToolsSection({
-  tools,
-  unregistered,
-}: {
-  tools: ToolDefinition[];
-  unregistered: boolean;
-}) {
-  return (
-    <section className="rounded-lg border border-border bg-card">
-      <div className="px-5 py-4 border-b border-border flex items-center gap-2">
-        <Wrench className="size-4 text-muted-foreground" />
-        <span className="text-sm font-medium">Tools</span>
-        <Badge variant="outline" className="ml-1 font-mono text-[11px]">
-          {tools.length}
-        </Badge>
-      </div>
-      {tools.length === 0 ? (
-        <p className="px-5 py-4 text-xs text-muted-foreground">
-          {unregistered
-            ? "Agent not registered yet — run `hexgate register` to populate."
-            : "No tools declared."}
-        </p>
-      ) : (
-        <ul className="divide-y divide-border">
-          {tools.map((t) => (
-            <ToolRow key={t.name} tool={t} />
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-function GuardsSection({
-  guards,
-  unregistered,
-}: {
-  guards: GuardDefinition[] | null;
-  unregistered: boolean;
-}) {
-  return (
-    <section className="rounded-lg border border-border bg-card">
-      <div className="px-5 py-4 border-b border-border flex items-center gap-2">
-        <ShieldCheck className="size-4 text-muted-foreground" />
-        <span className="text-sm font-medium">Guards</span>
-        {guards !== null && (
-          <Badge variant="outline" className="ml-1 font-mono text-[11px]">
-            {guards.length}
-          </Badge>
-        )}
-      </div>
-      {guards === null || guards.length === 0 ? (
-        <p className="px-5 py-4 text-xs text-muted-foreground">
-          {unregistered
-            ? "Agent not registered yet — run `hexgate register` to populate."
-            : "No guards declared."}
-        </p>
-      ) : (
-        <ul className="divide-y divide-border">
-          {guards.map((g) => (
-            <GuardRow key={g.name} guard={g} />
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-function GuardRow({ guard }: { guard: GuardDefinition }) {
-  return (
-    <li className="px-5 py-4 space-y-2">
-      <div className="flex items-baseline gap-3">
-        <span className="font-mono text-sm text-foreground">{guard.name}</span>
-        <Badge variant="outline" className="font-mono text-[10px] py-0">
-          {guard.position}
-        </Badge>
-        {guard.kind === "official" && (
-          <Badge variant="outline" className="font-mono text-[10px] py-0">
-            plugin
-          </Badge>
-        )}
-        {guard.observe && (
-          <Badge variant="outline" className="font-mono text-[10px] py-0">
-            observe
-          </Badge>
-        )}
-      </div>
-      <p className="text-xs text-muted-foreground">
-        {guard.position === "before"
-          ? "Runs before the tool call"
-          : "Runs on the tool result"}
-        {" · "}
-        {guard.tool_names === null
-          ? "every tool"
-          : `scoped to ${guard.tool_names.join(", ")}`}
-      </p>
-    </li>
-  );
-}
-
-function SkillsSection({
-  skills,
-  unregistered,
-}: {
-  skills: SkillDefinition[] | null;
-  unregistered: boolean;
-}) {
-  return (
-    <section className="rounded-lg border border-border bg-card">
-      <div className="px-5 py-4 border-b border-border flex items-center gap-2">
-        <BookOpen className="size-4 text-muted-foreground" />
-        <span className="text-sm font-medium">Skills</span>
-        {/* A count of 0 would assert the same thing the copy below refuses to. */}
-        {skills !== null && (
-          <Badge variant="outline" className="ml-1 font-mono text-[11px]">
-            {skills.length}
-          </Badge>
-        )}
-      </div>
-      {skills === null || skills.length === 0 ? (
-        <p className="px-5 py-4 text-xs text-muted-foreground">
-          {emptySkillsCopy(skills, unregistered)}
-        </p>
-      ) : (
-        <ul className="divide-y divide-border">
-          {skills.map((s) => (
-            <SkillRow key={s.name} skill={s} />
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-/**
- * Null is not emptiness — the same distinction SkillResourceDetails draws one
- * level down. Nothing enumerated this agent's skills (its framework has no
- * skill concept, or it was registered before the SDK discovered any), so
- * "No skills declared." would assert something the manifest never said.
- */
-function emptySkillsCopy(
-  skills: SkillDefinition[] | null,
-  unregistered: boolean,
-): string {
-  if (unregistered) {
-    return "Agent not registered yet — run `hexgate register` to populate.";
+  // Old bookmarks of /agents?agent=X land on X's hub. Nothing in the app
+  // links here any more, so this can go once those have aged out.
+  const deepLink = searchParams.get("agent");
+  if (deepLink) {
+    return <Navigate replace to={agentHubPath(deepLink)} />;
   }
-  return skills === null
-    ? "Skills not enumerated at registration."
-    : "No skills declared.";
-}
 
-function SystemPromptSection({
-  prompt,
-  unregistered,
-}: {
-  prompt: string | null;
-  unregistered: boolean;
-}) {
+  const agents = manifests.data ?? [];
+
   return (
-    <section className="rounded-lg border border-border bg-card">
-      <div className="px-5 py-4 border-b border-border flex items-center gap-2">
-        <FileText className="size-4 text-muted-foreground" />
-        <span className="text-sm font-medium">System prompt</span>
-        {prompt && (
-          <Badge variant="outline" className="ml-1 font-mono text-[11px]">
-            {prompt.length} chars
-          </Badge>
+    <div className="mx-auto max-w-[1240px]">
+      <PageHeader
+        title="Agents"
+        description={
+          <>
+            Every agent in this project, registered with{" "}
+            <span className="font-mono text-foreground">hexgate register</span>{" "}
+            or not yet. Open one for its graph, resources, policy and decisions.
+          </>
+        }
+        actions={
+          <DocsLink path={DOC_PATHS.registerAgent} label="Register an agent" />
+        }
+      />
+
+      <div className="mb-4">
+        <StatStrip stats={kpis} />
+        {(summaryFailed || stale) && (
+          <p className="mt-2 text-meta text-muted-foreground">
+            {summaryFailed
+              ? "Couldn't load the last 24 hours of activity."
+              : "Couldn't refresh; this is what was last loaded."}
+          </p>
+        )}
+        {graphFailed && (
+          <p className="mt-2 text-meta text-muted-foreground">
+            Delegation between agents isn't shown:{" "}
+            {graph.error instanceof ApiError && graph.error.status === 422
+              ? "the policy modules don't compose."
+              : "couldn't load the policy graph."}
+          </p>
         )}
       </div>
-      {prompt ? (
-        <details className="group" open>
-          <summary className="px-5 py-2 text-[11px] text-muted-foreground cursor-pointer select-none">
-            show / hide
-          </summary>
-          <pre className="px-5 pb-4 text-[12px] font-mono text-foreground whitespace-pre-wrap break-words">
-            {prompt}
-          </pre>
-        </details>
-      ) : (
-        <p className="px-5 py-4 text-xs text-muted-foreground">
-          {unregistered
-            ? "Agent not registered yet — run `hexgate register` to populate."
-            : "No system prompt declared."}
-        </p>
-      )}
-    </section>
-  );
-}
 
-function ToolRow({ tool }: { tool: ToolDefinition }) {
-  return (
-    <li className="px-5 py-4 space-y-2">
-      <div className="flex items-baseline gap-3">
-        <span className="font-mono text-sm text-foreground">{tool.name}</span>
-      </div>
-      {tool.description?.trim() ? (
-        <p className="text-xs text-muted-foreground">{tool.description}</p>
-      ) : null}
-      <InputSchemaDetails schema={tool.input_schema} />
-    </li>
-  );
-}
-
-function InputSchemaDetails({ schema }: { schema: InputSchema }) {
-  const entries = Object.entries(schema.properties);
-  const required = new Set(schema.required);
-  return (
-    <details className="rounded-md border border-border bg-background/40 group">
-      <summary className="px-3 py-2 cursor-pointer flex items-center gap-2 text-[11px] text-muted-foreground select-none">
-        <span>inputs</span>
-        <Badge variant="outline" className="font-mono text-[10px] py-0">
-          {entries.length}
-        </Badge>
-      </summary>
-      {entries.length === 0 ? (
-        <p className="px-3 pb-2 text-[11px] text-muted-foreground">
-          No inputs.
-        </p>
-      ) : (
-        <ul className="px-3 pb-2 space-y-1 text-[11px] font-mono">
-          {entries.map(([key, prop]) => (
-            <li key={key} className="flex items-baseline gap-2">
-              <span className="text-foreground">{key}</span>
-              <span className="text-muted-foreground">: {prop.type}</span>
-              {required.has(key) && (
-                <Badge variant="outline" className="text-[9px] py-0">
-                  required
-                </Badge>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </details>
-  );
-}
-
-/** Executable code and the tools a skill adds — the two risk-carrying counts. */
-function SkillRow({ skill }: { skill: SkillDefinition }) {
-  const scripts = skill.resources?.scripts.length ?? 0;
-  const addedTools = skill.additional_tools.length;
-  return (
-    <li className="px-5 py-4 space-y-2">
-      <div className="flex items-baseline gap-3">
-        <span className="font-mono text-sm text-foreground">{skill.name}</span>
-        {scripts > 0 && (
-          <Badge variant="outline" className="font-mono text-[10px] py-0">
-            {pluralise(scripts, "script")}
-          </Badge>
-        )}
-        {addedTools > 0 && (
-          <Badge variant="outline" className="font-mono text-[10px] py-0">
-            +{pluralise(addedTools, "tool")}
-          </Badge>
-        )}
-      </div>
-      {skill.description.trim() ? (
-        <p className="text-xs text-muted-foreground">{skill.description}</p>
-      ) : null}
-      <SkillResourceDetails resources={skill.resources} />
-    </li>
-  );
-}
-
-const RESOURCE_KINDS = ["references", "assets", "scripts"] as const;
-
-function SkillResourceDetails({
-  resources,
-}: {
-  resources: SkillResources | null;
-}) {
-  // Null is not emptiness: the framework never enumerated resources, so
-  // claiming the skill ships none would be a fabrication.
-  if (resources === null) {
-    return (
-      <p className="text-[11px] text-muted-foreground">
-        Resources not enumerated by this framework.
-      </p>
-    );
-  }
-  const populated = RESOURCE_KINDS.filter((kind) => resources[kind].length > 0);
-  const total = populated.reduce(
-    (sum, kind) => sum + resources[kind].length,
-    0,
-  );
-  return (
-    <details className="rounded-md border border-border bg-background/40 group">
-      <summary className="px-3 py-2 cursor-pointer flex items-center gap-2 text-[11px] text-muted-foreground select-none">
-        <span>resources</span>
-        <Badge variant="outline" className="font-mono text-[10px] py-0">
-          {total}
-        </Badge>
-      </summary>
-      {populated.length === 0 ? (
-        <p className="px-3 pb-2 text-[11px] text-muted-foreground">
-          No resources.
-        </p>
-      ) : (
-        <ul className="px-3 pb-2 space-y-1 text-[11px] font-mono">
-          {populated.map((kind) => (
-            <li key={kind} className="flex items-baseline gap-2">
-              <span className="text-foreground">{kind}</span>
-              <span className="text-muted-foreground">
-                : {resources[kind].length}
+      <Card className="overflow-hidden p-0">
+        <nav aria-label="Agents" className="flex flex-col">
+          {manifests.isPending ? (
+            <div className="px-4 py-5 text-meta text-muted-foreground">
+              Loading agents…
+            </div>
+          ) : manifests.isError && !manifests.data ? (
+            <div className="px-4 py-5 text-meta text-muted-foreground">
+              Couldn't load agents.
+            </div>
+          ) : agents.length ? (
+            agents.map((a, i) => {
+              // From useId and the index: agent names may hold spaces.
+              const id = `${rowId}-${i}`;
+              const activity = activityOf(a.name);
+              const registered = !!a.manifest;
+              const tools = a.manifest?.tools?.length ?? 0;
+              const skills = a.manifest?.skills?.length ?? 0;
+              const model = a.manifest?.model?.trim();
+              const reach = reachByAgent.get(a.name);
+              const reachText = reach?.reaches.length
+                ? `reaches ${reach.reaches.join(", ")}`
+                : null;
+              // Everything after the model, so a missing model never leaves a
+              // dangling leading "· ". Outbound delegation ("reaches") rides
+              // here; inbound ("called by") is a chip by the name instead.
+              const facts = [
+                a.manifest?.framework?.trim(),
+                pluralise(tools, "tool"),
+                skills > 0 ? pluralise(skills, "skill") : null,
+                reachText,
+              ]
+                .filter(Boolean)
+                .join(" · ");
+              const calledBy = !!reach?.calledBy.length;
+              return (
+                <Link
+                  key={a.name}
+                  to={agentHubPath(a.name)}
+                  // The name alone; the rest of the row describes it.
+                  aria-labelledby={`${id}-name`}
+                  aria-describedby={[
+                    `${id}-badge`,
+                    calledBy && `${id}-chip`,
+                    `${id}-facts`,
+                    `${id}-counts`,
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  className="group flex items-center gap-3 border-t border-border/60 px-4 py-3.5 transition-colors first:border-t-0 hover:bg-accent/50"
+                >
+                  <span
+                    className={cn(
+                      "size-1.5 shrink-0 rounded-full",
+                      registered ? "bg-success" : "bg-muted-foreground/40",
+                    )}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        id={`${id}-name`}
+                        className="truncate font-mono text-[13px] font-medium"
+                      >
+                        {a.name}
+                      </span>
+                      <Badge
+                        id={`${id}-badge`}
+                        variant="outline"
+                        className="font-mono text-[11px]"
+                      >
+                        {a.version !== null
+                          ? `v${a.version}`
+                          : "not registered"}
+                      </Badge>
+                      {calledBy && (
+                        <span
+                          id={`${id}-chip`}
+                          className="rounded-full bg-primary/10 px-1.5 py-0.5 text-caption font-medium text-primary"
+                        >
+                          called by {reach!.calledBy.join(", ")}
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      id={`${id}-facts`}
+                      className="mt-0.5 truncate text-meta text-muted-foreground"
+                    >
+                      {registered ? (
+                        <>
+                          {model && (
+                            <span className="font-mono text-foreground">
+                              {model}
+                            </span>
+                          )}
+                          {model ? ` · ${facts}` : facts}
+                        </>
+                      ) : (
+                        <>
+                          not registered · run{" "}
+                          <span className="font-mono">hexgate register</span>
+                          {reachText && ` · ${reachText}`}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  {/* Always there, "—" until the summary lands: an unregistered
+                      agent can still be running and calling tools. */}
+                  <div
+                    id={`${id}-counts`}
+                    className="hidden shrink-0 gap-5 text-right sm:flex"
+                  >
+                    <div>
+                      <div className="text-[15px] font-semibold tabular-nums">
+                        {activity ? activity.all.toLocaleString() : "—"}
+                      </div>
+                      <div className="text-caption text-muted-foreground">
+                        calls 24h
+                      </div>
+                    </div>
+                    <div>
+                      <div
+                        className={cn(
+                          "text-[15px] font-semibold tabular-nums",
+                          activity && activity.deny > 0
+                            ? "text-deny"
+                            : "text-muted-foreground",
+                        )}
+                      >
+                        {activity ? activity.deny.toLocaleString() : "—"}
+                      </div>
+                      <div className="text-caption text-muted-foreground">
+                        denied
+                      </div>
+                    </div>
+                  </div>
+                  <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
+                </Link>
+              );
+            })
+          ) : (
+            <div className="px-4 py-5 text-meta text-muted-foreground">
+              No agents yet. Register one with{" "}
+              <span className="font-mono text-foreground">
+                hexgate register
               </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </details>
-  );
-}
-
-function pluralise(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
-function ManifestRow({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <div className="grid grid-cols-[120px_1fr] gap-4 px-5 py-2.5">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className={mono ? "font-mono text-foreground" : "text-foreground"}>
-        {value}
-      </dd>
+              .
+            </div>
+          )}
+        </nav>
+      </Card>
     </div>
   );
-}
-
-function formatDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
 }
