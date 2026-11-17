@@ -82,6 +82,7 @@
               "platform/overview",
               "platform/workflow",
               "platform/hosted",
+              "platform/mcp",
               "platform/live-demo"
             ]
           },
