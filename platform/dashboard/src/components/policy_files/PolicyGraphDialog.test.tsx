@@ -562,6 +562,36 @@ describe("PolicyGraphDialog", () => {
     expect(screen.queryByTestId("node-more:agent:big")).toBeNull();
   });
 
+  it("unfolds every caller of a tool pinned on the canvas", async () => {
+    // big folds its 15th tool; small lists the same tool, so it's drawn.
+    const tools = Array.from({ length: 15 }, (_, i) => `tool:t${i}`);
+    const call = (source: string, target: string) => ({
+      source,
+      target,
+      kind: "call",
+      via: null,
+      verdict: "allow",
+      constraints: [],
+      roles: [],
+    });
+    stubGraph({
+      roles: [],
+      nodes: [
+        { id: "agent:big", kind: "agent", label: "big" },
+        { id: "agent:small", kind: "agent", label: "small" },
+        ...tools.map((id) => ({ id, kind: "tool", label: id.slice(5) })),
+      ],
+      edges: [
+        ...tools.map((t) => call("agent:big", t)),
+        call("agent:small", "tool:t14"),
+      ],
+    });
+    renderDialog();
+    await userEvent.click(await screen.findByTestId("node-tool:t14"));
+    // big's edge to t14 is drawn now, so its path through t14 is whole.
+    expect(screen.queryByTestId("node-more:agent:big")).toBeNull();
+  });
+
   it("finds a node by name and can show only its paths", async () => {
     stubGraph(GRAPH);
     renderDialog();

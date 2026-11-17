@@ -165,6 +165,11 @@ describe("AppShell", () => {
     );
   });
 
+  it("doesn't crash on a hub URL with a stray percent sign", async () => {
+    renderWithProviders(<AppShell />, { initialRoute: "/agents/50%off" });
+    expect(await screen.findByRole("link", { name: "Agents" })).toBeVisible();
+  });
+
   it("says the agent list failed rather than that there are none", async () => {
     // stubWorkspace has no manifest route: it 404s.
     renderWithProviders(<AppShell />);

@@ -168,6 +168,11 @@ const FocusCtx = createContext<FocusValue>({
 /** Each kind's outline in the node box, and a smaller inset one for hover:
  * agents are circles, roles rectangles, tools and MCP servers hexagons, and
  * folded tools a dashed pill. */
+// Shape geometry in the node box (centre 68,59), shared with arrowGap.
+const AGENT_R = 56;
+const ROLE_HALF_W = 66;
+const MORE_HALF_W = 60;
+
 function Shape({
   kind,
   inset,
@@ -175,15 +180,31 @@ function Shape({
 }: { kind: string; inset?: boolean } & React.SVGProps<SVGElement>) {
   const p = props as React.SVGProps<never>;
   if (kind === "agent")
-    return <circle cx={68} cy={59} r={inset ? 46 : 56} {...p} />;
+    return <circle cx={68} cy={59} r={inset ? AGENT_R - 10 : AGENT_R} {...p} />;
   if (kind === "role")
     return inset ? (
       <rect x={10} y={31} width={116} height={56} rx={6} {...p} />
     ) : (
-      <rect x={2} y={23} width={132} height={72} rx={10} {...p} />
+      <rect
+        x={68 - ROLE_HALF_W}
+        y={23}
+        width={ROLE_HALF_W * 2}
+        height={72}
+        rx={10}
+        {...p}
+      />
     );
   if (kind === "more")
-    return <rect x={8} y={31} width={120} height={56} rx={28} {...p} />;
+    return (
+      <rect
+        x={68 - MORE_HALF_W}
+        y={31}
+        width={MORE_HALF_W * 2}
+        height={56}
+        rx={28}
+        {...p}
+      />
+    );
   return inset ? (
     <polygon
       points="41.5,17.7 94.5,17.7 121,59 94.5,100.3 41.5,100.3 15,59"
@@ -294,9 +315,10 @@ const ARROW_GAP = HEX_W / 2 + 4;
 /** How far left of the target's centre the arrow stops, by its shape. Off the
  * centre line (a fanned edge) a hex's slanted side and a circle sit further in. */
 function arrowGap(kind: string | undefined, dy: number): number {
-  if (kind === "agent") return Math.sqrt(Math.max(0, 56 * 56 - dy * dy)) + 4;
-  if (kind === "role") return 66 + 4;
-  if (kind === "more") return 60 + 4;
+  if (kind === "agent")
+    return Math.sqrt(Math.max(0, AGENT_R * AGENT_R - dy * dy)) + 4;
+  if (kind === "role") return ROLE_HALF_W + 4;
+  if (kind === "more") return MORE_HALF_W + 4;
   return ARROW_GAP - (Math.abs(dy) * 34) / 53;
 }
 
@@ -720,7 +742,13 @@ function FitTo({
 }) {
   const flow = useReactFlow();
   useEffect(() => {
-    if (!id || !shown.nodes.some((n) => n.id === id)) return;
+    if (!id) return;
+    // pin() unfolds in the same render, so a node still not drawn never will
+    // be: drop the request rather than jump to it later.
+    if (!shown.nodes.some((n) => n.id === id)) {
+      onDone();
+      return;
+    }
     // After React Flow has measured the new nodes.
     const t = setTimeout(() => {
       void flow.fitView({ nodes: [{ id }], duration: 300, maxZoom: 1.2 });
@@ -742,6 +770,10 @@ function FindNode({
   const [q, setQ] = useState("");
   const [missed, setMissed] = useState(false);
   const listId = useId();
+  const labels = useMemo(
+    () => [...new Set(graph.nodes.map((n) => n.label))],
+    [graph],
+  );
   const find = () => {
     const t = q.trim().toLowerCase();
     if (!t) return;
@@ -772,7 +804,7 @@ function FindNode({
         className="w-44 bg-transparent font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground"
       />
       <datalist id={listId}>
-        {[...new Set(graph.nodes.map((n) => n.label))].map((l) => (
+        {labels.map((l) => (
           <option key={l} value={l} />
         ))}
       </datalist>
@@ -817,6 +849,8 @@ export function PolicyFlow({
     pinnedId && collapsed.nodes.some((n) => n.id === pinnedId)
       ? pinnedId
       : null;
+  // "Only this path" belongs to a pin: losing the pin (any way) drops it.
+  if (isolated && !pinned) setIsolated(false);
   const shown: ShownGraph = useMemo(
     () => (isolated && pinned ? isolate(collapsed, pinned) : collapsed),
     [collapsed, isolated, pinned],
@@ -831,7 +865,10 @@ export function PolicyFlow({
     () => new Map(shown.nodes.map((n) => [n.id, n.kind])),
     [shown],
   );
-  const folded = collapsed.nodes.filter((n) => n.kind === "more").length;
+  const folded = useMemo(
+    () => collapsed.nodes.filter((n) => n.kind === "more").length,
+    [collapsed],
+  );
 
   /** Unfold every agent that calls `id`, so a hidden tool gets drawn. */
   const reveal = (id: string) => {
@@ -842,9 +879,19 @@ export function PolicyFlow({
       setExpanded((x) => new Set([...x, ...callers]));
   };
   const clearFit = useCallback(() => setFitTo(null), []);
-  const pin = (id: string) => {
+  // Unfolding unmounts the "+N" node under the pointer, so its mouseleave
+  // never fires: drop the hover with it.
+  const expand = (agent: string) => {
+    setHover(null);
+    setExpanded((x) => new Set([...x, agent]));
+  };
+  /** Pin `id` with every caller's edge to it drawn, so its paths are whole. */
+  const focusOn = (id: string) => {
     reveal(id);
     setPinned(id);
+  };
+  const pin = (id: string) => {
+    focusOn(id);
     setFitTo(id);
   };
 
@@ -960,17 +1007,16 @@ export function PolicyFlow({
           const e = shown.edges[Number(edge.id.slice(1))];
           if (!e) return;
           // An edge into "+N tools" opens them; it has no single verdict.
-          if (e.target.startsWith(MORE_PREFIX))
-            setExpanded((x) => new Set([...x, e.source]));
+          if (e.target.startsWith(MORE_PREFIX)) expand(e.source);
           else setSelected(e as PolicyGraphEdge);
         }}
         onNodeClick={(_, node) => {
           if (node.id.startsWith(MORE_PREFIX)) {
-            const agent = node.id.slice(MORE_PREFIX.length);
-            setExpanded((x) => new Set([...x, agent]));
+            expand(node.id.slice(MORE_PREFIX.length));
             return;
           }
-          setPinned((p) => (p === node.id ? null : node.id));
+          if (pinned === node.id) setPinned(null);
+          else focusOn(node.id);
         }}
         onPaneClick={() => {
           setSelected(null);

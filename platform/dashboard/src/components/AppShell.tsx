@@ -1,5 +1,11 @@
 import { useEffect, useState, type MouseEvent } from "react";
-import { useLocation, useNavigate, NavLink, Outlet } from "react-router-dom";
+import {
+  useLocation,
+  useMatch,
+  useNavigate,
+  NavLink,
+  Outlet,
+} from "react-router-dom";
 import {
   ArrowLeft,
   Ban,
@@ -287,7 +293,8 @@ const SIDEBAR_AGENT_CAP = 8;
 function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
   const { projectId, status } = useProjectScoped();
   const [open, setOpen] = useState(false);
-  const { pathname } = useLocation();
+  // useMatch decodes the name safely; a raw decode throws on a stray "%".
+  const hubMatch = useMatch("/agents/:name/*");
   const agents = useQuery({
     queryKey: ["agent-manifests", projectId],
     queryFn: () => api.listAgentManifests(projectId as string),
@@ -308,8 +315,7 @@ function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
   const rows = agents.data ?? [];
   // Past the cap, list the first few plus the agent being viewed, and link to
   // /agents for the rest: the sidebar navigates, it doesn't scroll.
-  const m = /^\/agents\/([^/]+)/.exec(pathname);
-  const current = m ? decodeURIComponent(m[1]) : null;
+  const current = hubMatch?.params.name ?? null;
   const shown = rows.slice(0, SIDEBAR_AGENT_CAP);
   const extra = rows.find(
     (a, i) => i >= SIDEBAR_AGENT_CAP && a.name === current,

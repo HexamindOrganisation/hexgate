@@ -53,6 +53,13 @@ describe("collapseTools", () => {
     );
   });
 
+  it("keeps a tool nothing may call", () => {
+    const g = graph(20);
+    g.nodes.push({ id: "mcp:orphan", kind: "mcp", label: "orphan" });
+    const shown = collapseTools(g, new Set(), 12, 6);
+    expect(shown.nodes.some((n) => n.id === "mcp:orphan")).toBe(true);
+  });
+
   it("keeps every tool of an expanded agent", () => {
     const shown = collapseTools(graph(20), new Set(["agent:a"]), 12, 6);
     expect(shown.nodes.some((n) => n.kind === "more")).toBe(false);

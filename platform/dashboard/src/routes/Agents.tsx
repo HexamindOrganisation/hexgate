@@ -140,7 +140,9 @@ export function AgentsPage() {
   }
 
   const agents = manifests.data ?? [];
-  const q = query.trim().toLowerCase();
+  // Only while the box is there: a filter left from a bigger project mustn't
+  // hide rows it can no longer clear.
+  const q = agents.length > FILTER_MIN ? query.trim().toLowerCase() : "";
   const shown = q
     ? agents.filter((a) => a.name.toLowerCase().includes(q))
     : agents;

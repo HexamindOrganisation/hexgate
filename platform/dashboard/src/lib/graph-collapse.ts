@@ -5,6 +5,7 @@
  */
 
 import type { PolicyGraph, PolicyGraphEdge, PolicyGraphNode } from "./api";
+import { push } from "./graph-layout";
 
 /** Collapse only once the graph shows more tools than this. */
 export const TOOL_BUDGET = 12;
@@ -52,12 +53,14 @@ export function collapseTools(
     const n = seen.get(e.source) ?? 0;
     seen.set(e.source, n + 1);
     if (n < perAgent) kept.push(e);
-    else
-      (folded.get(e.source) ?? folded.set(e.source, []).get(e.source)!).push(e);
+    else push(folded, e.source, e);
   }
+  // A tool goes only when every edge to it was folded; one nothing may call
+  // (no edges at all) stays, as it was before folding.
   const used = new Set(kept.flatMap((e) => [e.source, e.target]));
+  const touched = new Set(graph.edges.flatMap((e) => [e.source, e.target]));
   const nodes: ShownNode[] = graph.nodes.filter(
-    (n) => !isTool(n.kind) || used.has(n.id),
+    (n) => !isTool(n.kind) || used.has(n.id) || !touched.has(n.id),
   );
   const edges = [...kept];
   for (const [agent, hidden] of folded) {
@@ -94,8 +97,8 @@ export function pathsThrough(
   const out = new Map<string, string[]>();
   const inc = new Map<string, string[]>();
   for (const e of graph.edges) {
-    (out.get(e.source) ?? out.set(e.source, []).get(e.source)!).push(e.target);
-    (inc.get(e.target) ?? inc.set(e.target, []).get(e.target)!).push(e.source);
+    push(out, e.source, e.target);
+    push(inc, e.target, e.source);
   }
   const bfs = (from: Map<string, string[]>) => {
     const seen = new Set([id]);
