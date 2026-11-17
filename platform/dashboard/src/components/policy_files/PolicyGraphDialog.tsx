@@ -1,12 +1,4 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useId,
-  useMemo,
-  useState,
-} from "react";
+import { createContext, useContext, useMemo, useState } from "react";
 import {
   BaseEdge,
   Background,
@@ -22,16 +14,17 @@ import {
   Position,
   ReactFlow,
   ViewportPortal,
-  useNodesInitialized,
-  useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useNavigate } from "react-router-dom";
-import { AlertTriangle, Maximize2, Network, Play, X } from "lucide-react";
+import { AlertTriangle, Network, Play, X } from "lucide-react";
 
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { usePolicyGraph } from "@/lib/policy_files";
-import { agentSubgraph } from "@/lib/agent-graph";
+import {
+  GROUP_PREFIX,
+  compactAgentGraph,
+  type ShownGraph,
+  type Verdict,
+} from "@/lib/agent-graph-view";
 import {
   ApiError,
   type PolicyGraph,
@@ -41,13 +34,6 @@ import {
 import { cn } from "@/lib/utils";
 import { VerdictIcon } from "@/components/ui/verdict-icon";
 import { HEX_H, HEX_W, delegates, layeredLayout } from "@/lib/graph-layout";
-import {
-  MORE_PREFIX,
-  collapseTools,
-  isolate,
-  pathsThrough,
-  type ShownGraph,
-} from "@/lib/graph-collapse";
 import { pluralise } from "@/lib/format";
 import { verdictLabel } from "@/lib/policy";
 
@@ -77,7 +63,7 @@ const KIND: Record<
   { fill: string; stroke: string; text: string; tag: string; label: string }
 > = {
   // Fills are OPAQUE (not translucent) so edges — which render below the nodes —
-  // are hidden where they pass under a node, and an edge's endpoint (at the
+  // are hidden where they pass under a hexagon, and an edge's endpoint (at the
   // node center) is covered by the node.
   agent: {
     fill: "var(--gr-agent-fill)",
@@ -107,19 +93,33 @@ const KIND: Record<
     tag: "var(--gr-role-tag)",
     label: "role",
   },
-  // An agent's folded tools: tool colours, drawn dashed.
-  more: {
+  // Tools grouped by verdict: tool colours, the verdict on the outline.
+  group: {
     fill: "var(--gr-tool-fill)",
     stroke: "var(--gr-tool-stroke)",
     text: "var(--gr-tool-text)",
     tag: "var(--gr-tool-tag)",
-    label: "click to show",
+    label: "tools",
+  },
+  "more-roles": {
+    fill: "var(--gr-role-fill)",
+    stroke: "var(--gr-role-stroke)",
+    text: "var(--gr-role-text)",
+    tag: "var(--gr-role-tag)",
+    label: "pick roles",
+  },
+  "more-agents": {
+    fill: "var(--gr-agent-fill)",
+    stroke: "var(--gr-agent-stroke)",
+    text: "var(--gr-agent-text)",
+    tag: "var(--gr-agent-tag)",
+    label: "sub-agents",
   },
 };
 
 // A dimmed variant: recede a node by pulling its fill/border/text toward the
 // background, NOT by lowering opacity — the node stays OPAQUE so edges still
-// pass hidden under it and never show through a faded node.
+// pass hidden under it and never show through a faded hexagon.
 const DIM = {
   fill: "var(--gr-dim-fill)",
   stroke: "var(--gr-dim-stroke)",
@@ -127,17 +127,22 @@ const DIM = {
   tag: "var(--gr-dim-tag)",
 };
 
-type NodeData = { label: string; kind: string };
+type NodeData = {
+  label: string;
+  kind: string;
+  /** A second line under the label ("6 tools", "9 with limits"). */
+  sub?: string;
+  /** A tool group's verdict, drawn on its outline. */
+  verdict?: string;
+};
 type EdgeData = Pick<
   PolicyGraphEdge,
   "kind" | "via" | "constraints" | "roles"
 > & {
-  /** "mixed" on an edge into a "+N tools" node whose tools differ. */
+  /** "mixed" on the edge into "+N sub-agents" whose reaches differ. */
   verdict: PolicyGraphEdge["verdict"] | "mixed";
   /** The target's shape decides where the arrow stops. */
   targetKind: string;
-  /** Index in the drawn graph's edges (ids are stable keys, not indices). */
-  idx: number;
   /** Points the edge passes through (layout coordinates), so it routes
    * around nodes it doesn't touch. */
   bends?: { x: number; y: number }[];
@@ -168,14 +173,15 @@ const FocusCtx = createContext<FocusValue>({
   col: {},
 });
 
-/** Each kind's outline in the node box, and a smaller inset one for hover:
- * agents are circles, roles rectangles, tools and MCP servers hexagons, and
- * folded tools a dashed pill. */
 // Shape geometry in the node box (centre 68,59), shared with arrowGap.
 const AGENT_R = 56;
 const ROLE_HALF_W = 66;
-const MORE_HALF_W = 60;
+const PILL_HALF_W = 60;
+const PILL_R = 28;
 
+/** Each kind's outline in the node box, and a smaller inset one for hover:
+ * agents are circles, roles rectangles, tools and MCP servers hexagons, and
+ * "+N more" nodes dashed pills. */
 function Shape({
   kind,
   inset,
@@ -197,14 +203,14 @@ function Shape({
         {...p}
       />
     );
-  if (kind === "more")
+  if (kind === "more-roles" || kind === "more-agents")
     return (
       <rect
-        x={68 - MORE_HALF_W}
-        y={31}
-        width={MORE_HALF_W * 2}
-        height={56}
-        rx={28}
+        x={68 - PILL_HALF_W}
+        y={59 - PILL_R}
+        width={PILL_HALF_W * 2}
+        height={PILL_R * 2}
+        rx={PILL_R}
         {...p}
       />
     );
@@ -221,6 +227,7 @@ function Shape({
 /** A node (SVG outline in its kind's shape + centered label). */
 function GraphNode({ id, data }: NodeProps<Node<NodeData>>) {
   const k = KIND[data.kind] ?? KIND.tool;
+  const more = data.kind === "more-roles" || data.kind === "more-agents";
   const focus = useContext(FocusCtx);
   const hovered = focus.hoverNode === id;
   // Both handles sit at the node CENTER (overlapping, invisible), so edges
@@ -243,7 +250,12 @@ function GraphNode({ id, data }: NodeProps<Node<NodeData>>) {
   // a cursor glitch on hover.
   const dim = focus.activeNodes ? !focus.activeNodes.has(id) : false;
   const fill = dim ? DIM.fill : k.fill;
-  const stroke = dim ? DIM.stroke : k.stroke;
+  // A tool group's outline carries its verdict.
+  const stroke = dim
+    ? DIM.stroke
+    : data.verdict
+      ? (VERDICT[data.verdict] ?? k.stroke)
+      : k.stroke;
   const text = dim ? DIM.text : k.text;
   const tag = dim ? DIM.tag : k.tag;
   const glow = hovered ? 20 : dim ? 0 : 6;
@@ -270,18 +282,18 @@ function GraphNode({ id, data }: NodeProps<Node<NodeData>>) {
             var() resolves in inline style but not in SVG attributes. */}
         <Shape
           kind={data.kind}
-          strokeWidth={hovered ? 2.6 : 1.5}
-          strokeDasharray={data.kind === "more" ? "5 4" : undefined}
+          strokeWidth={hovered ? 2.6 : data.verdict ? 2.4 : 1.5}
+          strokeDasharray={more ? "5 4" : undefined}
           style={{ fill, stroke, transition: "fill 140ms, stroke 140ms" }}
         />
-        {hovered && data.kind !== "more" && (
+        {hovered && !more && (
           <Shape
             kind={data.kind}
             inset
             fill="none"
             strokeWidth="1"
             opacity="0.7"
-            style={{ stroke: k.stroke }}
+            style={{ stroke }}
           />
         )}
       </svg>
@@ -306,6 +318,14 @@ function GraphNode({ id, data }: NodeProps<Node<NodeData>>) {
         >
           {data.label}
         </span>
+        {data.sub && (
+          <span
+            className="font-sans text-[10px]"
+            style={{ color: tag, transition: "color 140ms" }}
+          >
+            {data.sub}
+          </span>
+        )}
       </div>
       <Handle type="source" position={Position.Right} style={centerHandle} />
     </div>
@@ -316,16 +336,14 @@ function GraphNode({ id, data }: NodeProps<Node<NodeData>>) {
 // so the arrowhead sits on the outline, not under the node.
 const ARROW_GAP = HEX_W / 2 + 4;
 /** How far left of the target's centre the arrow stops, by its shape. Off the
- * centre line (a fanned edge) a hex's slanted side and a circle sit further in. */
+ * centre line (a fanned edge) a hex's slanted side, a circle and a pill's
+ * round end sit further in. */
 function arrowGap(kind: string | undefined, dy: number): number {
-  if (kind === "agent")
-    return Math.sqrt(Math.max(0, AGENT_R * AGENT_R - dy * dy)) + 4;
+  const round = (r: number) => Math.sqrt(Math.max(0, r * r - dy * dy));
+  if (kind === "agent") return round(AGENT_R) + 4;
   if (kind === "role") return ROLE_HALF_W + 4;
-  if (kind === "more") {
-    // The pill's ends are round (radius 28): off-centre they sit further in.
-    const r = 28;
-    return MORE_HALF_W - r + Math.sqrt(Math.max(0, r * r - dy * dy)) + 4;
-  }
+  if (kind === "more-roles" || kind === "more-agents")
+    return PILL_HALF_W - PILL_R + round(PILL_R) + 4;
   return ARROW_GAP - (Math.abs(dy) * 34) / 53;
 }
 
@@ -340,7 +358,7 @@ const midpoint = (p: Point, q: Point) => ({
 /** Through any bend points with horizontal tangents, so an edge leaves and
  * enters its nodes level and runs level through each lane. The label sits on
  * the middle bend, or midway along the middle segment, so it's on the edge
- * and inside a reserved lane, never over a node. */
+ * and inside a reserved lane, never over a hex. */
 function bentPath(
   points: Point[],
   endDy = 0,
@@ -376,6 +394,7 @@ function bentPath(
 /** Verdict-colored routed edge with a small kind/via label. Deny + handoff
  * render dashed; a denied edge is dimmed. */
 function PolicyEdge({
+  id,
   source,
   sourceX,
   sourceY,
@@ -386,7 +405,7 @@ function PolicyEdge({
   markerEnd,
 }: EdgeProps<Edge<EdgeData>>) {
   const focus = useContext(FocusCtx);
-  const idx = data?.idx ?? 0;
+  const idx = Number(id.slice(1)) || 0;
   const dimmed = focus.activeEdges ? !focus.activeEdges.has(idx) : false;
   const hovered = focus.hoverEdge === idx;
   const inFocus = focus.activeEdges ? focus.activeEdges.has(idx) : true;
@@ -509,7 +528,7 @@ const edgeTypes = { policy: PolicyEdge };
 const nodeLabel = (id: string) => id.slice(id.indexOf(":") + 1);
 
 /** id → the name the graph shows (`mcp:mcp-demo-read` is `demo-read`), so
- * every panel names a node as the graph does. */
+ * every panel names a node as its hexagon does. */
 function labelLookup(graph: PolicyGraph): (id: string) => string {
   const labels = new Map(graph.nodes.map((n) => [n.id, n.label]));
   return (id) => labels.get(id) ?? nodeLabel(id);
@@ -736,117 +755,121 @@ function bypassWarnings(
   return out;
 }
 
-/** FitTo's request to frame every drawn node. */
-const FIT_ALL = "\u0000all";
+const GROUP_TITLE: Record<Verdict, string> = {
+  allow: "Allowed",
+  approval_required: "Approval",
+  deny: "Denied",
+};
 
-/** Pans and zooms to `id` (or frames everything) once drawn, then reports
- * done. */
-function FitTo({
-  id,
-  shown,
-  onDone,
+/** The tools behind a verdict group, with a filter; tabs switch group. */
+function GroupList({
+  verdict,
+  groups,
+  labelOf,
+  onPick,
+  onClose,
 }: {
-  id: string | null;
-  shown: ShownGraph;
-  onDone: () => void;
+  verdict: Verdict;
+  groups: Map<Verdict, PolicyGraphEdge[]>;
+  labelOf: (id: string) => string;
+  onPick: (v: Verdict) => void;
+  onClose: () => void;
 }) {
-  const flow = useReactFlow();
-  // True once React Flow has measured every drawn node, new ones included.
-  const measured = useNodesInitialized();
-  useEffect(() => {
-    if (!id || !measured) return;
-    if (id === FIT_ALL) {
-      void flow.fitView({ duration: 300, padding: 0.2 });
-      onDone();
-      return;
-    }
-    // pin() unfolds in the same render, so a node still not drawn never will
-    // be: drop the request rather than jump to it later.
-    if (!shown.nodes.some((n) => n.id === id)) {
-      onDone();
-      return;
-    }
-    void flow.fitView({ nodes: [{ id }], duration: 300, maxZoom: 1.2 });
-    onDone();
-  }, [id, shown, flow, onDone, measured]);
-  return null;
-}
-
-/** Find a node by name: pins it and jumps there, unfolding it if need be. */
-function FindNode({
-  graph,
-  onFind,
-}: {
-  graph: PolicyGraph;
-  onFind: (id: string) => void;
-}) {
-  const [q, setQ] = useState("");
-  const [missed, setMissed] = useState(false);
-  const listId = useId();
-  // One suggestion per node; a label two nodes share gets its kind, so each
-  // stays findable ("search · tool", "search · mcp").
-  const options = useMemo(() => {
-    const count = new Map<string, number>();
-    for (const n of graph.nodes)
-      count.set(n.label, (count.get(n.label) ?? 0) + 1);
-    return graph.nodes.map((n) => ({
-      id: n.id,
-      label: n.label,
-      value: count.get(n.label)! > 1 ? `${n.label} · ${n.kind}` : n.label,
-    }));
-  }, [graph]);
-  const find = () => {
-    const t = q.trim().toLowerCase();
-    if (!t) return;
-    // An exact label wins over a suggestion that merely contains it.
-    const hit =
-      options.find((o) => o.value.toLowerCase() === t) ??
-      options.find((o) => o.label.toLowerCase() === t) ??
-      options.find((o) => o.value.toLowerCase().includes(t));
-    setMissed(!hit);
-    if (hit) onFind(hit.id);
-  };
+  const [query, setQuery] = useState("");
+  const edges = groups.get(verdict) ?? [];
+  const q = query.trim().toLowerCase();
+  const rows = q
+    ? edges.filter((e) => labelOf(e.target).toLowerCase().includes(q))
+    : edges;
   return (
-    <form
-      role="search"
-      onSubmit={(e) => {
-        e.preventDefault();
-        find();
-      }}
-      className="flex items-center gap-1.5 rounded-lg border border-border bg-card/90 px-2 py-1 backdrop-blur"
+    <aside
+      aria-label={`${GROUP_TITLE[verdict]} tools`}
+      className="flex max-h-[55vh] w-72 flex-col rounded-lg border border-border bg-card/95 font-mono text-[11px] text-foreground shadow-xl backdrop-blur"
     >
+      <div className="flex items-center gap-1 p-2">
+        {(["allow", "approval_required", "deny"] as const)
+          .filter((v) => groups.has(v))
+          .map((v) => (
+            <button
+              key={v}
+              type="button"
+              aria-pressed={v === verdict}
+              onClick={() => onPick(v)}
+              className={cn(
+                "h-7 flex-1 rounded border px-1.5 font-sans text-[11px] font-medium",
+                v === verdict
+                  ? "border-current"
+                  : "border-border text-muted-foreground hover:text-foreground",
+              )}
+              style={v === verdict ? { color: VERDICT[v] } : undefined}
+            >
+              {GROUP_TITLE[v]} {groups.get(v)!.length}
+            </button>
+          ))}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close tool list"
+          className="px-1 text-muted-foreground hover:text-foreground"
+        >
+          <X size={13} />
+        </button>
+      </div>
       <input
-        value={q}
-        onChange={(e) => {
-          setQ(e.target.value);
-          setMissed(false);
-        }}
-        list={listId}
-        placeholder="find agent, tool or role"
-        aria-label="Find a node"
-        className="w-44 bg-transparent font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground"
+        type="search"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder={`filter ${edges.length} tools`}
+        aria-label="Filter tools"
+        className="mx-2 mb-2 h-8 rounded border border-border bg-transparent px-2 outline-none placeholder:text-muted-foreground focus:border-primary"
       />
-      <datalist id={listId}>
-        {options.map((o) => (
-          <option key={o.id} value={o.value} />
+      <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        {rows.map((e) => (
+          <li
+            key={e.target}
+            className="flex items-center gap-2 rounded px-1.5 py-1.5"
+          >
+            <span className="truncate">{labelOf(e.target)}</span>
+            <span className="ml-auto max-w-[55%] truncate text-[10px] text-muted-foreground">
+              {e.constraints.join(" ∧ ") ||
+                (e.roles.length ? e.roles.join(", ") : "")}
+            </span>
+          </li>
         ))}
-      </datalist>
-      {missed && (
-        <span className="font-mono text-[10px] text-muted-foreground">
-          no match
-        </span>
-      )}
-    </form>
+        {rows.length === 0 && (
+          <li className="px-1.5 py-1.5 text-muted-foreground">no match</li>
+        )}
+      </ul>
+    </aside>
   );
 }
+
+/** What PolicyFlow needs to draw one agent's graph (from agentSubgraph, the
+ * agent first): big agents group their tools by verdict, and the extra nodes
+ * act on click. */
+export type AgentGraphOptions = {
+  /** Tools a sub-agent may call, for its caption. */
+  toolCount: (agent: string) => number;
+  /** A sub-agent was clicked: open its own graph. */
+  onOpenAgent: (agent: string) => void;
+  /** "+N more roles" was clicked. */
+  onMoreRoles?: () => void;
+  /** "+N more" sub-agents was clicked. */
+  onMoreAgents?: () => void;
+  /** The project graph, for constraint-bypass paths through sub-agents. */
+  projectGraph?: PolicyGraph;
+};
 
 export function PolicyFlow({
   graph,
   embedded = false,
+  agent,
 }: {
   graph: PolicyGraph;
   /** Inside a scrolling page: the wheel scrolls the page, not the canvas. */
   embedded?: boolean;
+  /** Draw `graph` as one agent's graph. */
+  agent?: AgentGraphOptions;
 }) {
   const [selected, setSelected] = useState<PolicyGraphEdge | null>(null);
   // A hovered node/edge is a temporary preview; a *pinned* node (clicked) shows
@@ -856,101 +879,106 @@ export function PolicyFlow({
   );
   const [pinnedId, setPinned] = useState<string | null>(null);
   const [animate, setAnimate] = useState(false);
-  // Agents whose folded tools were opened, whether to show only the pinned
-  // node's paths, and the node the view last jumped to.
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [isolated, setIsolated] = useState(false);
-  // A node id to pan to, FIT_ALL to frame the whole graph, or null.
-  const [fitTo, setFitTo] = useState<string | null>(null);
-  // Unfolding belongs to one graph: a new one (another role) starts folded.
-  const [forGraph, setForGraph] = useState(graph);
-  if (forGraph !== graph) {
-    setForGraph(graph);
-    setExpanded(new Set());
-  }
-
-  // Big graphs fold each agent's extra tools into a "+N tools" node; calls
-  // into the pinned node are always drawn, so its callers are all there.
-  const collapsed = useMemo(
-    () => collapseTools(graph, expanded, pinnedId),
-    [graph, expanded, pinnedId],
+  // The tool group whose names are listed beside the graph.
+  const [group, setGroup] = useState<Verdict | null>(null);
+  const toolCount = agent?.toolCount;
+  const { graph: shown, groups } = useMemo(
+    () =>
+      toolCount
+        ? compactAgentGraph(graph, toolCount)
+        : {
+            graph: graph as ShownGraph,
+            groups: new Map<Verdict, PolicyGraphEdge[]>(),
+          },
+    [graph, toolCount],
   );
-  const drawnIds = useMemo(
-    () => new Set(collapsed.nodes.map((n) => n.id)),
-    [collapsed],
-  );
-  // A pin on a node this graph doesn't draw (it changed) is no pin.
-  const pinned = pinnedId && drawnIds.has(pinnedId) ? pinnedId : null;
-  // A pin whose node stops being drawn is dropped, not revived later, and
-  // "Only this path" belongs to a pin: losing the pin (any way) drops it.
-  if (pinnedId && !pinned) setPinned(null);
-  if (isolated && !pinned) setIsolated(false);
-  const shown: ShownGraph = useMemo(
-    () => (isolated && pinned ? isolate(collapsed, pinned) : collapsed),
-    [collapsed, isolated, pinned],
-  );
+  const self = agent ? graph.nodes[0]?.id : undefined;
+  const pinned =
+    pinnedId && shown.nodes.some((n) => n.id === pinnedId) ? pinnedId : null;
+  const openGroup = group && groups.has(group) ? group : null;
   const lay = useMemo(() => layeredLayout(shown), [shown]);
-  const labelOf = useMemo(() => labelLookup(graph), [graph]);
-  const warnings = useMemo(
-    () => bypassWarnings(graph, labelOf),
-    [graph, labelOf],
+  const labelOf = useMemo(
+    () => labelLookup(agent?.projectGraph ?? graph),
+    [agent?.projectGraph, graph],
   );
+  // One agent's graph has none of its sub-agents' tools: find bypass paths in
+  // the project graph, keeping those that start at this agent.
+  const warnings = useMemo(() => {
+    const all = bypassWarnings(agent?.projectGraph ?? graph, labelOf);
+    const name = self && graph.nodes[0]?.label;
+    return name ? all.filter((w) => w.strict === name) : all;
+  }, [agent?.projectGraph, graph, labelOf, self]);
   const kindOf = useMemo(
     () => new Map(shown.nodes.map((n) => [n.id, n.kind])),
     [shown],
   );
-  // Ids keyed on the edge, not its index, so folding or isolating doesn't
-  // hand one edge's React Flow state to another.
-  const edgeIds = useMemo(() => {
-    const seen = new Map<string, number>();
-    return shown.edges.map((e) => {
-      const key = `${e.source}>${e.target}:${e.kind}:${e.via ?? ""}`;
-      const n = seen.get(key) ?? 0;
-      seen.set(key, n + 1);
-      return `${key}#${n}`;
-    });
-  }, [shown]);
-  const drawnEdges = useMemo(() => new Set<object>(shown.edges), [shown]);
-  // The edge card closes for good once its edge isn't drawn.
-  if (selected && !drawnEdges.has(selected)) setSelected(null);
-  const folded = useMemo(
-    () => collapsed.nodes.filter((n) => n.kind === "more").length,
-    [collapsed],
-  );
+  /** A warning's tool: pin it if drawn, else open the group that holds it. */
+  const showTool = (toolId: string) => {
+    if (kindOf.has(toolId)) return setPinned(toolId);
+    for (const [v, es] of groups)
+      if (es.some((e) => e.target === toolId)) setGroup(v);
+  };
 
-  const clearFit = useCallback(() => setFitTo(null), []);
-  // Unfolding unmounts the "+N" node under the pointer, so its mouseleave
-  // never fires: drop the hover with it. The layout moves, so reframe.
-  const expand = (agent: string) => {
-    setHover(null);
-    setExpanded((x) => new Set([...x, agent]));
-    setFitTo(FIT_ALL);
+  /** A click: a group lists its tools, "+N" nodes and sub-agents act, and
+   * anything else is pinned (or unpinned) to trace its paths. */
+  const clickNode = (id: string) => {
+    const k = kindOf.get(id);
+    if (k === "group") {
+      const v = id.slice(GROUP_PREFIX.length) as Verdict;
+      setGroup((g) => (g === v ? null : v));
+    } else if (k === "more-roles") agent?.onMoreRoles?.();
+    else if (k === "more-agents") agent?.onMoreAgents?.();
+    else if (agent && k === "agent" && id !== self) {
+      const label = shown.nodes.find((n) => n.id === id)?.label;
+      if (label) agent.onOpenAgent(label);
+    } else setPinned((p) => (p === id ? null : id));
   };
-  /** Pin `id`; a tool's folded calls get drawn, so follow it if it moved. */
-  const focusOn = (id: string) => {
-    const calls = (g: { edges: { target: string; kind: string }[] }) =>
-      g.edges.filter((e) => e.target === id && e.kind === "call").length;
-    if (calls(collapsed) < calls(graph)) setFitTo(id);
-    setPinned(id);
-  };
-  const pin = (id: string) => {
-    setPinned(id);
-    setFitTo(id);
-  };
+
+  // Directed adjacency (out + in) for transitive reachability.
+  const adj = useMemo(() => {
+    const out = new Map<string, string[]>();
+    const inc = new Map<string, string[]>();
+    shown.nodes.forEach((n) => {
+      out.set(n.id, []);
+      inc.set(n.id, []);
+    });
+    shown.edges.forEach((e) => {
+      out.get(e.source)?.push(e.target);
+      inc.get(e.target)?.push(e.source);
+    });
+    return { out, inc };
+  }, [shown]);
 
   // Provided via context so it never rebuilds the nodes/edges arrays (which
   // would flash the graph).
   const focus = useMemo(() => {
-    // Pinned node → every node on a directed path TO or FROM it, and the edges
-    // on them; arrowheads show flow.
+    // Pinned node → every node on a directed path TO or FROM it. Forward BFS =
+    // everything it can reach (its tools + sub-agents + their tools); backward
+    // BFS = everything that can reach it (agents/roles, even via a sub-agent).
+    // An edge lights up if its source is forward-reachable OR its target is
+    // backward-reachable (i.e. it lies on such a path); arrowheads show flow.
     if (pinned) {
-      const p = pathsThrough(shown, pinned);
-      return {
-        activeNodes: p.nodes,
-        activeEdges: p.edges,
-        hoverNode: pinned,
-        hoverEdge: null,
+      const bfs = (from: Map<string, string[]>) => {
+        const seen = new Set([pinned]);
+        const q = [pinned];
+        while (q.length) {
+          const u = q.shift() as string;
+          for (const v of from.get(u) ?? [])
+            if (!seen.has(v)) {
+              seen.add(v);
+              q.push(v);
+            }
+        }
+        return seen;
       };
+      const fwd = bfs(adj.out);
+      const bwd = bfs(adj.inc);
+      const activeNodes = new Set<string>([...fwd, ...bwd]);
+      const activeEdges = new Set<number>();
+      shown.edges.forEach((e, i) => {
+        if (fwd.has(e.source) || bwd.has(e.target)) activeEdges.add(i);
+      });
+      return { activeNodes, activeEdges, hoverNode: pinned, hoverEdge: null };
     }
     // Hover preview → the node/edge + its direct neighbors.
     if (hover) {
@@ -986,10 +1014,10 @@ export function PolicyFlow({
       hoverNode: null,
       hoverEdge: null,
     };
-  }, [pinned, hover, shown]);
+  }, [pinned, hover, shown, adj]);
 
-  // Stable across hover (depend only on the drawn graph and its layout), so
-  // React Flow doesn't regenerate markers or thrash edge mouse events.
+  // Stable across hover (depend only on graph and its layout), so React Flow
+  // doesn't regenerate markers or thrash edge mouse events.
   const nodes: Node<NodeData>[] = useMemo(
     () =>
       shown.nodes.map((n) => ({
@@ -999,7 +1027,12 @@ export function PolicyFlow({
           x: (lay.pos[n.id]?.x ?? 0) - HEX_W / 2,
           y: (lay.pos[n.id]?.y ?? 0) - HEX_H / 2,
         },
-        data: { label: n.label, kind: n.kind },
+        data: {
+          label: n.label,
+          kind: n.kind,
+          sub: "sub" in n ? n.sub : undefined,
+          verdict: "verdict" in n ? n.verdict : undefined,
+        },
         draggable: false,
       })),
     [shown, lay],
@@ -1008,7 +1041,7 @@ export function PolicyFlow({
   const edges: Edge<EdgeData>[] = useMemo(
     () =>
       shown.edges.map((e, i) => ({
-        id: edgeIds[i],
+        id: `e${i}`,
         source: e.source,
         target: e.target,
         type: "policy",
@@ -1025,12 +1058,11 @@ export function PolicyFlow({
           constraints: e.constraints,
           roles: e.roles,
           targetKind: kindOf.get(e.target) ?? "tool",
-          idx: i,
           bends: lay.bends[i],
           endDy: lay.endDy[i],
         },
       })),
-    [shown, lay, kindOf, edgeIds],
+    [shown, lay, kindOf],
   );
 
   const ctxValue = useMemo<FocusValue>(
@@ -1048,29 +1080,22 @@ export function PolicyFlow({
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onEdgeClick={(_, edge) => {
-          const e = shown.edges[(edge.data as EdgeData).idx];
+          const e = shown.edges[Number(edge.id.slice(1))];
           if (!e) return;
-          // An edge into "+N tools" opens them; it has no single verdict.
-          if (e.target.startsWith(MORE_PREFIX)) expand(e.source);
-          else setSelected(e as PolicyGraphEdge);
+          // An edge into a group or "+N" node acts like a click on it.
+          if (kindOf.get(e.target) === "group" || e.verdict === "mixed")
+            return clickNode(e.target);
+          setSelected(e as PolicyGraphEdge);
         }}
-        onNodeClick={(_, node) => {
-          if (node.id.startsWith(MORE_PREFIX)) {
-            expand(node.id.slice(MORE_PREFIX.length));
-            return;
-          }
-          if (pinned === node.id) setPinned(null);
-          else focusOn(node.id);
-        }}
+        onNodeClick={(_, node) => clickNode(node.id)}
         onPaneClick={() => {
           setSelected(null);
           setPinned(null);
-          setIsolated(false);
         }}
         onNodeMouseEnter={(_, node) => setHover({ node: node.id })}
         onNodeMouseLeave={() => setHover(null)}
         onEdgeMouseEnter={(_, edge) =>
-          setHover({ edge: (edge.data as EdgeData).idx })
+          setHover({ edge: Number(edge.id.slice(1)) })
         }
         onEdgeMouseLeave={() => setHover(null)}
         fitView
@@ -1099,7 +1124,6 @@ export function PolicyFlow({
       >
         <Background color="var(--gr-dots)" gap={22} />
         <ColumnLabels columns={lay.columns} />
-        <FitTo id={fitTo} shown={shown} onDone={clearFit} />
         <Controls
           showInteractive={false}
           style={{
@@ -1109,26 +1133,6 @@ export function PolicyFlow({
           }}
         />
         <Panel position="top-right" className="flex flex-col items-end gap-2">
-          <FindNode graph={graph} onFind={pin} />
-          {pinned && (
-            <button
-              type="button"
-              onClick={() => {
-                setIsolated((v) => !v);
-                setFitTo(FIT_ALL);
-              }}
-              aria-pressed={isolated}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-mono text-[11px] backdrop-blur transition-colors",
-                isolated
-                  ? "border-primary/60 bg-primary/20 text-foreground"
-                  : "border-border bg-card/90 text-muted-foreground hover:text-foreground",
-              )}
-              title="Hide everything that isn't on a path through the focused node"
-            >
-              {isolated ? "Show everything" : "Only this path"}
-            </button>
-          )}
           <button
             onClick={() => setAnimate((a) => !a)}
             className={cn(
@@ -1146,6 +1150,15 @@ export function PolicyFlow({
             <Play size={12} />
             {animate ? "Animating…" : "Animate flow"}
           </button>
+          {openGroup && (
+            <GroupList
+              verdict={openGroup}
+              groups={groups}
+              labelOf={labelOf}
+              onPick={setGroup}
+              onClose={() => setGroup(null)}
+            />
+          )}
           {pinned && (
             <NodePanel
               graph={graph}
@@ -1230,26 +1243,6 @@ export function PolicyFlow({
                 ? "focused — click empty space to reset"
                 : "click a node to trace its paths"}
             </span>
-            {(folded > 0 || expanded.size > 0) && (
-              <>
-                <span className="text-muted-foreground/40">·</span>
-                {folded > 0 ? (
-                  <span>some tools folded — click +N to show</span>
-                ) : null}
-                {expanded.size > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setExpanded(new Set());
-                      setFitTo(FIT_ALL);
-                    }}
-                    className="underline-offset-2 hover:text-foreground hover:underline"
-                  >
-                    fold tools again
-                  </button>
-                )}
-              </>
-            )}
           </div>
         </Panel>
         {warnings.length > 0 && (
@@ -1264,7 +1257,7 @@ export function PolicyFlow({
                 {warnings.slice(0, 3).map((w, i) => (
                   <button
                     key={i}
-                    onClick={() => pin(w.toolId)}
+                    onClick={() => showTool(w.toolId)}
                     className="block w-full text-left leading-relaxed hover:text-deny"
                   >
                     <b className="text-deny">{w.strict}</b> can delegate to{" "}
@@ -1286,124 +1279,6 @@ export function PolicyFlow({
   );
 }
 
-const GRAPH_ACTION_BTN =
-  "inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent";
-
-/** The graph itself — a header (title, role filter, and an optional
- * `headerRight` action) over the ReactFlow canvas. Reused by the inline dialog
- * and the full-page `/graph` route; `agent` narrows it to that agent's
- * neighbourhood (the agent hub). */
-export function PolicyGraphView({
-  projectId,
-  roleNames = [],
-  enabled = true,
-  headerRight,
-  agent,
-}: {
-  projectId: string;
-  agent?: string;
-  /** Load-time fallback for the role filter; once the graph resolves, its own
-   * `roles` (every role across all agents) take over. */
-  roleNames?: string[];
-  enabled?: boolean;
-  headerRight?: React.ReactNode;
-}) {
-  const [role, setRole] = useState<string>("");
-  const graph = usePolicyGraph(projectId, role || undefined, enabled);
-  // In agent mode the role filter only offers roles that touch this agent, read
-  // off the unfiltered graph (the role-filtered one would shrink the list).
-  const base = usePolicyGraph(projectId, undefined, enabled && !!agent);
-  const roleOptions = useMemo(() => {
-    if (!agent) return graph.data?.roles ?? roleNames;
-    if (!base.data) return roleNames;
-    // Its role nodes (admission), plus every role its own edges carry: a
-    // policy without `admission:` has no role nodes but per-role edges.
-    const sub = agentSubgraph(base.data, agent);
-    const self = sub.nodes.find((n) => n.kind === "agent" && n.label === agent);
-    const roles = new Set(
-      sub.nodes.filter((n) => n.kind === "role").map((n) => n.label),
-    );
-    for (const e of sub.edges)
-      if (e.source === self?.id || e.target === self?.id)
-        e.roles.forEach((r) => roles.add(r));
-    return [...roles].sort();
-  }, [agent, base.data, graph.data, roleNames]);
-  const errorText = graph.isError ? graphErrorText(graph.error) : null;
-  // An agent with no edges is a lone node — nothing to draw.
-  const minNodes = agent ? 2 : 1;
-  const shown = useMemo(
-    () => (agent && graph.data ? agentSubgraph(graph.data, agent) : graph.data),
-    [agent, graph.data],
-  );
-
-  return (
-    <div
-      className="flex h-full flex-col"
-      style={{ background: "hsl(var(--editor))" }}
-    >
-      <div className="flex flex-row items-center justify-between gap-3 border-b border-border px-4 py-3">
-        <div className="flex items-center gap-2 text-sm text-foreground">
-          <Network size={16} className="text-primary" />
-          {agent ? (
-            <span>
-              <span className="font-mono">{agent}</span> · policy graph
-            </span>
-          ) : (
-            "Policy graph"
-          )}
-        </div>
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
-            role
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-              className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground"
-            >
-              <option value="">all roles</option>
-              {roleOptions.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-          </label>
-          {headerRight}
-        </div>
-      </div>
-      <div className="relative flex-1">
-        {graph.isLoading && (
-          <div className="grid h-full place-items-center font-mono text-xs text-muted-foreground">
-            resolving graph…
-          </div>
-        )}
-        {/* A failed refetch over a cached graph keeps the graph, with a
-            banner; only with nothing cached does the error take the box. */}
-        {errorText && !graph.data && (
-          <div className="grid h-full place-items-center px-8 text-center font-mono text-xs text-deny">
-            {errorText}
-          </div>
-        )}
-        {errorText && graph.data && (
-          <div className="absolute inset-x-0 top-0 z-10 border-b border-border bg-card/90 px-4 py-1.5 font-mono text-[11px] text-muted-foreground">
-            {errorText} showing the last graph loaded.
-          </div>
-        )}
-        {shown && shown.nodes.length >= minNodes && (
-          <PolicyFlow graph={shown} />
-        )}
-        {shown && shown.nodes.length < minNodes && (
-          <div className="grid h-full place-items-center font-mono text-xs text-muted-foreground">
-            {agent
-              ? `no roles, tools or reach for ${agent}${role ? ` as ${role}` : ""}.`
-              : "no agents bound yet — add a role binding to see the graph."}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 /** Why the graph failed, by status (as the agent hub reads it). */
 function graphErrorText(error: unknown): string {
   const status = error instanceof ApiError ? error.status : null;
@@ -1413,54 +1288,73 @@ function graphErrorText(error: unknown): string {
   return "couldn't load the graph — try again.";
 }
 
+/** One agent's graph, full size: the hub's Expand. The hub owns the data and
+ * the role filter, so the dialog and the Overview always agree. */
 export function PolicyGraphDialog({
   open,
   onOpenChange,
-  projectId,
-  roleNames,
   agent,
+  graph,
+  loading,
+  error,
+  options,
+  roleControl,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  projectId: string;
-  roleNames: string[];
-  /** Narrow the graph to this agent's neighbourhood. */
-  agent?: string;
+  agent: string;
+  /** agentSubgraph of the role-filtered graph; null while there's none. */
+  graph: PolicyGraph | null;
+  loading: boolean;
+  error: unknown;
+  options: AgentGraphOptions;
+  /** The role picker button. */
+  roleControl?: React.ReactNode;
 }) {
-  const navigate = useNavigate();
+  const errorText = error ? graphErrorText(error) : null;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="flex h-[82vh] max-w-[min(96vw,1120px)] flex-col gap-0 overflow-hidden p-0"
         style={{ background: "hsl(var(--editor))" }}
       >
-        <DialogTitle className="sr-only">
-          {agent ? `${agent} policy graph` : "Policy graph"}
-        </DialogTitle>
-        <PolicyGraphView
-          projectId={projectId}
-          roleNames={roleNames}
-          enabled={open}
-          agent={agent}
-          headerRight={
-            <button
-              type="button"
-              onClick={() => {
-                onOpenChange(false);
-                navigate("/graph");
-              }}
-              title={
-                agent
-                  ? "Open the whole project's graph"
-                  : "Open the full graph view"
-              }
-              className={cn(GRAPH_ACTION_BTN, "mr-6")}
-            >
-              <Maximize2 size={12} />
-              {agent ? "Project graph" : "Full view"}
-            </button>
-          }
-        />
+        <DialogTitle className="sr-only">{`${agent} policy graph`}</DialogTitle>
+        <div className="flex flex-row items-center justify-between gap-3 border-b border-border px-4 py-3 pr-12">
+          <div className="flex items-center gap-2 text-sm text-foreground">
+            <Network size={16} className="text-primary" />
+            <span>
+              <span className="font-mono">{agent}</span> · policy graph
+            </span>
+          </div>
+          {roleControl}
+        </div>
+        <div className="relative flex-1">
+          {loading && !graph && (
+            <div className="grid h-full place-items-center font-mono text-xs text-muted-foreground">
+              resolving graph…
+            </div>
+          )}
+          {/* A failed refetch over a cached graph keeps the graph, with a
+              banner; only with nothing cached does the error take the box. */}
+          {errorText && !graph && (
+            <div className="grid h-full place-items-center px-8 text-center font-mono text-xs text-deny">
+              {errorText}
+            </div>
+          )}
+          {errorText && graph && (
+            <div className="absolute inset-x-0 top-0 z-10 border-b border-border bg-card/90 px-4 py-1.5 font-mono text-[11px] text-muted-foreground">
+              {errorText} showing the last graph loaded.
+            </div>
+          )}
+          {graph && graph.nodes.length > 1 && (
+            <PolicyFlow graph={graph} agent={options} />
+          )}
+          {graph && graph.nodes.length <= 1 && (
+            <div className="grid h-full place-items-center font-mono text-xs text-muted-foreground">
+              {`no roles, tools or sub-agents for ${agent}.`}
+            </div>
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   );

@@ -21,12 +21,11 @@ function resolveAgent(graph: PolicyGraph, agentName: string) {
   return { node: { ...(own ?? star!), label: agentName }, sourceId: source.id };
 }
 
-/** The agent's neighbourhood in the project graph: the agent, every node one
- * edge away (its roles, the tools it calls, the agents it reaches or that
- * reach it), plus what it can delegate to: each agent its permitted reach
- * leads to, hop by hop, with that agent's own edges. A denied reach delegates
- * nothing, so it's shown but not followed. Pure, so the hub can scope the
- * graph with no backend change. Empty when the agent isn't in it. */
+/** One agent's graph: the roles that run it, the agent, and its own
+ * outbound edges (the tools it calls, the sub-agents it reaches). One hop
+ * only: a sub-agent is a node, not its tools, and agents that call this one
+ * aren't drawn; each has a graph of its own. Pure, so the hub can scope the
+ * project graph with no backend change. Empty when the agent isn't in it. */
 export function agentSubgraph(
   graph: PolicyGraph,
   agentName: string,
@@ -34,50 +33,43 @@ export function agentSubgraph(
   const found = resolveAgent(graph, agentName);
   if (!found) return { nodes: [], edges: [], roles: graph.roles };
   const { node, sourceId } = found;
-  const out = new Map<string, PolicyGraph["edges"]>();
-  for (const e of graph.edges) push(out, e.source, e);
-  // The agent's own edges: what it may use (its stand-in's, re-pointed at it,
-  // when that's `*`), and who reaches or admits it.
-  const own = (out.get(sourceId) ?? []).map((e) =>
-    sourceId === node.id ? e : { ...e, source: node.id },
-  );
-  const edges = new Set([
-    ...own,
-    ...graph.edges
+  // Its stand-in's edges (`*`'s) are re-pointed at it, and a reach to itself
+  // is no sub-agent.
+  const repoint = (e: PolicyGraphEdge) => ({
+    ...e,
+    source: e.source === sourceId ? node.id : e.source,
+    target: e.target === sourceId ? node.id : e.target,
+  });
+  const edges = graph.edges
+    .filter(
+      (e) =>
+        (e.source === sourceId && e.target !== sourceId) ||
+        ((e.target === node.id || e.target === sourceId) &&
+          e.kind === "admission"),
+    )
+    .map(repoint);
+  const keep = new Set(edges.flatMap((e) => [e.source, e.target]));
+  const nodes = graph.nodes.filter((n) => keep.has(n.id) && n.id !== node.id);
+  return { nodes: [node, ...nodes], edges, roles: graph.roles };
+}
+
+/** How many tools each agent may call (never through a denied edge), by
+ * label, resolved as the hub does; for a sub-agent's "N tools" caption. */
+export function toolCountOf(graph: PolicyGraph, agentName: string): number {
+  const found = resolveAgent(graph, agentName);
+  if (!found) return 0;
+  const kind = new Map(graph.nodes.map((n) => [n.id, n.kind]));
+  return new Set(
+    graph.edges
       .filter(
         (e) =>
-          e.target === node.id ||
-          (e.target === sourceId && e.kind === "admission"),
+          e.source === found.sourceId &&
+          e.kind === "call" &&
+          e.verdict !== "deny" &&
+          (kind.get(e.target) === "tool" || kind.get(e.target) === "mcp"),
       )
-      .map((e) => (e.target === node.id ? e : { ...e, target: node.id })),
-  ]);
-  const keep = new Set<string>([node.id]);
-  for (const e of edges) {
-    keep.add(e.source);
-    keep.add(e.target);
-  }
-  // Follow permitted reach out of the agent, so a handoff's tools show; a
-  // caller that reaches INTO the agent doesn't drag its own tools in.
-  const seen = new Set([node.id, sourceId]);
-  const queue: string[] = [];
-  for (const e of own) {
-    if (delegates(e) && !seen.has(e.target)) {
-      seen.add(e.target);
-      queue.push(e.target);
-    }
-  }
-  for (let i = 0; i < queue.length; i++) {
-    for (const e of out.get(queue[i]) ?? []) {
-      edges.add(e);
-      keep.add(e.target);
-      if (delegates(e) && !seen.has(e.target)) {
-        seen.add(e.target);
-        queue.push(e.target);
-      }
-    }
-  }
-  const nodes = graph.nodes.filter((n) => keep.has(n.id) && n.id !== node.id);
-  return { nodes: [node, ...nodes], edges: [...edges], roles: graph.roles };
+      .map((e) => e.target),
+  ).size;
 }
 
 /** What the agent itself may use, from its own outbound edges in `sub`: tools,

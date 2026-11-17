@@ -101,7 +101,7 @@ function columnsOf(graph: LayoutGraph): {
   const col: Record<string, number> = {};
   for (const n of graph.nodes) {
     col[n.id] =
-      n.kind === "role"
+      n.kind === "role" || n.kind === "more-roles"
         ? 0
         : n.kind === "agent"
           ? 1 + depth.get(n.id)!

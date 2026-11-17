@@ -6,6 +6,7 @@ import {
   agentReachEdges,
   agentReachMap,
   agentSubgraph,
+  toolCountOf,
 } from "./agent-graph";
 
 const edge = (
@@ -48,18 +49,16 @@ const G: PolicyGraph = {
 };
 
 describe("agentSubgraph", () => {
-  it("expands the tools the agent's own reach targets can touch", () => {
+  it("keeps one hop: its roles, its tools and the sub-agents it reaches", () => {
     const sub = agentSubgraph(G, "a");
-    // a's neighbourhood + t2 (via a→b→t2); s is shown as an inbound caller.
+    // b is a node, not b's tools; s, which reaches into a, isn't drawn.
     expect(sub.nodes.map((n) => n.id).sort()).toEqual([
       "agent:a",
       "agent:b",
-      "agent:s",
       "role:support",
       "tool:t",
-      "tool:t2",
     ]);
-    expect(sub.edges).toHaveLength(5);
+    expect(sub.edges).toHaveLength(3);
   });
 
   it("does not pull an inbound caller's own tools into the subgraph", () => {
@@ -116,7 +115,7 @@ describe("agentSubgraph", () => {
     });
   });
 
-  it("follows permitted reach hop by hop", () => {
+  it("doesn't follow reach past the first hop", () => {
     const g: PolicyGraph = {
       ...G,
       nodes: [
@@ -130,9 +129,9 @@ describe("agentSubgraph", () => {
         edge("agent:c", "tool:t3", "call"),
       ],
     };
-    expect(agentSubgraph(g, "a").nodes.some((n) => n.id === "tool:t3")).toBe(
-      true,
-    );
+    const ids = agentSubgraph(g, "a").nodes.map((n) => n.id);
+    expect(ids).not.toContain("agent:c");
+    expect(ids).not.toContain("tool:t3");
   });
 
   it("doesn't count a reach to itself as reaching an agent", () => {
@@ -161,7 +160,8 @@ describe("agentSubgraph", () => {
     };
     const sub = agentSubgraph(g, "support_bot");
     expect(agentReachCounts(sub).tools).toBe(1);
-    expect(sub.nodes.some((n) => n.id === "agent:supervisor")).toBe(true);
+    // Its caller has a graph of its own.
+    expect(sub.nodes.some((n) => n.id === "agent:supervisor")).toBe(false);
   });
 
   it("keeps a declared agent with only roles admitting it as itself", () => {
@@ -193,6 +193,12 @@ describe("agentSubgraph", () => {
       edges: [edge("agent:*", "tool:refund", "call")],
     };
     expect(agentReachCounts(agentSubgraph(g, "locked")).tools).toBe(0);
+  });
+});
+describe("toolCountOf", () => {
+  it("counts the tools an agent may call, not through a denial", () => {
+    expect(toolCountOf(G, "b")).toBe(1);
+    expect(toolCountOf(G, "ghost")).toBe(0);
   });
 });
 

@@ -12,17 +12,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import type { PolicyGraph } from "@/lib/api";
-import { PolicyGraphDialog } from "./PolicyGraphDialog";
-import { makeQueryClient, renderWithProviders } from "@/test/render";
+import { ApiError, type PolicyGraph } from "@/lib/api";
+import {
+  PolicyFlow,
+  PolicyGraphDialog,
+  type AgentGraphOptions,
+} from "./PolicyGraphDialog";
+import { renderWithProviders } from "@/test/render";
 
 // --- @xyflow/react stub -----------------------------------------------------
 // A minimal ReactFlow that renders the caller's node/edge components (so their
 // code executes and counts) and wires the interaction callbacks the component
 // relies on. Everything else is a no-op passthrough.
 vi.mock("@xyflow/react", () => {
-  // One stable instance, as the real hook returns.
-  const flow = { fitView: () => Promise.resolve(true) };
   type AnyProps = Record<string, unknown>;
   const ReactFlow = ({
     nodes,
@@ -75,13 +77,12 @@ vi.mock("@xyflow/react", () => {
           );
         })}
         <svg>
-          {edgeList.map((ed, i) => {
+          {edgeList.map((ed) => {
             const Cmp = et[ed.type as string];
             return (
               <g
                 key={ed.id as string}
-                // By position: real ids are edge keys.
-                data-testid={`edge-e${i}`}
+                data-testid={`edge-${ed.id}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   (onEdgeClick as (ev: unknown, edge: unknown) => void)?.(
@@ -134,8 +135,6 @@ vi.mock("@xyflow/react", () => {
     ),
     Position: { Left: "left", Right: "right", Top: "top", Bottom: "bottom" },
     MarkerType: { ArrowClosed: "arrowclosed" },
-    useReactFlow: () => flow,
-    useNodesInitialized: () => true,
   };
 });
 
@@ -201,20 +200,47 @@ const GRAPH: PolicyGraph = {
   roles: ["admin"],
 };
 
-function stubGraph(payload: unknown, status = 200): ReturnType<typeof vi.fn> {
-  const spy = vi.fn();
-  vi.spyOn(window, "fetch").mockImplementation(
-    async (input: RequestInfo | URL) => {
-      const url = String(input);
-      spy(url);
-      return new Response(JSON.stringify(payload), {
-        status,
-        headers: { "Content-Type": "application/json" },
-      });
-    },
-  );
-  return spy;
+function renderFlow(graph: PolicyGraph, agent?: AgentGraphOptions) {
+  return renderWithProviders(<PolicyFlow graph={graph} agent={agent} />);
 }
+
+/** worker's own graph (agentSubgraph puts the agent first). */
+const WORKER: PolicyGraph = {
+  roles: ["admin"],
+  nodes: [
+    { id: "agent:worker", kind: "agent", label: "worker" },
+    { id: "agent:helper", kind: "agent", label: "helper" },
+    { id: "tool:refund", kind: "tool", label: "refund" },
+  ],
+  edges: [
+    {
+      source: "agent:worker",
+      target: "agent:helper",
+      kind: "reach",
+      via: "handoff",
+      verdict: "allow",
+      constraints: [],
+      roles: [],
+    },
+    {
+      source: "agent:worker",
+      target: "tool:refund",
+      kind: "call",
+      via: null,
+      verdict: "allow",
+      constraints: [],
+      roles: [],
+    },
+  ],
+};
+
+const options = (over: Partial<AgentGraphOptions> = {}): AgentGraphOptions => ({
+  toolCount: () => 3,
+  onOpenAgent: vi.fn(),
+  onMoreRoles: vi.fn(),
+  onMoreAgents: vi.fn(),
+  ...over,
+});
 
 function renderDialog(
   props: Partial<Parameters<typeof PolicyGraphDialog>[0]> = {},
@@ -223,8 +249,11 @@ function renderDialog(
     <PolicyGraphDialog
       open
       onOpenChange={() => undefined}
-      projectId="p1"
-      roleNames={["admin", "support"]}
+      agent="worker"
+      graph={WORKER}
+      loading={false}
+      error={null}
+      options={options()}
       {...props}
     />,
   );
@@ -234,8 +263,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("PolicyGraphDialog", () => {
   it("builds nodes + edges and renders the legend once loaded", async () => {
-    stubGraph(GRAPH);
-    renderDialog();
+    renderFlow(GRAPH);
     await waitFor(() =>
       expect(screen.getByTestId("node-agent:supervisor")).toBeInTheDocument(),
     );
@@ -250,8 +278,7 @@ describe("PolicyGraphDialog", () => {
   });
 
   it("flags the constraint-bypass path and focuses it on click", async () => {
-    stubGraph(GRAPH);
-    renderDialog();
+    renderFlow(GRAPH);
     await waitFor(() =>
       expect(screen.getByText(/constraint-bypass path/i)).toBeInTheDocument(),
     );
@@ -267,8 +294,7 @@ describe("PolicyGraphDialog", () => {
   });
 
   it("opens the edge card with verdict, roles, and constraints", async () => {
-    stubGraph(GRAPH);
-    renderDialog();
+    renderFlow(GRAPH);
     await waitFor(() =>
       expect(screen.getByTestId("edge-e2")).toBeInTheDocument(),
     );
@@ -284,8 +310,7 @@ describe("PolicyGraphDialog", () => {
   });
 
   it("shows the no-constraints edge card for a denied reach", async () => {
-    stubGraph(GRAPH);
-    renderDialog();
+    renderFlow(GRAPH);
     await waitFor(() =>
       expect(screen.getByTestId("edge-e4")).toBeInTheDocument(),
     );
@@ -297,8 +322,7 @@ describe("PolicyGraphDialog", () => {
   });
 
   it("pins a node to trace its transitive paths and toggles off", async () => {
-    stubGraph(GRAPH);
-    renderDialog();
+    renderFlow(GRAPH);
     const node = await screen.findByTestId("node-agent:supervisor");
     await userEvent.click(node);
     await waitFor(() =>
@@ -314,8 +338,7 @@ describe("PolicyGraphDialog", () => {
   });
 
   it("previews hover focus without pinning", async () => {
-    stubGraph(GRAPH);
-    renderDialog();
+    renderFlow(GRAPH);
     const node = await screen.findByTestId("node-agent:worker");
     // Radix marks <body> pointer-events:none while the dialog is open, which
     // trips userEvent's pointer check — drive the hover via fireEvent instead.
@@ -329,8 +352,7 @@ describe("PolicyGraphDialog", () => {
   });
 
   it("toggles the flow animation", async () => {
-    stubGraph(GRAPH);
-    renderDialog();
+    renderFlow(GRAPH);
     await screen.findByTestId("node-agent:worker");
     const animateBtn = screen.getByRole("button", { name: /animate flow/i });
     await userEvent.click(animateBtn);
@@ -339,131 +361,8 @@ describe("PolicyGraphDialog", () => {
     ).toBeInTheDocument();
   });
 
-  it("narrows to one agent's neighbourhood when given an agent", async () => {
-    stubGraph(GRAPH);
-    renderDialog({ agent: "worker" });
-    await screen.findByTestId("node-agent:worker");
-    // Its caller, its tool and its MCP reach stay; the caller's role drops.
-    expect(screen.getByTestId("node-agent:supervisor")).toBeInTheDocument();
-    expect(screen.getByTestId("node-tool:refund")).toBeInTheDocument();
-    expect(screen.getByTestId("node-mcp:search")).toBeInTheDocument();
-    expect(screen.queryByTestId("node-role:admin")).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("dialog", { name: "worker policy graph" }),
-    ).toBeInTheDocument();
-  });
-
-  it("offers only the roles that touch the agent in agent mode", async () => {
-    stubGraph({ ...GRAPH, roles: ["admin", "support", "guest"] });
-    renderDialog({ agent: "supervisor" });
-    await screen.findByTestId("node-agent:supervisor");
-    const options = within(screen.getByRole("combobox", { name: /^role/ }))
-      .getAllByRole("option")
-      .map((o) => o.textContent);
-    expect(options).toEqual(["all roles", "admin"]);
-  });
-
-  it("offers the roles on the agent's edges without an admission block", async () => {
-    // No role nodes: the policy declares no `admission:`, but edges carry roles.
-    stubGraph({
-      nodes: [
-        { id: "agent:bot", kind: "agent", label: "bot" },
-        { id: "tool:refund", kind: "tool", label: "refund" },
-      ],
-      edges: [
-        {
-          source: "agent:bot",
-          target: "tool:refund",
-          kind: "call",
-          via: null,
-          verdict: "allow",
-          constraints: [],
-          roles: ["support", "billing"],
-        },
-      ],
-      roles: ["billing", "support"],
-    });
-    renderDialog({ agent: "bot" });
-    await screen.findByTestId("node-agent:bot");
-    const options = within(screen.getByRole("combobox", { name: /^role/ }))
-      .getAllByRole("option")
-      .map((o) => o.textContent);
-    expect(options).toEqual(["all roles", "billing", "support"]);
-  });
-
-  it("shows the empty state for an agent with no edges", async () => {
-    stubGraph({
-      nodes: [{ id: "agent:lone", kind: "agent", label: "lone" }],
-      edges: [],
-      roles: [],
-    });
-    renderDialog({ agent: "lone" });
-    expect(
-      await screen.findByText(/no roles, tools or reach for lone/i),
-    ).toBeInTheDocument();
-    expect(screen.queryByTestId("node-agent:lone")).not.toBeInTheDocument();
-  });
-
-  it("says so when the agent isn't in the graph", async () => {
-    stubGraph(GRAPH);
-    renderDialog({ agent: "ghost" });
-    expect(
-      await screen.findByText(/no roles, tools or reach for ghost/i),
-    ).toBeInTheDocument();
-  });
-
-  it("refetches with a role filter when the role select changes", async () => {
-    const spy = stubGraph(GRAPH);
-    renderDialog();
-    await screen.findByTestId("node-agent:worker");
-    await userEvent.selectOptions(
-      screen.getByRole("combobox", { name: /^role/ }),
-      "admin",
-    );
-    await waitFor(() =>
-      expect(spy.mock.calls.some(([u]) => u.includes("role=admin"))).toBe(true),
-    );
-  });
-
-  it("shows the doesn't-compose error state on a 422", async () => {
-    stubGraph({ detail: "modules don't compose" }, 422);
-    renderDialog();
-    await waitFor(() =>
-      expect(screen.getByText(/don't compose/i)).toBeInTheDocument(),
-    );
-  });
-
-  it("keeps a cached graph with a banner when a refresh fails", async () => {
-    const client = makeQueryClient();
-    client.setQueryData(["policy-graph", "p1", null], GRAPH, { updatedAt: 0 });
-    stubGraph({ detail: "boom" }, 500);
-    renderWithProviders(
-      <PolicyGraphDialog
-        open
-        onOpenChange={() => undefined}
-        projectId="p1"
-        roleNames={[]}
-      />,
-      { client },
-    );
-    expect(
-      await screen.findByText(/showing the last graph loaded/),
-    ).toBeInTheDocument();
-    expect(screen.getByTestId("node-agent:worker")).toBeInTheDocument();
-    expect(screen.queryByText(/don't compose/)).toBeNull();
-  });
-
-  it("shows the empty state when no agents are bound", async () => {
-    stubGraph({ nodes: [], edges: [] });
-    renderDialog();
-    await waitFor(() =>
-      expect(screen.getByText(/no agents bound yet/i)).toBeInTheDocument(),
-    );
-  });
-
   it("explains a pinned agent in a side panel", async () => {
-    stubGraph(GRAPH);
-    renderDialog();
+    renderFlow(GRAPH);
     await userEvent.click(await screen.findByTestId("node-agent:supervisor"));
     const panel = screen.getByRole("complementary", {
       name: "agent supervisor",
@@ -483,8 +382,7 @@ describe("PolicyGraphDialog", () => {
   });
 
   it("labels the columns in the viewport, not as nodes", async () => {
-    stubGraph(GRAPH);
-    renderDialog();
+    renderFlow(GRAPH);
     const heading = await screen.findByText("Caller roles");
     expect(screen.getByTestId("viewport")).toContainElement(heading);
     expect(screen.getByText("Agents · hop 1")).toBeInTheDocument();
@@ -492,7 +390,7 @@ describe("PolicyGraphDialog", () => {
   });
 
   it("names a node's neighbours by label and counts in the singular", async () => {
-    stubGraph({
+    renderFlow({
       ...GRAPH,
       nodes: [
         ...GRAPH.nodes,
@@ -510,8 +408,7 @@ describe("PolicyGraphDialog", () => {
           roles: [],
         },
       ],
-    });
-    renderDialog();
+    } as PolicyGraph);
     await userEvent.click(await screen.findByTestId("node-mcp:mcp-demo-read"));
     const panel = screen.getByRole("complementary");
     expect(panel).toHaveTextContent("Callable by 1 of 1 agent.");
@@ -527,9 +424,9 @@ describe("PolicyGraphDialog", () => {
     );
     expect(document.body).not.toHaveTextContent("mcp-demo-read");
   });
+
   it("draws agents as circles, roles as rectangles, tools as hexagons", async () => {
-    stubGraph(GRAPH);
-    renderDialog();
+    renderFlow(GRAPH);
     const agent = await screen.findByTestId("node-agent:worker");
     expect(agent.querySelector("circle")).not.toBeNull();
     expect(
@@ -540,119 +437,105 @@ describe("PolicyGraphDialog", () => {
     ).not.toBeNull();
   });
 
-  it("folds extra tools into +N and opens them on click", async () => {
-    const tools = Array.from({ length: 15 }, (_, i) => `tool:t${i}`);
-    stubGraph({
+  it("opens a sub-agent's own graph on click and captions its tools", async () => {
+    const onOpenAgent = vi.fn();
+    renderFlow(WORKER, options({ onOpenAgent }));
+    const helper = await screen.findByTestId("node-agent:helper");
+    expect(helper).toHaveTextContent("3 tools");
+    await userEvent.click(helper);
+    expect(onOpenAgent).toHaveBeenCalledWith("helper");
+  });
+
+  it("groups many tools by verdict and lists a group's tools", async () => {
+    const tools = Array.from({ length: 10 }, (_, i) => `tool:t${i}`);
+    const big: PolicyGraph = {
       roles: [],
       nodes: [
         { id: "agent:big", kind: "agent", label: "big" },
-        ...tools.map((id) => ({ id, kind: "tool", label: id.slice(5) })),
+        ...tools.map((id) => ({
+          id,
+          kind: "tool" as const,
+          label: id.slice(5),
+        })),
       ],
-      edges: tools.map((target) => ({
+      edges: tools.map((target, i) => ({
         source: "agent:big",
         target,
-        kind: "call",
+        kind: "call" as const,
         via: null,
-        verdict: "allow",
+        verdict: i < 7 ? ("allow" as const) : ("deny" as const),
+        constraints: i === 0 ? ["args.n < 5"] : [],
+        roles: [],
+      })),
+    };
+    renderFlow(big, options());
+    expect(screen.queryByTestId("node-tool:t0")).toBeNull();
+    const allowed = await screen.findByTestId("node-group:allow");
+    expect(allowed).toHaveTextContent("7 allowed");
+    expect(allowed).toHaveTextContent("1 with limits");
+    await userEvent.click(allowed);
+    const list = screen.getByRole("complementary", { name: "Allowed tools" });
+    expect(within(list).getByText("t0")).toBeInTheDocument();
+    expect(within(list).getByText("args.n < 5")).toBeInTheDocument();
+    await userEvent.type(within(list).getByLabelText("Filter tools"), "t6");
+    expect(within(list).queryByText("t0")).toBeNull();
+  });
+
+  it("folds roles past five into +N that opens the role picker", async () => {
+    const roles = Array.from({ length: 7 }, (_, i) => `role:r${i}`);
+    const g: PolicyGraph = {
+      roles: roles.map((r) => r.slice(5)),
+      nodes: [
+        { id: "agent:a", kind: "agent", label: "a" },
+        ...roles.map((id) => ({
+          id,
+          kind: "role" as const,
+          label: id.slice(5),
+        })),
+      ],
+      edges: roles.map((source) => ({
+        source,
+        target: "agent:a",
+        kind: "admission" as const,
+        via: null,
+        verdict: "allow" as const,
         constraints: [],
         roles: [],
       })),
-    });
-    renderDialog();
-    await userEvent.click(await screen.findByTestId("node-more:agent:big"));
-    expect(screen.getByTestId("node-tool:t14")).toBeInTheDocument();
-    expect(screen.queryByTestId("node-more:agent:big")).toBeNull();
+    };
+    const onMoreRoles = vi.fn();
+    renderFlow(g, options({ onMoreRoles }));
+    const more = await screen.findByTestId("node-more:roles");
+    expect(more).toHaveTextContent("+2 more roles");
+    await userEvent.click(more);
+    expect(onMoreRoles).toHaveBeenCalled();
   });
 
-  it("draws every call into a tool pinned on the canvas", async () => {
-    // big folds its 15th tool; small lists the same tool, so it's drawn.
-    const tools = Array.from({ length: 15 }, (_, i) => `tool:t${i}`);
-    const call = (source: string, target: string) => ({
-      source,
-      target,
-      kind: "call",
-      via: null,
-      verdict: "allow",
-      constraints: [],
-      roles: [],
-    });
-    stubGraph({
-      roles: [],
-      nodes: [
-        { id: "agent:big", kind: "agent", label: "big" },
-        { id: "agent:small", kind: "agent", label: "small" },
-        ...tools.map((id) => ({ id, kind: "tool", label: id.slice(5) })),
-      ],
-      edges: [
-        ...tools.map((t) => call("agent:big", t)),
-        call("agent:small", "tool:t14"),
-      ],
-    });
-    renderDialog();
-    const more = await screen.findByTestId("node-more:agent:big");
-    expect(more).toHaveTextContent("+9 tools");
-    await userEvent.click(screen.getByTestId("node-tool:t14"));
-    // big's call to t14 is drawn now, without unfolding big's other tools.
-    expect(screen.getByTestId("node-more:agent:big")).toHaveTextContent(
-      "+8 tools",
-    );
-  });
-
-  it("finds each of two nodes that share a name", async () => {
-    stubGraph({
-      ...GRAPH,
-      nodes: [
-        ...GRAPH.nodes,
-        { id: "tool:search", kind: "tool", label: "search" },
-      ],
-    });
-    renderDialog();
-    await screen.findByTestId("node-agent:worker");
-    await userEvent.type(
-      screen.getByRole("combobox", { name: "Find a node" }),
-      "search · tool{Enter}",
+  it("shows the dialog's error states, keeping a cached graph", async () => {
+    const err = new ApiError(422, null, "modules don't compose");
+    const { rerender } = renderDialog({ graph: null, error: err });
+    expect(screen.getByText(/don't compose/)).toBeInTheDocument();
+    rerender(
+      <PolicyGraphDialog
+        open
+        onOpenChange={() => undefined}
+        agent="worker"
+        graph={WORKER}
+        loading={false}
+        error={new ApiError(500, null, "boom")}
+        options={options()}
+      />,
     );
     expect(
-      await screen.findByRole("complementary", { name: "tool search" }),
+      screen.getByText(/showing the last graph loaded/),
     ).toBeInTheDocument();
+    expect(screen.getByTestId("node-agent:worker")).toBeInTheDocument();
   });
 
-  it("prefers an exact name over one that merely contains it", async () => {
-    stubGraph({
-      ...GRAPH,
-      nodes: [
-        { id: "tool:web-search", kind: "tool", label: "web-search" },
-        ...GRAPH.nodes,
-      ],
-    });
-    renderDialog();
-    await screen.findByTestId("node-agent:worker");
-    await userEvent.type(
-      screen.getByRole("combobox", { name: "Find a node" }),
-      "search{Enter}",
-    );
+  it("says so when the agent has nothing to draw", () => {
+    renderDialog({ graph: { roles: [], nodes: [WORKER.nodes[0]], edges: [] } });
     expect(
-      await screen.findByRole("complementary", { name: "mcp search" }),
+      screen.getByText(/no roles, tools or sub-agents for worker/),
     ).toBeInTheDocument();
-  });
-
-  it("finds a node by name and can show only its paths", async () => {
-    stubGraph(GRAPH);
-    renderDialog();
-    await screen.findByTestId("node-agent:worker");
-    await userEvent.type(
-      screen.getByRole("combobox", { name: "Find a node" }),
-      "refund{Enter}",
-    );
-    await userEvent.click(
-      screen.getByRole("button", { name: "Only this path" }),
-    );
-    expect(screen.getByTestId("node-agent:supervisor")).toBeInTheDocument();
-    // The worker's MCP reach isn't on a path through refund.
-    expect(screen.queryByTestId("node-mcp:search")).toBeNull();
-    await userEvent.click(
-      screen.getByRole("button", { name: "Show everything" }),
-    );
-    expect(screen.getByTestId("node-mcp:search")).toBeInTheDocument();
   });
 });

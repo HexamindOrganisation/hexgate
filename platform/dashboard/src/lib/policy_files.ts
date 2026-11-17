@@ -14,8 +14,10 @@ import { useEffect, useState } from "react";
 import {
   keepPreviousData,
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 
 import { useActive } from "./active";
@@ -24,8 +26,10 @@ import {
   ApiError,
   type PolicyFileDraft,
   type PolicyFileRead,
+  type PolicyGraph,
   type PolicyMatrixCell,
 } from "./api";
+import { mergeRoleGraphs } from "./agent-graph-view";
 import { referencesImport, rewriteImportPath } from "./imports";
 import { useOrgs } from "./orgs";
 
@@ -143,6 +147,42 @@ export function usePolicyGraph(
     // A role change re-keys the query; keep the prior graph (and its role list)
     // on screen through the refetch so the filter and canvas don't flicker.
     placeholderData: keepPreviousData,
+  });
+}
+
+/** Results of the per-role graph fetches, as one merged graph. Module-level,
+ * so TanStack keeps its output stable until a result changes. */
+function combineRoleGraphs(results: UseQueryResult<PolicyGraph>[]) {
+  const failed = results.find((r) => r.isError);
+  const ready = results.every((r) => r.data);
+  return {
+    data: ready
+      ? mergeRoleGraphs(results.map((r) => r.data as PolicyGraph))
+      : undefined,
+    isLoading: results.some((r) => r.isLoading),
+    isError: !!failed,
+    error: failed?.error ?? null,
+  };
+}
+
+/** The graph for a caller holding every role in `roles` at once ([] = no
+ * role filter): one fetch per role, merged as the engine combines roles
+ * (mergeRoleGraphs). `data` is undefined until every role has loaded. */
+export function useRolesGraph(
+  projectId: string | null,
+  roles: string[],
+  enabled = true,
+) {
+  const keys = roles.length ? roles : [null];
+  return useQueries({
+    queries: keys.map((role) => ({
+      queryKey: ["policy-graph", projectId as string, role],
+      queryFn: () => api.policyGraph(projectId as string, role ?? undefined),
+      enabled: !!projectId && enabled,
+      retry: false,
+      staleTime: 15_000,
+    })),
+    combine: combineRoleGraphs,
   });
 }
 

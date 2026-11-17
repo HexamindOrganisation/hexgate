@@ -2,7 +2,7 @@
  * and graph, the Resources tab's manifest and per-role policy, and the
  * unknown-agent case. */
 
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes, useLocation } from "react-router-dom";
@@ -582,6 +582,30 @@ describe("AgentHub", () => {
     });
     expect(await screen.findByText(/the last one loaded/)).toBeInTheDocument();
     expect(screen.getByTestId("agent-graph")).toBeInTheDocument();
+  });
+
+  it("draws the graph for the roles picked in the role dialog", async () => {
+    renderHub("support_bot");
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Roles · all 2/ }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByLabelText(/^support/));
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Show 1 role" }),
+    );
+    await vi.waitFor(() =>
+      expect(
+        fetched.some(
+          (u) =>
+            u.pathname.endsWith("/policy/graph") &&
+            u.searchParams.get("role") === "support",
+        ),
+      ).toBe(true),
+    );
+    expect(
+      await screen.findByRole("button", { name: /Roles · 1 of 2/ }),
+    ).toBeInTheDocument();
   });
 
   it("says the policy doesn't compose on a 422", async () => {

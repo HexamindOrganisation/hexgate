@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 
 import type { PolicyLint, PolicyMatrix, ResolvedPolicy } from "@/lib/api";
 import { InspectorTabs } from "./InspectorTabs";
+import { Route, Routes } from "react-router-dom";
 import { renderWithProviders } from "@/test/render";
 
 const RESOLVED: ResolvedPolicy = {
@@ -63,6 +64,38 @@ function renderInspector(
 afterEach(() => vi.restoreAllMocks());
 
 describe("InspectorTabs", () => {
+  it("opens an agent's hub from the Graph picker", async () => {
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/policies"
+          element={
+            <InspectorTabs
+              projectId="p1"
+              resolved={RESOLVED}
+              matrix={MATRIX}
+              lints={[]}
+              draft={null}
+              resolves
+              modular
+              previewing={false}
+              agentNames={["billing_bot", "support_bot"]}
+              inspectAgent="*"
+              onInspectAgentChange={noop}
+            />
+          }
+        />
+        <Route path="/agents/:name" element={<p>hub</p>} />
+      </Routes>,
+      { initialRoute: "/policies" },
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Graph/ }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "support_bot" }),
+    );
+    expect(await screen.findByText("hub")).toBeInTheDocument();
+  });
+
   it("opens Resolved on a tools × roles grid", () => {
     renderInspector();
     expect(

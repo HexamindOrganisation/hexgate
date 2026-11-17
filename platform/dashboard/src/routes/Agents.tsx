@@ -1,6 +1,6 @@
 import { useId, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, X } from "lucide-react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 
 import { agentReachMap } from "@/lib/agent-graph";
@@ -13,6 +13,16 @@ import { DocsLink } from "@/components/DocsLink";
 import { DOC_PATHS } from "@/lib/docs";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { AgentFilterDialog } from "@/components/agents/AgentFilterDialog";
+import {
+  type AgentFacts,
+  type AgentFilters,
+  NO_FILTERS,
+  activeCount,
+  matches,
+  rolesThatRun,
+} from "@/lib/agent-filters";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatStrip, type Stat } from "@/components/ui/stat-strip";
 import { AGENT_LIST_CAP, agentHubPath } from "@/lib/agent-paths";
@@ -37,6 +47,8 @@ export function AgentsPage() {
   const scope = useProjectScoped();
   const [searchParams] = useSearchParams();
   const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState<AgentFilters>(NO_FILTERS);
+  const [filtering, setFiltering] = useState(false);
   const manifests = useQuery({
     queryKey: ["agent-manifests", scope.projectId],
     queryFn: () => api.listAgentManifests(scope.projectId as string),
@@ -61,6 +73,30 @@ export function AgentsPage() {
         : new Map(),
     [graph.data, graph.isPlaceholderData, manifests.data],
   );
+  // What the filter reads off each agent.
+  const facts = useMemo<AgentFacts[]>(() => {
+    const g = graph.data && !graph.isPlaceholderData ? graph.data : undefined;
+    return (manifests.data ?? []).map((a) => {
+      const reach = reachByAgent.get(a.name);
+      return {
+        name: a.name,
+        registered: !!a.manifest,
+        framework: a.manifest?.framework?.trim() || null,
+        activity: summary.data ? (activityOf(a.name) ?? ZERO) : null,
+        reaches: !!reach?.reaches.length,
+        calledBy: !!reach?.calledBy.length,
+        runBy: rolesThatRun(g, a.name),
+      };
+    });
+  }, [
+    manifests.data,
+    reachByAgent,
+    summary.data,
+    activityOf,
+    graph.data,
+    graph.isPlaceholderData,
+  ]);
+
   // The 24h summary never loaded, so every count reads "—"; or a later poll
   // (of it or the agent list) failed, so what's shown is the last loaded.
   const summaryFailed = summary.isError && !summary.data;
@@ -138,12 +174,15 @@ export function AgentsPage() {
   }
 
   const agents = manifests.data ?? [];
-  // Only while the box is there: a filter left from a bigger project mustn't
-  // hide rows it can no longer clear.
-  const q = agents.length > AGENT_LIST_CAP ? query.trim().toLowerCase() : "";
-  const shown = q
-    ? agents.filter((a) => a.name.toLowerCase().includes(q))
-    : agents;
+  // Only while the toolbar is there: filters left from a bigger project
+  // mustn't hide rows they can no longer clear.
+  const toolbar = agents.length > AGENT_LIST_CAP;
+  const q = toolbar ? query.trim().toLowerCase() : "";
+  const f = toolbar ? filters : NO_FILTERS;
+  const keep = new Set(facts.filter((a) => matches(f, a)).map((a) => a.name));
+  const shown = agents.filter(
+    (a) => keep.has(a.name) && (!q || a.name.toLowerCase().includes(q)),
+  );
 
   return (
     <div className="mx-auto max-w-[1240px]">
@@ -180,19 +219,47 @@ export function AgentsPage() {
         )}
       </div>
 
+      {toolbar && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <Input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={`Filter ${agents.length} agents by name`}
+            aria-label="Filter agents by name"
+            className="h-9 max-w-xs flex-1 basis-60 text-sm"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-9 gap-2"
+            onClick={() => setFiltering(true)}
+          >
+            Filters
+            {activeCount(filters) > 0 && (
+              <span className="grid h-5 min-w-5 place-items-center rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground">
+                {activeCount(filters)}
+              </span>
+            )}
+          </Button>
+          <FilterChips f={filters} setF={setFilters} />
+        </div>
+      )}
+      {filtering && (
+        <AgentFilterDialog
+          facts={facts}
+          roles={graph.data?.roles ?? []}
+          applied={filters}
+          onApply={(next) => {
+            setFilters(next);
+            setFiltering(false);
+          }}
+          onClose={() => setFiltering(false)}
+        />
+      )}
+
       <Card className="overflow-hidden p-0">
-        {agents.length > AGENT_LIST_CAP && (
-          <div className="border-b border-border px-4 py-3">
-            <Input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={`Filter ${agents.length} agents by name`}
-              aria-label="Filter agents by name"
-              className="h-8 max-w-xs text-sm"
-            />
-          </div>
-        )}
         <nav aria-label="Agents" className="flex flex-col">
           {manifests.isPending ? (
             <div className="px-4 py-5 text-meta text-muted-foreground">
@@ -205,7 +272,9 @@ export function AgentsPage() {
           ) : agents.length ? (
             shown.length === 0 ? (
               <div className="px-4 py-5 text-meta text-muted-foreground">
-                No agent matches “{query.trim()}”.
+                {q && activeCount(f) === 0
+                  ? `No agent matches “${query.trim()}”.`
+                  : "No agent matches these filters."}
               </div>
             ) : (
               shown.map((a, i) => {
@@ -349,5 +418,81 @@ export function AgentsPage() {
         </nav>
       </Card>
     </div>
+  );
+}
+
+const ZERO = { all: 0, deny: 0, needs_approval: 0 };
+
+const ACTIVITY_LABEL = {
+  deny: "Has denials · 24h",
+  approval: "Waiting on approval · 24h",
+  quiet: "No calls · 24h",
+};
+
+/** One removable chip per filter set, and Clear all. */
+function FilterChips({
+  f,
+  setF,
+}: {
+  f: AgentFilters;
+  setF: (f: AgentFilters) => void;
+}) {
+  const chips: { key: string; label: string; clear: () => void }[] = [
+    ...(f.status === "any"
+      ? []
+      : [
+          {
+            key: "status",
+            label: f.status === "registered" ? "Registered" : "Not registered",
+            clear: () => setF({ ...f, status: "any" }),
+          },
+        ]),
+    ...f.activity.map((v) => ({
+      key: `a:${v}`,
+      label: ACTIVITY_LABEL[v],
+      clear: () => setF({ ...f, activity: f.activity.filter((x) => x !== v) }),
+    })),
+    ...f.frameworks.map((v) => ({
+      key: `f:${v}`,
+      label: v,
+      clear: () =>
+        setF({ ...f, frameworks: f.frameworks.filter((x) => x !== v) }),
+    })),
+    ...f.delegation.map((v) => ({
+      key: `d:${v}`,
+      label: v === "reaches" ? "Reaches agents" : "Called by agents",
+      clear: () =>
+        setF({ ...f, delegation: f.delegation.filter((x) => x !== v) }),
+    })),
+    ...f.roles.map((v) => ({
+      key: `r:${v}`,
+      label: `Run by ${v}`,
+      clear: () => setF({ ...f, roles: f.roles.filter((x) => x !== v) }),
+    })),
+  ];
+  if (!chips.length) return null;
+  return (
+    <>
+      {chips.map((c) => (
+        <button
+          key={c.key}
+          type="button"
+          onClick={c.clear}
+          aria-label={`Remove filter: ${c.label}`}
+          className="inline-flex h-8 items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2.5 text-xs font-medium text-foreground hover:bg-primary/15"
+        >
+          {c.label}
+          <X className="size-3" aria-hidden />
+        </button>
+      ))}
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => setF(NO_FILTERS)}
+      >
+        Clear all
+      </Button>
+    </>
   );
 }

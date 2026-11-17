@@ -171,6 +171,33 @@ describe("AgentsPage — the agent list", () => {
     expect(screen.getByText(/No agent matches/)).toBeInTheDocument();
   });
 
+  it("filters by status in the Filters dialog, with a removable chip", async () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({
+      ...MANIFEST,
+      name: `bot_${i}`,
+      // bot_0 and bot_1 never registered.
+      manifest: i < 2 ? null : { ...MANIFEST.manifest, name: `bot_${i}` },
+    }));
+    stubFetch(many);
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Filters" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Filter agents" });
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Not registered · 2" }),
+    );
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Show 2 agents" }),
+    );
+    expect(screen.getByRole("link", { name: /^bot_0\b/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^bot_5\b/ })).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove filter: Not registered" }),
+    );
+    expect(screen.getByRole("link", { name: /^bot_5\b/ })).toBeInTheDocument();
+  });
+
   it("has no filter for a short list", async () => {
     stubFetch();
     renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });

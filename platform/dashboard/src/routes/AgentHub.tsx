@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Link,
   NavLink,
@@ -31,6 +31,7 @@ import {
   usePolicyFiles,
   usePolicyGraph,
   usePolicyMatrix,
+  useRolesGraph,
 } from "@/lib/policy_files";
 import { isModular } from "@/lib/file_tree";
 import { roleModesOf, type RoleMode } from "@/lib/role-modes";
@@ -43,14 +44,22 @@ import {
   agentReachCounts,
   agentReachEdges,
   agentSubgraph,
+  toolCountOf,
 } from "@/lib/agent-graph";
+import { roleOptionsFor } from "@/lib/agent-graph-view";
+import { agentHubPath } from "@/lib/agent-paths";
 import { rangeSearch } from "@/lib/range-params";
 import { formatDate, pluralise } from "@/lib/format";
 import {
   PolicyFlow,
   PolicyGraphDialog,
   VerdictTag,
+  type AgentGraphOptions,
 } from "@/components/policy_files/PolicyGraphDialog";
+import {
+  RolePickerDialog,
+  RolesButton,
+} from "@/components/policy_files/RolePicker";
 import { ResolvedGrid } from "@/components/policy_files/InspectorTabs";
 import { DetailDrawer } from "@/components/audit/drawer";
 import { EventsTable } from "@/components/audit/pieces";
@@ -138,18 +147,75 @@ export function AgentHub() {
   const [graphOpen, setGraphOpen] = useState(false);
   // Not a prior project's graph, kept while this one loads.
   const graph = graphQuery.isPlaceholderData ? undefined : graphQuery.data;
-  const status =
-    graphQuery.error instanceof ApiError ? graphQuery.error.status : null;
   const graphError: GraphError | null = !graphQuery.isError
     ? null
-    : status === 422
-      ? "compose"
-      : status === 404
-        ? "gone"
-        : "load";
+    : graphErrorOf(graphQuery.error);
   const subgraph = useMemo(
     () => (graph && agent ? agentSubgraph(graph, agent.name) : null),
     [graph, agent],
+  );
+
+  // The roles the drawn graph is for ([] = every role): one fetch per role,
+  // merged as the engine combines a caller's roles. Each agent starts fresh.
+  const [roles, setRoles] = useState<string[]>([]);
+  const [rolesFor, setRolesFor] = useState(`${scope.projectId}:${name}`);
+  if (rolesFor !== `${scope.projectId}:${name}`) {
+    setRolesFor(`${scope.projectId}:${name}`);
+    setRoles([]);
+  }
+  const [pickingRoles, setPickingRoles] = useState(false);
+  const rolesGraph = useRolesGraph(
+    scope.projectId,
+    roles,
+    !!agent && roles.length > 0,
+  );
+  const filtered = roles.length > 0;
+  const view = useMemo(() => {
+    const g = filtered ? rolesGraph.data : graph;
+    return g && agent ? agentSubgraph(g, agent.name) : null;
+  }, [filtered, rolesGraph.data, graph, agent]);
+  const viewLoading = filtered
+    ? rolesGraph.isLoading
+    : graphQuery.isLoading || graphQuery.isPlaceholderData;
+  const viewError = filtered
+    ? rolesGraph.isError
+      ? graphErrorOf(rolesGraph.error)
+      : null
+    : graphError;
+  const roleOptions = useMemo(
+    () => (graph && subgraph ? roleOptionsFor(graph.roles, subgraph) : []),
+    [graph, subgraph],
+  );
+  const navigate = useNavigate();
+  const toolCount = useCallback(
+    (n: string) => (graph ? toolCountOf(graph, n) : 0),
+    [graph],
+  );
+  const graphOptions = useMemo<AgentGraphOptions | null>(
+    () =>
+      agent
+        ? {
+            toolCount,
+            onOpenAgent: (n) => {
+              setGraphOpen(false);
+              navigate(agentHubPath(n));
+            },
+            onMoreRoles: () => setPickingRoles(true),
+            onMoreAgents: () => {
+              setGraphOpen(false);
+              navigate(`${agentHubPath(agent.name)}/resources`);
+            },
+            projectGraph: graph,
+          }
+        : null,
+    [agent, toolCount, navigate, graph],
+  );
+  const rolesButton = (
+    <RolesButton
+      total={roleOptions.length}
+      picked={roles.length}
+      onClick={() => setPickingRoles(true)}
+    />
   );
   // Sub-agents come from the manifest (every project has one); the graph only
   // adds each reach's verdict, where the project composes a policy.
@@ -260,17 +326,21 @@ export function AgentHub() {
             activityError: summary.isError && !summary.data,
             activityStale: summary.isError && !!summary.data,
             subgraph,
+            view,
+            graphOptions,
+            rolesButton,
+            rolesPicked: roles.length,
             subAgents,
             // One dialog for every entry point; only when there's more than
             // the agent's own node to draw.
             openGraph:
-              scope.projectId && subgraph && subgraph.nodes.length > 1
+              scope.projectId && view && view.nodes.length > 1
                 ? () => setGraphOpen(true)
                 : null,
             // The previous project's graph, kept while this one loads, isn't
             // this agent's: show it as loading.
-            graphLoading: graphQuery.isLoading || graphQuery.isPlaceholderData,
-            graphError,
+            graphLoading: viewLoading,
+            graphError: viewError,
             classic: !!policyFiles.data && !modular,
             playgroundLive,
             servedAgent: served.agentName,
@@ -278,13 +348,27 @@ export function AgentHub() {
           } satisfies HubContext
         }
       />
-      {graphOpen && scope.projectId && (
+      {graphOpen && graphOptions && (
         <PolicyGraphDialog
           open
           onOpenChange={setGraphOpen}
-          projectId={scope.projectId}
-          roleNames={graph?.roles ?? []}
           agent={agent.name}
+          graph={viewLoading ? null : view}
+          loading={viewLoading}
+          error={filtered ? rolesGraph.error : graphQuery.error}
+          options={graphOptions}
+          roleControl={rolesButton}
+        />
+      )}
+      {pickingRoles && (
+        <RolePickerDialog
+          options={roleOptions}
+          picked={roles}
+          onClose={() => setPickingRoles(false)}
+          onApply={(next) => {
+            setRoles(next);
+            setPickingRoles(false);
+          }}
         />
       )}
     </div>
@@ -303,7 +387,15 @@ export interface HubContext {
   activityError: boolean;
   /** A later poll failed: the last counts stay, marked as such. */
   activityStale: boolean;
+  /** The agent's graph from the unfiltered project graph (every role). */
   subgraph: PolicyGraph | null;
+  /** The agent's graph as drawn: for the picked roles, or every role. */
+  view: PolicyGraph | null;
+  graphOptions: AgentGraphOptions | null;
+  /** Opens the role picker. */
+  rolesButton: React.ReactNode;
+  /** How many roles the drawn graph is for (0 = every role). */
+  rolesPicked: number;
   /** The manifest's sub-agents; null when it records none. */
   subAgents: SubAgentRow[] | null;
   /** Opens the agent's graph dialog; null when there's no graph to show. */
@@ -672,13 +764,23 @@ function Breadcrumb({ name }: { name: string }) {
 
 type GraphError = "compose" | "gone" | "load";
 
+/** A graph fetch's failure, by status: 422 the modules don't compose, 404
+ * the project isn't visible any more, else it didn't load. */
+function graphErrorOf(error: unknown): GraphError {
+  const status = error instanceof ApiError ? error.status : null;
+  return status === 422 ? "compose" : status === 404 ? "gone" : "load";
+}
+
 /** Overview: the 24h strip, then the agent's graph as the centrepiece. */
 function AgentOverview({
   agent,
   activity,
   activityError,
   activityStale,
-  subgraph,
+  view,
+  graphOptions,
+  rolesButton,
+  rolesPicked,
   graphLoading,
   graphError,
   classic,
@@ -696,19 +798,20 @@ function AgentOverview({
     { label: "Resources", value: num(resourceCount(agent)) },
   ];
 
-  // What the agent itself may use: its own outbound edges, never a denied one.
-  const reach = subgraph?.nodes.length ? agentReachCounts(subgraph) : null;
+  // What the agent itself may use (for the picked roles): its own outbound
+  // edges, never a denied one.
+  const reach = view?.nodes.length ? agentReachCounts(view) : null;
   const caption = reach
     ? [
         reach.tools && pluralise(reach.tools, "tool"),
         reach.mcpTools && pluralise(reach.mcpTools, "MCP tool"),
-        reach.agents && pluralise(reach.agents, "agent"),
+        reach.agents && pluralise(reach.agents, "sub-agent"),
       ]
         .filter(Boolean)
         .join(", ")
     : "";
 
-  const hasGraph = !graphLoading && !!subgraph && subgraph.nodes.length > 1;
+  const hasGraph = !graphLoading && !!view && view.nodes.length > 1;
   return (
     <Card className="overflow-hidden p-0">
       <div className="grid grid-cols-2 gap-px border-b border-border bg-border sm:grid-cols-4">
@@ -737,13 +840,16 @@ function AgentOverview({
         <span>
           What <span className="font-mono text-foreground">{agent.name}</span>{" "}
           can reach{hasGraph && ` — ${caption || "nothing it may use yet"}`}
+          {rolesPicked > 0 && ` as ${pluralise(rolesPicked, "picked role")}`}
         </span>
+        <span className="ml-auto" />
+        {rolesButton}
         {hasGraph && openGraph && (
           <button
             type="button"
             onClick={openGraph}
             title="Open the graph in a larger view"
-            className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent"
           >
             <Maximize2 className="size-3" />
             Expand
@@ -761,7 +867,7 @@ function AgentOverview({
       )}
       {hasGraph ? (
         <div className="h-[420px] border-t border-border">
-          <PolicyFlow graph={subgraph} embedded />
+          <PolicyFlow graph={view} embedded agent={graphOptions ?? undefined} />
         </div>
       ) : (
         <Placeholder>
