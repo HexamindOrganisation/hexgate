@@ -18,7 +18,7 @@ RESULT_CAP_BYTES = 256 * 1024
 TRUNCATED_MARKER = '\n{"truncated": true}'
 TRUNCATED_LIST_OPEN = '{"truncated": true, "items": ['
 # The list a page of results keeps its rows in, or a report its entries.
-PAGE_LISTS = ("rows", "items", "agents")
+PAGE_LISTS = ("rows", "items", "facts", "agents")
 
 # What untrusted() keeps: each trusted key, mapped to None (kept as it is) or
 # to the spec its value is walked with.

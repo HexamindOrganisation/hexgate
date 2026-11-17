@@ -506,6 +506,10 @@ class ResolvedPolicyResponse(BaseModel):
     """The composed effective policy per role. Each value is an AgentPolicy dump."""
 
     roles: dict[str, dict] = Field(default_factory=dict)
+    # Whether the project enforces this store at all (an entry policy.yaml or a
+    # role binding). False: each agent enforces its own policy_yaml, and this
+    # answer is the store's default view, which nothing enforces.
+    modular: bool
 
 
 class PolicyMatrixCell(BaseModel):
@@ -647,6 +651,33 @@ class PolicyGraphResponse(BaseModel):
     nodes: list[PolicyGraphNode] = Field(default_factory=list)
     edges: list[PolicyGraphEdge] = Field(default_factory=list)
     roles: list[str] = Field(default_factory=list)
+    modular: bool  # as on ResolvedPolicyResponse
+    # The agents the policy declares ("*" included). An agent a grant only
+    # reaches is a node, but not declared: it runs under the "*" view.
+    declared_agents: list[str]
+
+
+class RiskFactOut(BaseModel):
+    """One allowed call whose risky ``argument`` (None for a destructive tool)
+    the policy leaves open; see ``policy_modules.risk_facts``."""
+
+    agent: str
+    role: str
+    tool: str
+    kind: Literal[
+        "unbounded_number", "host_without_allowlist", "destructive_without_approval"
+    ]
+    argument: str | None
+    constraints_present: list[str]
+
+
+class RiskFactsResponse(BaseModel):
+    """Risk facts, plus the agents read without a registered manifest, whose
+    facts can only come from tool names and HTTP egress."""
+
+    # First, so a client that cuts a long answer keeps it.
+    agents_without_manifest: list[str] = Field(default_factory=list)
+    facts: list[RiskFactOut] = Field(default_factory=list)
 
 
 class PolicyTestRequest(BaseModel):
@@ -664,6 +695,74 @@ class PolicyTestRequest(BaseModel):
     drafts: PolicyFileDrafts = Field(default_factory=list)  # unsaved edits
 
 
+class PolicyDiffRequest(BaseModel):
+    """Draft files to compare against the saved project, applied by file name."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    drafts: Annotated[PolicyFileDrafts, Field(min_length=1)]
+
+
+class PolicyGrantOut(BaseModel):
+    """What one role may do with one tool: its mode and its constraints."""
+
+    mode: str  # "allow" | "approval_required"
+    constraints: list[str] = Field(default_factory=list)
+
+
+class PolicyChangeOut(BaseModel):
+    """One (agent, role, tool) whose grant the drafts change. ``None`` = not
+    reachable. ``tool`` is ``agent:<name>`` for a reach, ``agent.run`` for
+    admission (``agent.tool:<name>`` / ``agent.handoff:<name>`` when the two
+    transfer modes change differently)."""
+
+    agent: str
+    role: str
+    tool: str
+    before: PolicyGrantOut | None
+    after: PolicyGrantOut | None
+    constraints_added: list[str] = Field(default_factory=list)
+    constraints_removed: list[str] = Field(default_factory=list)
+
+
+class PolicyAgentChangeOut(BaseModel):
+    """An agent-level field (``guards`` or ``usage``) the drafts change, as its
+    composed JSON value on each side. One per agent: it is the same on every
+    role."""
+
+    agent: str
+    key: str  # "guards" | "usage"
+    before: dict | None
+    after: dict | None
+
+
+class PolicyGateChangeOut(BaseModel):
+    """An opt-in gate the drafts switch on or off for an agent. Each is on only
+    while some role lists a key of its kind; switching one changes every role at
+    once, including the as-tool and skill calls no per-tool row can show."""
+
+    agent: str
+    gate: str  # "admission" | "reach" | "tool_reach" | "skills"
+    before: bool
+    after: bool
+
+
+class PolicyComposesOut(BaseModel):
+    before: bool
+    after: bool
+
+
+class PolicyDiffResponse(BaseModel):
+    """Only what changes. Empty lists with ``composes`` false on a side mean that
+    side does not compose, so there was nothing to compare."""
+
+    changes: list[PolicyChangeOut] = Field(default_factory=list)
+    agent_changes: list[PolicyAgentChangeOut] = Field(default_factory=list)
+    gate_changes: list[PolicyGateChangeOut] = Field(default_factory=list)
+    agents_affected: list[str] = Field(default_factory=list)
+    composes: PolicyComposesOut
+
+
 class PolicyTestResponse(BaseModel):
     """The gate's verdict for a single evaluated tool call."""
 
@@ -671,6 +770,10 @@ class PolicyTestResponse(BaseModel):
     reason: str | None = None
     violations: list[str] = Field(default_factory=list)
     hint: str | None = None
+    # Whether the policy (the draft included) declares the request's agent; an
+    # agent it does not declare was evaluated under the generic "*" view.
+    agent_declared: bool
+    declared_agents: list[str]  # as on PolicyGraphResponse
 
 
 class UncoveredToolOut(BaseModel):

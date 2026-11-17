@@ -47,6 +47,11 @@ COVERAGE: Spec = {
         "uncovered_subagents": {"agent": None},
     }
 }
+# Why an undeclared agent is refused rather than answered.
+UNDECLARED = (
+    'an agent the policy does not declare runs under the generic "*" view, '
+    "which a call without `agent` returns"
+)
 
 
 class PolicyDraft(BaseModel):
@@ -116,19 +121,14 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
     async def refuse_unknown_agent(project_id: str, agent: str | None) -> None:
         """An agent the policy does not declare runs under the generic `"*"`
         view, and the API answers it with that view under the agent's name, so
-        a typo reads as a real agent's policy. The graph lists every declared
-        agent and any agent a grant reaches; anything else is refused with
-        what it would have meant."""
+        a typo reads as a real agent's policy. The graph lists the declared
+        agents (an agent a grant only reaches is not one); anything else is
+        refused with what it would have meant."""
         if agent is None or agent == "*":
             return
         graph = await read(project_id, "/policy/graph")
-        known = sorted(n["label"] for n in graph["nodes"] if n["kind"] == "agent")
-        if agent not in known:
-            raise ToolError(
-                f"agent {agent!r} is not declared in the policy (declared: "
-                f"{known}); an agent the policy does not declare runs under the "
-                'generic "*" view, which a call without `agent` returns'
-            )
+        if agent not in graph["declared_agents"]:
+            raise _undeclared(agent, graph["declared_agents"])
 
     # Unstructured, like every tool here: a `str` return otherwise goes out a
     # second time as structuredContent, and the result cap would bound one copy.
@@ -198,6 +198,25 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         if role is not None and role not in graph["roles"]:
             raise ToolError(f"role {role!r} not defined (known: {graph['roles']})")
         return result_text(graph)
+
+    @mcp.tool(annotations=READ_ONLY, structured_output=False)
+    async def policy_risk_facts(project_id: str, agent: str | None = None) -> str:
+        """Allowed calls whose risky argument the resolved policy leaves open,
+        per agent, role and tool: a number argument with no upper bound
+        (`unbounded_number`), a URL or host argument or HTTP egress with no
+        allowlist (`host_without_allowlist`), a destructive tool with no
+        approval step (`destructive_without_approval`). `constraints_present`
+        lists the constraints that apply but don't bound it. Hosts and
+        destructive tools are recognised by argument names and tool-name verbs,
+        a heuristic: an empty list is not proof of safety. Agents in
+        `agents_without_manifest` are read without their tools, so only tool
+        names and HTTP egress can raise facts for them. Pass `agent` for one
+        agent; by default every declared or registered agent, or the generic
+        view "*" (every agent's starting point) when the project names none. A
+        result over 256 KiB keeps the facts that fit, marked
+        `"truncated": true`: pass `agent` to narrow it."""
+        await refuse_without_store(project_id)
+        return result_text(await read(project_id, "/policy/risk-facts", agent=agent))
 
     @mcp.tool(annotations=READ_ONLY, structured_output=False)
     async def policy_list_roles(project_id: str) -> str:
@@ -279,15 +298,9 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         generic view every agent starts from), against the resolved policy;
         `attributes` are the caller's ctx.* values. Pass `drafts`, each a
         whole file by `name`, to evaluate against them as if they were saved.
-        With a `policy.yaml` draft, `agent` is not checked against the draft's
-        own agents: an agent it does not declare is evaluated under the
-        generic view.
         A file nothing imports is not read: draft a new file
         together with the `policy.yaml` that imports it."""
         await refuse_without_store(project_id, drafts)
-        # A draft policy.yaml may declare an agent the saved graph lacks.
-        if not _drafts_entry(drafts):
-            await refuse_unknown_agent(project_id, agent)
         body = {
             "role": role,
             "tool": tool,
@@ -298,7 +311,41 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
         }
         # Unset: left out, so the API applies its own defaults.
         body = {k: v for k, v in body.items() if v is not None}
-        return result_text(await post(project_id, "/policy/test", body))
+        verdict = await post(project_id, "/policy/test", body)
+        # Against the policy the call ran on, a draft policy.yaml included.
+        if not verdict["agent_declared"]:
+            raise _undeclared(agent, verdict["declared_agents"])
+        return result_text(verdict)
+
+    @mcp.tool(annotations=READ_ONLY, structured_output=False)
+    async def policy_diff(project_id: str, drafts: list[PolicyDraft]) -> str:
+        """What `drafts` (each a whole file by `name`) would change compared with
+        the saved policy files; nothing is saved. `changes` lists only the
+        (agent, role, tool) whose grant differs, with `before`/`after`
+        {mode, constraints}, null when the role cannot reach the tool; a reach is
+        tool "agent:<name>" (or "agent.tool:<name>" / "agent.handoff:<name>" when
+        the two modes change differently), admission is "agent.run", and agent
+        "*" is the view every undeclared agent gets. `agent_changes` lists guards
+        and usage changes, once per agent. `gate_changes` lists the admission,
+        reach, tool_reach and skills checks the drafts switch on or off: each is
+        on only while some role lists a key of its kind (a grant, or a boundary
+        entry), so the first one closes that kind for every other role (as-tool
+        and skill rows appear only while their check is on on both sides).
+        `composes` false on a side means nothing could be compared: run
+        policy_check for why. Refused for a project with no saved `policy.yaml`,
+        including a draft of the first one: there is no saved policy file to
+        compare against."""
+        # The API refuses an empty list and a project with no saved policy.yaml
+        # (422), and its detail reaches the model as the tool error.
+        body = {"drafts": _dump(drafts)}
+        return result_text(await post(project_id, "/policy/diff", body))
+
+
+def _undeclared(agent: str | None, declared: list[str]) -> ToolError:
+    return ToolError(
+        f"agent {agent!r} is not declared in the policy (declared: {declared}); "
+        f"{UNDECLARED}"
+    )
 
 
 def _has_entry(files: list[dict[str, Any]]) -> bool:

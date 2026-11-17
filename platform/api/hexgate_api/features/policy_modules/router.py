@@ -23,12 +23,14 @@ from hexgate_api.core.db import get_session
 from hexgate_api.core.locks import project_lock
 from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.project import require_project_admin
-from hexgate_api.features.policy_modules import coverage, service
+from hexgate_api.features.policy_modules import coverage, diff, service
 from hexgate_api.models import OrganizationMember, PolicyFile, PolicyModule, User
 from hexgate_api.schemas import (
     PolicyCheckRequest,
     PolicyCheckResponse,
     PolicyCoverageResponse,
+    PolicyDiffRequest,
+    PolicyDiffResponse,
     PolicyFileRead,
     PolicyFileWrite,
     PolicyGraphResponse,
@@ -41,6 +43,7 @@ from hexgate_api.schemas import (
     PolicyTestRequest,
     PolicyTestResponse,
     ResolvedPolicyResponse,
+    RiskFactsResponse,
     RoleBindingsRead,
     RoleBindingsWrite,
 )
@@ -520,7 +523,7 @@ async def api_resolve_policy(
     project has an entry ``policy.yaml``, else via the tier store. 422 if the
     policy can't be composed — use /policy/check to see that as a lint instead."""
     try:
-        result = await service.resolve_auto(session, project_id, agent=agent)
+        result, modular = await service.resolve_auto(session, project_id, agent=agent)
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -530,7 +533,10 @@ async def api_resolve_policy(
             detail=f"role {role!r} not defined (known: {sorted(result.by_role)})",
         )
 
-    return ResolvedPolicyResponse(roles=service.roles_json(result, role=role))
+    return ResolvedPolicyResponse(
+        roles=service.roles_json(result, role=role),
+        modular=modular,
+    )
 
 
 @router.get("/projects/{project_id}/policy/matrix", tags=["policy"])
@@ -547,7 +553,7 @@ async def api_policy_matrix(
     doesn't list also gets its fallback cells. 422 if the policy can't be
     composed."""
     try:
-        result = await service.resolve_auto(session, project_id, agent=agent)
+        result, _ = await service.resolve_auto(session, project_id, agent=agent)
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PolicyMatrixResponse(**service.matrix_json(result, tool))
@@ -641,6 +647,67 @@ async def api_policy_coverage(
     return PolicyCoverageResponse(agents=agents)
 
 
+@router.get(
+    "/projects/{project_id}/policy/risk-facts",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
+async def api_policy_risk_facts(
+    project_id: str,
+    agent: str | None = None,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> RiskFactsResponse:
+    """Allowed calls whose risky argument the composed policy leaves open, per
+    agent, role and tool (``policy_modules.risk_facts``). 409 if the project
+    has no policy store, so its agents enforce their own policy, which this
+    doesn't read; 422 if it can't be composed (use /policy/check to see that
+    as a lint); 404 for an ``agent`` it neither declares nor has registered."""
+    try:
+        result = await service.risk_facts(session, project_id, agent=agent)
+    except service.NoPolicyStoreError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"this project has no {service.ENTRY_FILE!r} and no role "
+                "bindings, so each agent enforces its own policy, which risk "
+                "facts don't read"
+            ),
+        ) from exc
+    except service.compose_error_types() as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except service.UnknownAgentError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"agent {exc.args[0]!r} is not declared or registered",
+        ) from exc
+    return RiskFactsResponse(**result)
+
+
+@router.post(
+    "/projects/{project_id}/policy/diff",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
+async def api_diff_policy(
+    project_id: str,
+    body: PolicyDiffRequest,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> PolicyDiffResponse:
+    """What saving ``drafts`` would change: every (agent, role, tool) whose grant
+    differs, agent-wide guard and usage changes, and the admission / reach /
+    tool_reach / skills checks the drafts switch on or off (a switch changes
+    every role at once, so it may have no per-tool row). A side that does not compose
+    shows as ``composes`` false (/policy/check says why); 422 when no entry file
+    is stored, since there is then no saved policy file to compare against."""
+    try:
+        out = await diff.diff_project(session, project_id, body.drafts)
+    except service.InvalidModuleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PolicyDiffResponse(**out)
+
+
 @router.post(
     "/projects/{project_id}/policy/test",
     openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
@@ -657,7 +724,7 @@ async def api_test_policy(
     tier store, with unsaved ``drafts`` applied. 422 if the project doesn't
     compose or drafts can't apply to it; 404 for an unknown role."""
     try:
-        verdict = await service.test_policy(
+        dry_run = await service.test_policy(
             session,
             project_id,
             role=body.role,
@@ -673,11 +740,20 @@ async def api_test_policy(
         ) from exc
     except service.DraftWithoutEntryError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except service.UndeclaredAgentError as exc:
+        role, agent, declared = exc.args
+        raise HTTPException(
+            status_code=404,
+            detail=f"agent {agent!r} is not declared in the policy (declared: "
+            f"{declared}), so role {role!r} was looked up under the generic "
+            '"*" view, which does not define it',
+        ) from exc
     except service.UnknownRoleError as exc:
         raise HTTPException(
             status_code=404, detail=f"role {exc.args[0]!r} not defined"
         ) from exc
 
+    verdict = dry_run.verdict
     return PolicyTestResponse(
         outcome=_OUTCOME_WIRE.get(verdict.outcome.name, verdict.outcome.name.lower()),
         reason=verdict.reason,
@@ -685,4 +761,6 @@ async def api_test_policy(
         # Verdict.hint is a machine-readable dict (file-scope path hint); the wire
         # field is a string, so serialize rather than 500 on a dict.
         hint=json.dumps(verdict.hint) if verdict.hint is not None else None,
+        agent_declared=dry_run.agent_declared,
+        declared_agents=dry_run.declared_agents,
     )

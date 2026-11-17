@@ -20,6 +20,7 @@ from sqlmodel import select
 from tests.features.policy_modules.conftest import _project, _put_file, _put_module
 from hexgate_api.constants import DEFAULT_USER_ID
 from hexgate_api.core import keystore as keystore_mod
+from hexgate_api.features.policy_modules import service as svc
 from hexgate_api.models import PolicyModule, RoleBinding
 
 # Actor for the service-level store writes below. The store requires one (issue
@@ -1538,6 +1539,199 @@ def test_when_two_drafts_name_one_file_then_422(client):
     drafts = [("policy.yaml", "tools: {}\n")] * 2
     for route in ("check", "preview"):
         assert _drafted(client, pid, route, drafts).status_code == 422
+
+
+def _store_entry_file(client, pid) -> None:
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+
+
+def _store_role_binding(client, pid) -> None:
+    _put_module(client, pid, "capability", "read_only", READ_ONLY)
+    r = client.put(
+        f"/v1/projects/{pid}/policy-roles",
+        json={"roles": {"member": {"*": ["read_only"], "billing_bot": ["read_only"]}}},
+    )
+    assert r.status_code == 200, r.text
+
+
+def _store_lone_capability(client, pid) -> None:
+    _put_module(client, pid, "capability", "read_only", READ_ONLY)
+
+
+@pytest.mark.parametrize("route", ["resolve", "graph"])
+@pytest.mark.parametrize(
+    ("store", "modular"),
+    [
+        (_store_entry_file, True),
+        (_store_role_binding, True),
+        # A half-built library flips nothing: each agent keeps its policy_yaml.
+        (_store_lone_capability, False),
+    ],
+)
+def test_when_project_has_a_store_then_resolve_and_graph_report_modular(
+    client, route, store, modular
+):
+    pid = _project(client)
+    store(client, pid)
+    r = client.get(f"/v1/projects/{pid}/policy/{route}")
+    assert r.status_code == 200, r.text
+    assert r.json()["modular"] is modular
+
+
+@pytest.mark.parametrize(
+    ("agent", "declared"),
+    [("*", True), ("bot", True), ("ghost", False)],
+)
+def test_when_draft_entry_declares_agents_then_policy_test_reports_agent_declared(
+    client, agent, declared
+):
+    # The saved policy.yaml declares no agent: "bot" is declared by the draft
+    # alone, so the answer is about the policy the call ran against.
+    pid = _project(client)
+    _store_entry_file(client, pid)
+    draft = (
+        "tools: { a: { mode: allow } }\n"
+        "agents:\n  bot:\n    roles:\n      default:\n        tools: { a: { mode: allow } }\n"
+    )
+    r = client.post(
+        f"/v1/projects/{pid}/policy/test",
+        json={
+            "role": "default",
+            "tool": "a",
+            "agent": agent,
+            "drafts": [{"name": "policy.yaml", "content": draft}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["agent_declared"] is declared
+
+
+@pytest.mark.parametrize(
+    ("agent", "declared"), [("billing_bot", True), ("triage_bot", False)]
+)
+def test_when_role_bindings_name_agents_then_policy_test_reports_agent_declared(
+    client, agent, declared
+):
+    pid = _project(client)
+    _store_role_binding(client, pid)
+    r = client.post(
+        f"/v1/projects/{pid}/policy/test",
+        json={"role": "member", "tool": "view_orders", "agent": agent},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["agent_declared"] is declared
+
+
+@pytest.mark.parametrize("route", ["resolve", "graph"])
+@pytest.mark.parametrize("store", [_store_entry_file, _store_role_binding])
+def test_when_project_is_modular_then_resolve_and_graph_answer_from_their_own_read(
+    client, monkeypatch, route, store
+):
+    # The flag comes from the store read the route already made, not a second
+    # query that could see a different store.
+    async def second_read(*_):
+        raise AssertionError("is_modular re-read the store")
+
+    pid = _project(client)
+    store(client, pid)  # a store write asks is_modular itself
+    monkeypatch.setattr(svc, "is_modular", second_read)
+    r = client.get(f"/v1/projects/{pid}/policy/{route}")
+    assert r.status_code == 200, r.text
+    assert r.json()["modular"] is True
+
+
+REACH_ONLY = (
+    "boundary:\n"
+    "  reach: { billing_bot: { as: handoff } }\n"
+    "agents:\n"
+    "  bot:\n"
+    "    roles:\n"
+    "      support:\n"
+    "        reach: { billing_bot: { as: handoff } }\n"
+)
+
+
+def test_when_an_agent_is_only_reached_then_graph_does_not_list_it_as_declared(
+    client,
+):
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", REACH_ONLY)
+
+    body = client.get(f"/v1/projects/{pid}/policy/graph").json()
+
+    assert "agent:billing_bot" in {n["id"] for n in body["nodes"]}
+    assert body["declared_agents"] == ["*", "bot"]
+
+
+def test_when_agent_is_not_declared_then_policy_test_lists_the_declared_agents(
+    client,
+):
+    pid = _project(client)
+    _store_entry_file(client, pid)
+    draft = REACH_ONLY + "tools: { a: { mode: allow } }\n"
+    r = client.post(
+        f"/v1/projects/{pid}/policy/test",
+        json={
+            "role": "default",
+            "tool": "a",
+            "agent": "billing_bot",
+            "drafts": [{"name": "policy.yaml", "content": draft}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["agent_declared"] is False
+    assert r.json()["declared_agents"] == ["*", "bot"]
+
+
+def test_when_agent_is_a_typo_and_role_is_declared_elsewhere_then_404_names_the_agent(
+    client,
+):
+    # "support" exists under "bot" only: the typo resolves under "*", where it
+    # does not, and the 404 must point at the agent, not the role.
+    pid = _project(client)
+    _store_entry_file(client, pid)
+    draft = (
+        "tools: { a: { mode: allow } }\n"
+        "agents:\n  bot:\n    roles:\n      support:\n"
+        "        tools: { a: { mode: allow } }\n"
+    )
+    r = client.post(
+        f"/v1/projects/{pid}/policy/test",
+        json={
+            "role": "support",
+            "tool": "a",
+            "agent": "bto",
+            "drafts": [{"name": "policy.yaml", "content": draft}],
+        },
+    )
+    assert r.status_code == 404, r.text
+    assert r.json()["detail"].startswith(
+        "agent 'bto' is not declared in the policy (declared: ['*', 'bot'])"
+    )
+
+
+def test_when_a_compose_project_is_dry_run_then_its_entry_is_parsed_once(
+    client, monkeypatch
+):
+    from hexgate.security import compose
+
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", REACH_ONLY)
+    parsed = []
+    parse_entry = compose.parse_entry
+
+    def spy(*args, **kwargs):
+        parsed.append(args)
+        return parse_entry(*args, **kwargs)
+
+    monkeypatch.setattr(compose, "parse_entry", spy)
+    monkeypatch.setattr("hexgate.security.compose.resolve.parse_entry", spy)
+    r = client.post(
+        f"/v1/projects/{pid}/policy/test",
+        json={"role": "support", "tool": "a", "agent": "bot"},
+    )
+    assert r.status_code == 200, r.text
+    assert len(parsed) == 1
 
 
 def test_policy_graph_drops_isolated_generic_agent(client):

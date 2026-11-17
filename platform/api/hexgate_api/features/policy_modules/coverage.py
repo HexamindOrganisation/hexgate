@@ -15,6 +15,7 @@ a rule nobody wrote, not who reaches it. This reports facts, not problems; the l
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cache
 from typing import TYPE_CHECKING
 
 import yaml
@@ -91,12 +92,17 @@ async def _project_policies(
     session: AsyncSession, project_id: str, agents: list[str]
 ) -> dict[str, _Enforced | None]:
     """Each agent's section of the project policy, or the ``"*"`` view when
-    the policy has none for it (:func:`service.resolution_for`)."""
-    resolved = await service.resolve_every_agent(session, project_id)
+    the policy declares none for it (as :func:`service.risk_facts` reads it),
+    each resolved once."""
+    files = await service._files_map(session, project_id)
+    declared, resolve_for_agent, _ = await service._agent_resolver(
+        session, project_id, files
+    )
+    resolve = cache(resolve_for_agent)
     return {
         agent: _Enforced.of(
-            service.resolution_for(resolved, agent).policy_set,
-            has_policy=agent in resolved,
+            resolve(agent if agent in declared else service.DEFAULT_AGENT).policy_set,
+            has_policy=agent in declared,
         )
         for agent in agents
     }

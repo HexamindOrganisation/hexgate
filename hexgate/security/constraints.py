@@ -377,6 +377,22 @@ def _parse_primary(text: str, source: str) -> Node:
     return Cmp(left=left, op=op, right=right, source=source)
 
 
+def conjuncts(source: str) -> list[str]:
+    """The top-level ``and`` parts of a constraint, each without its wrapping
+    parentheses, nested ``and`` groups flattened: ``(a) and (b and c)`` gives
+    ``["a", "b", "c"]``. A top-level ``or`` (which binds looser than ``and``)
+    or a ``not`` group stays one part."""
+    text = source.strip()
+    while _is_wholly_parenthesized(text):
+        text = text[1:-1].strip()
+    if len(_split_bool(text, "or")) > 1:
+        return [text]
+    parts = _split_bool(text, "and")
+    if len(parts) == 1:
+        return [text]
+    return [c for part in parts for c in conjuncts(part)]
+
+
 def _split_bool(text: str, keyword: str) -> list[str]:
     """Split ``text`` on top-level ``keyword`` (``and``/``or``) occurrences.
 
@@ -850,6 +866,52 @@ def _eval_quant(node: Quant, context: dict[str, Any]) -> bool:
     return all(results) if node.kind == "every" else any(results)
 
 
+_MULTILINE_FLAG_RE = re.compile(r"\(\?[a-zA-Z]*m[a-zA-Z]*[:)]")
+
+
+def _re2_end_anchor(pattern: str) -> str:
+    r"""Rewrite an unescaped ``$`` to ``\Z`` so it means end-of-text only.
+
+    Python's ``$`` also matches just before a trailing newline; RE2's does not,
+    so ``^ord_\d+$`` would accept ``"ord_1\n"`` here and be denied by Rego.
+    ``\Z`` is Python's end-of-text anchor (RE2's ``\z``). An escaped ``\$`` and
+    a ``$`` inside a character class are literals and are left alone, as are
+    patterns that opt into multiline mode.
+    """
+    if _MULTILINE_FLAG_RE.search(pattern):
+        return pattern
+    out: list[str] = []
+    in_class = False
+    i = 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\" and i + 1 < len(pattern):
+            out.append(pattern[i : i + 2])
+            i += 2
+            continue
+        if in_class:
+            in_class = ch != "]"
+        elif ch == "[":
+            in_class = True
+            out.append(ch)
+            i += 1
+            # A leading "]" (optionally after "^") is a literal class member.
+            if i < len(pattern) and pattern[i] == "^":
+                out.append("^")
+                i += 1
+            if i < len(pattern) and pattern[i] == "]":
+                out.append("]")
+                i += 1
+            continue
+        elif ch == "$":
+            out.append(r"\Z")
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _eval_call(node: Call, context: dict[str, Any]) -> bool:
     """Evaluate a string function. Non-string / missing target fails closed.
 
@@ -869,7 +931,7 @@ def _eval_call(node: Call, context: dict[str, Any]) -> bool:
     if node.fn == "matches":
         # re.ASCII pins \d/\w/\s/\b to ASCII, matching Rego's RE2 (Go) engine —
         # without it Python treats them as Unicode and diverges on non-ASCII args.
-        return re.search(v, x, re.ASCII) is not None
+        return re.search(_re2_end_anchor(v), x, re.ASCII) is not None
     return False  # unreachable given the _FUNCS whitelist
 
 
