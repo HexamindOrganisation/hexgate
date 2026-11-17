@@ -21,7 +21,6 @@ loosens and tightens, it is reported ``widened``.
 from __future__ import annotations
 
 import dataclasses
-import json
 from collections.abc import Iterator, Mapping
 from typing import Any, Literal
 
@@ -32,6 +31,8 @@ from hexgate_api.features.policy_modules.risk_facts import _MIRROR
 WIDENED = "widened"
 TIGHTENED = "tightened"
 Kind = Literal["widened", "tightened"]
+# A block or entry's place in a file: ("agents", "bot", "boundary", "tools", "x").
+BlockPath = tuple[str, ...]
 
 # The name-map entries of a BoundaryBlock; ``admission`` is its one single entry.
 _SECTIONS = ("tools", "reach", "skills")
@@ -58,8 +59,8 @@ def boundary_changes(
     """Every boundary change from ``saved`` to ``drafted`` (``{name: text}``).
 
     A file whose text is the same on both sides is not parsed. A changed file
-    that does not parse raises the SDK's ``LinkError``: the caller checks that
-    every file parses before it asks about boundaries.
+    is parsed on both sides, and either side that does not parse raises the
+    SDK's ``LinkError``.
     """
     changes: list[BoundaryChange] = []
     for name in sorted(saved.keys() | drafted.keys()):
@@ -69,29 +70,31 @@ def boundary_changes(
     return changes
 
 
-def _blocks(text: str | None, name: str) -> dict[str, Any]:
-    """``{path: BoundaryBlock}`` for one file; empty when the file is absent."""
+def _blocks(text: str | None, name: str) -> dict[BlockPath, Any]:
+    """``{path: BoundaryBlock}`` for one file; empty when the file is absent.
+    Paths are tuples, so an agent named ``a.roles.b`` never shares a key with
+    role ``b`` of agent ``a``."""
     from hexgate.security.compose import parse_entry
 
     if text is None:
         return {}
     scopes = _scopes(parse_entry(text, source=name))
-    return {f"{p}boundary": s.boundary for p, s in scopes if s.boundary is not None}
+    return {(*p, "boundary"): s.boundary for p, s in scopes if s.boundary is not None}
 
 
-def _scopes(entry) -> Iterator[tuple[str, Any]]:
-    """Every scope of a parsed file that may hold a boundary, by path prefix."""
-    yield "", entry
+def _scopes(entry) -> Iterator[tuple[BlockPath, Any]]:
+    """Every scope of a parsed file that may hold a boundary, by path."""
+    yield (), entry
     for agent, body in entry.agents.items():
-        yield f"agents.{agent}.", body
+        yield ("agents", agent), body
         for role, role_body in body.roles.items():
-            yield f"agents.{agent}.roles.{role}.", role_body
+            yield ("agents", agent, "roles", role), role_body
     for export, role_body in entry.exports.items():
-        yield f"export.{export}.", role_body
+        yield ("export", export), role_body
 
 
 def _file_changes(
-    file: str, old: dict[str, Any], new: dict[str, Any]
+    file: str, old: dict[BlockPath, Any], new: dict[BlockPath, Any]
 ) -> list[BoundaryChange]:
     """A block added is a new ceiling (tightened); a block removed takes a
     ceiling away (widened); a block on both sides is compared entry by entry."""
@@ -106,36 +109,70 @@ def _file_changes(
     return changes
 
 
-def _entries(block) -> dict[str, Any]:
-    """A block's entries keyed by their path inside the block."""
-    entries = {
-        f"{section}.{name}": spec
-        for section in _SECTIONS
+@dataclasses.dataclass(frozen=True)
+class _Collision:
+    """Several raw reach names of one block that lower to one target, in order."""
+
+    entries: tuple[tuple[str, Any], ...]
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        return {name: spec.model_dump(**kwargs) for name, spec in self.entries}
+
+
+def _entries(block) -> dict[BlockPath, Any]:
+    """A block's entries keyed by their path inside the block.
+
+    Reach targets are keyed the way the lowering names them, by
+    ``canonical_name`` (hexgate/security/models.py:521), which trims and maps a
+    blank name to ``default``; two raw names on one target become a
+    :class:`_Collision`. Tools need no such key: the lowering uses their names
+    as written (hexgate/security/compose/lower.py:93). Skills cannot collide:
+    ``SkillPolicy`` rejects two names that trim to one (models.py:464-470)."""
+    from hexgate.security.naming import canonical_name
+
+    entries: dict[BlockPath, Any] = {
+        (section, name): spec
+        for section in ("tools", "skills")
         for name, spec in getattr(block, section).items()
     }
+    targets: dict[str, list[tuple[str, Any]]] = {}
+    for name, spec in block.reach.items():
+        targets.setdefault(canonical_name(name), []).append((name, spec))
+    for target, named in targets.items():
+        entries[("reach", target)] = (
+            named[0][1] if len(named) == 1 else _Collision(tuple(named))
+        )
     if block.admission is not None:
-        entries["admission"] = block.admission
+        entries[("admission",)] = block.admission
     return entries
 
 
-def _block_changes(file: str, path: str, a, b) -> list[BoundaryChange]:
+def _block_changes(file: str, path: BlockPath, a, b) -> list[BoundaryChange]:
     old, new = _entries(a), _entries(b)
     changes = []
     for key in sorted(old.keys() | new.keys()):
         before, after = old.get(key), new.get(key)
-        gated = key.partition(".")[0] in _GATED
-        if gated and (before is None) != (after is None):
+        if isinstance(before, _Collision) or isinstance(after, _Collision):
+            # Which raw name wins is decided per lowered key, not per entry, so
+            # a collision is not compared: anything but no change is widened.
+            kind = None if before == after else WIDENED
+        elif key[0] in _GATED and (before is None) != (after is None):
             kind = _gate_entry_kind(before, after)
         else:
             kind = _entry_kind(before, after)
         if kind is not None:
-            changes.append(_change(file, f"{path}.{key}", kind, before, after))
+            changes.append(_change(file, (*path, *key), kind, before, after))
     return changes
 
 
-def _change(file: str, path: str, kind: Kind, before, after) -> BoundaryChange:
+def _change(file: str, path: BlockPath, kind: Kind, before, after) -> BoundaryChange:
+    """The wire change; the path is dotted only here, for display."""
     return BoundaryChange(
-        file=file, path=path, kind=kind, before=_dump(before), after=_dump(after)
+        file=file,
+        path=".".join(path),
+        kind=kind,
+        before=_dump(before),
+        after=_dump(after),
     )
 
 
@@ -279,8 +316,25 @@ def _literal_fact(subject: str, op: str, value: Any) -> tuple[str, str, Any] | N
     if op in ("==", "!="):  # one value allowed, or one excluded
         op, value = ("in" if op == "==" else "not in"), [value]
     if op in ("in", "not in") and isinstance(value, list):
-        return op, subject, frozenset(json.dumps(v, sort_keys=True) for v in value)
+        return op, subject, frozenset(_json_key(v) for v in value)
     return None
+
+
+def _json_key(value: Any) -> Any:
+    """A hashable key two literals share exactly when the enforced (Rego)
+    equality holds: ``5`` and ``5.0`` are one value, decided by Python ``==``
+    so large integers stay exact, and a bool is never a number, inside list and
+    dict literals too. At the top level this is also the SDK's ``_json_eq``;
+    inside a list that one uses Python ``==``, where ``[true]`` equals ``[1]``."""
+    if isinstance(value, bool):
+        return ("bool", value)
+    if isinstance(value, int | float):
+        return ("number", value)
+    if isinstance(value, list):
+        return ("list", tuple(_json_key(v) for v in value))
+    if isinstance(value, dict):
+        return ("dict", frozenset((k, _json_key(v)) for k, v in value.items()))
+    return ("scalar", value)
 
 
 def _combine(family: str, a: Any, b: Any) -> Any:

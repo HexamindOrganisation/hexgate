@@ -195,6 +195,92 @@ def test_when_only_capabilities_change_then_no_changes() -> None:
     assert boundary_changes(saved, drafted) == []
 
 
+def test_when_agent_name_has_dots_then_no_block_is_hidden() -> None:
+    # Agent "a" role "b" and an agent named "a.roles.b" render to one display
+    # path; neither block may overwrite the other in the comparison.
+    cap = "{ boundary: { tools: { refund: { constraint: 'args.amount <= %s' } } } }"
+    saved = {"policy.yaml": f"agents:\n  a: {{ roles: {{ b: {cap % 100} }} }}\n"}
+    drafted = {
+        "policy.yaml": f"agents:\n  a: {{ roles: {{ b: {cap % 100000} }} }}\n"
+        f"  a.roles.b: {cap % 100}\n"
+    }
+    path = "agents.a.roles.b.boundary"
+    changes = [
+        (c.path, c.kind, c.before, c.after) for c in boundary_changes(saved, drafted)
+    ]
+    # Role b's raised cap, compared with role b's own saved block...
+    raised = (
+        f"{path}.tools.refund",
+        W,
+        {"mode": "allow", "constraints": ["args.amount <= 100"]},
+        {"mode": "allow", "constraints": ["args.amount <= 100000"]},
+    )
+    # ...and the decoy agent's block, reported as new.
+    added = (
+        path,
+        T,
+        None,
+        {
+            "tools": {
+                "refund": {"mode": "allow", "constraints": ["args.amount <= 100"]}
+            },
+            "reach": {},
+            "admission": None,
+            "skills": {},
+        },
+    )
+    assert sorted(changes, key=repr) == sorted([raised, added], key=repr)
+
+
+_NBSP = "\u00a0"
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "target"),
+    [
+        (f"billing{_NBSP}", "billing", "billing"),  # unquoted, looks identical
+        ('"billing "', "billing", "billing"),
+        ('""', "default", "default"),
+    ],
+)
+def test_when_colliding_reach_names_are_reordered_then_widened(
+    first, second, target
+) -> None:
+    # Both names lower to one target and the last one wins, so a reorder can
+    # drop the approval with no entry changing.
+    def project(a: str, b: str) -> dict[str, str]:
+        spec = {first: "{ mode: allow }", second: "{ mode: approval_required }"}
+        return _entry(f"  reach:\n    {a}: {spec[a]}\n    {b}: {spec[b]}\n")
+
+    assert _kinds(project(first, second), project(second, first)) == [
+        ("policy.yaml", f"boundary.reach.{target}", W)
+    ]
+
+
+def test_when_colliding_reach_names_split_modes_then_reorder_is_widened() -> None:
+    saved = _entry(
+        '  reach:\n    "billing ": { as: tool }\n    billing: { as: handoff }\n'
+    )
+    drafted = _entry(
+        '  reach:\n    billing: { as: handoff }\n    "billing ": { as: tool }\n'
+    )
+    assert _kinds(saved, drafted) == [("policy.yaml", "boundary.reach.billing", W)]
+
+
+def test_when_collision_is_untouched_then_only_the_other_change_shows() -> None:
+    reach = '  reach:\n    "billing ": { as: tool }\n    billing: { as: handoff }\n'
+    saved = _entry(f"  tools: {{ refund: {{}} }}\n{reach}")
+    drafted = _entry(f"  tools: {{ refund: {{}}, wire: {{}} }}\n{reach}")
+    assert _kinds(saved, drafted) == [("policy.yaml", "boundary.tools.wire", W)]
+
+
+def test_when_padded_reach_name_is_trimmed_then_no_change() -> None:
+    saved = _entry('  reach:\n    "billing ": { as: tool }\n')
+    assert (
+        boundary_changes(saved, _entry("  reach:\n    billing: { as: tool }\n")) == []
+    )
+
+
 def test_when_block_in_another_file_widens_then_found() -> None:
     # The SDK refuses a boundary in an imported fragment, so this file is not in
     # force; it is still reported, which can only over-report, never miss one.
@@ -276,6 +362,27 @@ def _spec(constraints: list[str], mode: str = "allow") -> str:
         (["args.n <= 10 or args.vip == true"], ["args.n <= 99 or args.vip == true"], W),
         (["args.n ~~ 1"], ["  args.n ~~ 1 "], None),
         (["args.n ~~ 1"], [], W),
+        # Literals compare as the engine compares them: 5 and 5.0 are one value,
+        # true is not 1, and the same holds inside list literals.
+        (["args.n in [5]"], ["args.n in [1, 5]", "args.n in [1.0, 5]"], W),
+        (
+            ["args.amount in [100]"],
+            ["args.amount in [100, 200]", "args.amount in [100.0, 200.0]"],
+            W,
+        ),
+        (["args.n in [5]"], ["args.n in [5.0]"], None),
+        (["args.id in [9007199254740993]"], ["args.id in [9007199254740992.0]"], W),
+        (["args.b in [1]"], ["args.b in [1, true]"], W),
+        (["args.b in [true]"], ["args.b in [1]"], W),
+        (["args.p in [[1, 2]]"], ["args.p in [[1.0, 2.0]]"], None),
+        (
+            ["args.p in [[1, 2]]"],
+            ["args.p in [[1, 2]]", "args.p in [[1.0, 2.0]]"],
+            None,
+        ),
+        (["args.p in [[1]]"], ["args.p in [[1], [2]]", "args.p in [[1.0], [2.0]]"], W),
+        (['args.o in [{"a": 1}]'], ['args.o in [{"a": 1.0}]'], None),
+        (['args.o in [{"a": true}]'], ['args.o in [{"a": 1}]'], W),
         # An equality is an allowlist of one, an inequality an exclusion of one.
         (['args.c != "X"', 'args.c != "Y"'], ['args.c not in ["X", "Y"]'], None),
         (['args.c != "X"'], ['args.c not in ["X", "Y"]'], T),
@@ -393,10 +500,12 @@ def test_when_boundary_has_a_field_then_it_is_compared() -> None:
     assert compared == set(BoundaryBlock.model_fields)
 
 
-def test_when_changed_file_does_not_parse_then_link_error() -> None:
-    saved = _tool("{}")
+@pytest.mark.parametrize("side", ["saved", "drafted"])
+def test_when_changed_file_does_not_parse_then_link_error(side: str) -> None:
+    good, bad = _tool("{}"), {**_tool("{}"), "policy.yaml": "boundary: ["}
+    saved, drafted = (bad, good) if side == "saved" else (good, bad)
     with pytest.raises(LinkError):
-        boundary_changes(saved, {**saved, "policy.yaml": "boundary: ["})
+        boundary_changes(saved, drafted)
 
 
 def test_when_unchanged_file_does_not_parse_then_it_is_skipped() -> None:
