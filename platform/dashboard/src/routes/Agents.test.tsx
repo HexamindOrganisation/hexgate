@@ -2,6 +2,7 @@
  * delegation, the KPI strip, and the legacy ?agent= redirect. */
 
 import { act, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes, useParams } from "react-router-dom";
 
@@ -61,7 +62,13 @@ function stubFetch(manifest: unknown = MANIFEST) {
         case `/v1/projects/${PROJECT}/agents/manifest`:
           return manifest === "error"
             ? new Response("boom", { status: 500 })
-            : json(manifest === "empty" ? [] : [manifest]);
+            : json(
+                manifest === "empty"
+                  ? []
+                  : Array.isArray(manifest)
+                    ? manifest
+                    : [manifest],
+              );
         case `/v1/projects/${PROJECT}/policy/graph`:
           // support_bot reaches downstream_bot and is reached by upstream_bot.
           return json({
@@ -145,6 +152,30 @@ describe("AgentsPage — the agent list", () => {
     renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
     const link = await screen.findByRole("link", { name: "support_bot" });
     expect(link).toHaveAttribute("href", "/agents/support_bot");
+  });
+
+  it("filters a long list by name", async () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({
+      ...MANIFEST,
+      name: `bot_${i}`,
+      manifest: { ...MANIFEST.manifest, name: `bot_${i}` },
+    }));
+    stubFetch(many);
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    const box = await screen.findByLabelText("Filter agents by name");
+    await userEvent.type(box, "bot_3");
+    expect(screen.getByRole("link", { name: /^bot_3\b/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^bot_4\b/ })).toBeNull();
+    await userEvent.clear(box);
+    await userEvent.type(box, "nope");
+    expect(screen.getByText(/No agent matches/)).toBeInTheDocument();
+  });
+
+  it("has no filter for a short list", async () => {
+    stubFetch();
+    renderWithProviders(<AgentsPage />, { initialRoute: "/agents" });
+    await screen.findByRole("link", { name: "support_bot" });
+    expect(screen.queryByLabelText("Filter agents by name")).toBeNull();
   });
 
   it("leads with a portfolio KPI strip from the 24h summary", async () => {

@@ -1,4 +1,4 @@
-import { useId, useMemo } from "react";
+import { useId, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
@@ -12,6 +12,7 @@ import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { DocsLink } from "@/components/DocsLink";
 import { DOC_PATHS } from "@/lib/docs";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatStrip, type Stat } from "@/components/ui/stat-strip";
 import { agentHubPath } from "@/lib/agent-paths";
@@ -31,9 +32,13 @@ import { cn } from "@/lib/utils";
  * Editing happens elsewhere: policy authoring in /policies, manifest
  * registration through the SDK's ``hexgate register``.
  */
+/** Past this many agents the list gets a name filter. */
+const FILTER_MIN = 8;
+
 export function AgentsPage() {
   const scope = useProjectScoped();
   const [searchParams] = useSearchParams();
+  const [query, setQuery] = useState("");
   const manifests = useQuery({
     queryKey: ["agent-manifests", scope.projectId],
     queryFn: () => api.listAgentManifests(scope.projectId as string),
@@ -135,6 +140,10 @@ export function AgentsPage() {
   }
 
   const agents = manifests.data ?? [];
+  const q = query.trim().toLowerCase();
+  const shown = q
+    ? agents.filter((a) => a.name.toLowerCase().includes(q))
+    : agents;
 
   return (
     <div className="mx-auto max-w-[1240px]">
@@ -172,6 +181,18 @@ export function AgentsPage() {
       </div>
 
       <Card className="overflow-hidden p-0">
+        {agents.length > FILTER_MIN && (
+          <div className="border-b border-border px-4 py-3">
+            <Input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={`Filter ${agents.length} agents by name`}
+              aria-label="Filter agents by name"
+              className="h-8 max-w-xs text-sm"
+            />
+          </div>
+        )}
         <nav aria-label="Agents" className="flex flex-col">
           {manifests.isPending ? (
             <div className="px-4 py-5 text-meta text-muted-foreground">
@@ -182,134 +203,140 @@ export function AgentsPage() {
               Couldn't load agents.
             </div>
           ) : agents.length ? (
-            agents.map((a, i) => {
-              // From useId and the index: agent names may hold spaces.
-              const id = `${rowId}-${i}`;
-              const activity = activityOf(a.name);
-              const registered = !!a.manifest;
-              const tools = a.manifest?.tools?.length ?? 0;
-              const skills = a.manifest?.skills?.length ?? 0;
-              const model = a.manifest?.model?.trim();
-              const reach = reachByAgent.get(a.name);
-              const reachText = reach?.reaches.length
-                ? `reaches ${reach.reaches.join(", ")}`
-                : null;
-              // Everything after the model, so a missing model never leaves a
-              // dangling leading "· ". Outbound delegation ("reaches") rides
-              // here; inbound ("called by") is a chip by the name instead.
-              const facts = [
-                a.manifest?.framework?.trim(),
-                pluralise(tools, "tool"),
-                skills > 0 ? pluralise(skills, "skill") : null,
-                reachText,
-              ]
-                .filter(Boolean)
-                .join(" · ");
-              const calledBy = !!reach?.calledBy.length;
-              return (
-                <Link
-                  key={a.name}
-                  to={agentHubPath(a.name)}
-                  // The name alone; the rest of the row describes it.
-                  aria-labelledby={`${id}-name`}
-                  aria-describedby={[
-                    `${id}-badge`,
-                    calledBy && `${id}-chip`,
-                    `${id}-facts`,
-                    `${id}-counts`,
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                  className="group flex items-center gap-3 border-t border-border/60 px-4 py-3.5 transition-colors first:border-t-0 hover:bg-accent/50"
-                >
-                  <span
-                    className={cn(
-                      "size-1.5 shrink-0 rounded-full",
-                      registered ? "bg-success" : "bg-muted-foreground/40",
-                    )}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span
-                        id={`${id}-name`}
-                        className="truncate font-mono text-[13px] font-medium"
-                      >
-                        {a.name}
-                      </span>
-                      <Badge
-                        id={`${id}-badge`}
-                        variant="outline"
-                        className="font-mono text-[11px]"
-                      >
-                        {a.version !== null
-                          ? `v${a.version}`
-                          : "not registered"}
-                      </Badge>
-                      {calledBy && (
-                        <span
-                          id={`${id}-chip`}
-                          className="rounded-full bg-primary/10 px-1.5 py-0.5 text-caption font-medium text-primary"
-                        >
-                          called by {reach!.calledBy.join(", ")}
-                        </span>
-                      )}
-                    </div>
-                    <div
-                      id={`${id}-facts`}
-                      className="mt-0.5 truncate text-meta text-muted-foreground"
-                    >
-                      {registered ? (
-                        <>
-                          {model && (
-                            <span className="font-mono text-foreground">
-                              {model}
-                            </span>
-                          )}
-                          {model ? ` · ${facts}` : facts}
-                        </>
-                      ) : (
-                        <>
-                          not registered · run{" "}
-                          <span className="font-mono">hexgate register</span>
-                          {reachText && ` · ${reachText}`}
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  {/* Always there, "—" until the summary lands: an unregistered
-                      agent can still be running and calling tools. */}
-                  <div
-                    id={`${id}-counts`}
-                    className="hidden shrink-0 gap-5 text-right sm:flex"
+            shown.length === 0 ? (
+              <div className="px-4 py-5 text-meta text-muted-foreground">
+                No agent matches “{query.trim()}”.
+              </div>
+            ) : (
+              shown.map((a, i) => {
+                // From useId and the index: agent names may hold spaces.
+                const id = `${rowId}-${i}`;
+                const activity = activityOf(a.name);
+                const registered = !!a.manifest;
+                const tools = a.manifest?.tools?.length ?? 0;
+                const skills = a.manifest?.skills?.length ?? 0;
+                const model = a.manifest?.model?.trim();
+                const reach = reachByAgent.get(a.name);
+                const reachText = reach?.reaches.length
+                  ? `reaches ${reach.reaches.join(", ")}`
+                  : null;
+                // Everything after the model, so a missing model never leaves a
+                // dangling leading "· ". Outbound delegation ("reaches") rides
+                // here; inbound ("called by") is a chip by the name instead.
+                const facts = [
+                  a.manifest?.framework?.trim(),
+                  pluralise(tools, "tool"),
+                  skills > 0 ? pluralise(skills, "skill") : null,
+                  reachText,
+                ]
+                  .filter(Boolean)
+                  .join(" · ");
+                const calledBy = !!reach?.calledBy.length;
+                return (
+                  <Link
+                    key={a.name}
+                    to={agentHubPath(a.name)}
+                    // The name alone; the rest of the row describes it.
+                    aria-labelledby={`${id}-name`}
+                    aria-describedby={[
+                      `${id}-badge`,
+                      calledBy && `${id}-chip`,
+                      `${id}-facts`,
+                      `${id}-counts`,
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    className="group flex items-center gap-3 border-t border-border/60 px-4 py-3.5 transition-colors first:border-t-0 hover:bg-accent/50"
                   >
-                    <div>
-                      <div className="text-[15px] font-semibold tabular-nums">
-                        {activity ? activity.all.toLocaleString() : "—"}
-                      </div>
-                      <div className="text-caption text-muted-foreground">
-                        calls 24h
-                      </div>
-                    </div>
-                    <div>
-                      <div
-                        className={cn(
-                          "text-[15px] font-semibold tabular-nums",
-                          activity && activity.deny > 0
-                            ? "text-deny"
-                            : "text-muted-foreground",
+                    <span
+                      className={cn(
+                        "size-1.5 shrink-0 rounded-full",
+                        registered ? "bg-success" : "bg-muted-foreground/40",
+                      )}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          id={`${id}-name`}
+                          className="truncate font-mono text-[13px] font-medium"
+                        >
+                          {a.name}
+                        </span>
+                        <Badge
+                          id={`${id}-badge`}
+                          variant="outline"
+                          className="font-mono text-[11px]"
+                        >
+                          {a.version !== null
+                            ? `v${a.version}`
+                            : "not registered"}
+                        </Badge>
+                        {calledBy && (
+                          <span
+                            id={`${id}-chip`}
+                            className="rounded-full bg-primary/10 px-1.5 py-0.5 text-caption font-medium text-primary"
+                          >
+                            called by {reach!.calledBy.join(", ")}
+                          </span>
                         )}
-                      >
-                        {activity ? activity.deny.toLocaleString() : "—"}
                       </div>
-                      <div className="text-caption text-muted-foreground">
-                        denied
+                      <div
+                        id={`${id}-facts`}
+                        className="mt-0.5 truncate text-meta text-muted-foreground"
+                      >
+                        {registered ? (
+                          <>
+                            {model && (
+                              <span className="font-mono text-foreground">
+                                {model}
+                              </span>
+                            )}
+                            {model ? ` · ${facts}` : facts}
+                          </>
+                        ) : (
+                          <>
+                            not registered · run{" "}
+                            <span className="font-mono">hexgate register</span>
+                            {reachText && ` · ${reachText}`}
+                          </>
+                        )}
                       </div>
                     </div>
-                  </div>
-                  <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
-                </Link>
-              );
-            })
+                    {/* Always there, "—" until the summary lands: an unregistered
+                      agent can still be running and calling tools. */}
+                    <div
+                      id={`${id}-counts`}
+                      className="hidden shrink-0 gap-5 text-right sm:flex"
+                    >
+                      <div>
+                        <div className="text-[15px] font-semibold tabular-nums">
+                          {activity ? activity.all.toLocaleString() : "—"}
+                        </div>
+                        <div className="text-caption text-muted-foreground">
+                          calls 24h
+                        </div>
+                      </div>
+                      <div>
+                        <div
+                          className={cn(
+                            "text-[15px] font-semibold tabular-nums",
+                            activity && activity.deny > 0
+                              ? "text-deny"
+                              : "text-muted-foreground",
+                          )}
+                        >
+                          {activity ? activity.deny.toLocaleString() : "—"}
+                        </div>
+                        <div className="text-caption text-muted-foreground">
+                          denied
+                        </div>
+                      </div>
+                    </div>
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
+                  </Link>
+                );
+              })
+            )
           ) : (
             <div className="px-4 py-5 text-meta text-muted-foreground">
               No agents yet. Register one with{" "}

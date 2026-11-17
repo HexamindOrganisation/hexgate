@@ -278,12 +278,16 @@ function NavItem({
   );
 }
 
+/** How many agents the sidebar lists before "View all" takes over. */
+const SIDEBAR_AGENT_CAP = 8;
+
 /** The Agents nav row with an inline, expandable agent list. Hovering the icon
  * reveals a chevron; clicking it toggles the list (the label still navigates to
  * /agents). The list is fetched lazily, only once opened. */
 function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
   const { projectId, status } = useProjectScoped();
   const [open, setOpen] = useState(false);
+  const { pathname } = useLocation();
   const agents = useQuery({
     queryKey: ["agent-manifests", projectId],
     queryFn: () => api.listAgentManifests(projectId as string),
@@ -302,6 +306,15 @@ function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
   };
 
   const rows = agents.data ?? [];
+  // Past the cap, list the first few plus the agent being viewed, and link to
+  // /agents for the rest: the sidebar navigates, it doesn't scroll.
+  const m = /^\/agents\/([^/]+)/.exec(pathname);
+  const current = m ? decodeURIComponent(m[1]) : null;
+  const shown = rows.slice(0, SIDEBAR_AGENT_CAP);
+  const extra = rows.find(
+    (a, i) => i >= SIDEBAR_AGENT_CAP && a.name === current,
+  );
+  if (extra) shown.push(extra);
   return (
     <div className="group/agents relative flex flex-col gap-0.5">
       {/* No `end`: the row stays active on every hub page, as on the rail. */}
@@ -359,7 +372,7 @@ function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
               Loading…
             </span>
           ) : rows.length ? (
-            rows.map((a) => (
+            shown.map((a) => (
               <NavLink
                 key={a.name}
                 to={`/agents/${encodeURIComponent(a.name)}`}
@@ -379,6 +392,15 @@ function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
             <span className="px-2 py-1 text-[11px] text-muted-foreground">
               No agents yet
             </span>
+          )}
+          {rows.length > SIDEBAR_AGENT_CAP && (
+            <NavLink
+              to="/agents"
+              end
+              className="rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+            >
+              View all {rows.length} →
+            </NavLink>
           )}
         </div>
       )}
