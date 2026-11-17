@@ -1,16 +1,18 @@
 # Filming the demo videos
 
 The demo videos are filmed by scripts, not by hand: Playwright drives the apps
-with a visible cursor and in-page zoom, and a render step adds the titles and
-subtitles and joins the scenes. A new feature or a UI change means re-running
-a command, not re-recording a screen.
+with a visible cursor and in-page zoom, and a render step adds the Hexgate
+title cards, the subtitles and the voiceover, and joins the scenes. A new
+feature or a UI change means re-running a command, not re-recording a screen.
+How the film should look and sound: [film/STYLE.md](film/STYLE.md).
 
 Three layers, from what you edit to what you run:
 
 | layer | file | who changes it |
 |---|---|---|
-| the story | `SCENARIO_<DEMO>.md`: scenes, beats, subtitle lines | you |
-| the compiled film | `film/<demo>/*.js` (one script per scene) and `film/<demo>/cut.json` (titles, subtitle times, speed) | Claude, with the `film-demo` skill |
+| the story | `SCENARIO_<DEMO>.md`: scenes, beats, title cards, voiceover and subtitle lines | you |
+| the compiled film | `film/<demo>/*.js` (one script per scene) and `film/<demo>/cut.json` (cards, subtitle and voice times, speed) | Claude, with the `film-demo` skill |
+| the voice | one clip per voiceover line in `.run/film/<demo>/vo/` | Claude, with ElevenLabs (below) |
 | the run | `./demo/run film <demo>` | anyone |
 
 Change the story in the scenario, then ask Claude to update the film ("update
@@ -30,9 +32,12 @@ command: the scripts find the UI by its ids and labels.
 ```
 
 Clips and the film go to `demo/.run/film/<demo>/` (`--out DIR` to change it):
-`<id>.mp4` per scene and `<demo>.mp4`, the film. Joining takes about 10 min.
+`<id>.mp4` per scene, `cards/<id>.mp4`, `vo/<id>-<nn>.mp3` and `<demo>.mp4`,
+the film. Joining renders the cards (about 2 min) and takes about 10 min in
+all. Without voice clips the film is silent; everything else still works.
 
-Needs macOS (the subtitles use the system fonts SF and Menlo), `ffmpeg`, the
+Needs macOS (the subtitles use the system fonts SF and Menlo), the network
+for the cards' fonts (Inter and JetBrains Mono, from Google Fonts), `ffmpeg`, the
 OpenAI key in `demo/.env` (the scripted model answers differently), and for
 the live scene, [minmux](#the-live-claude-scene). Chromium for Playwright
 installs itself on the first run.
@@ -46,7 +51,9 @@ installs itself on the first run.
 | `film/lib/dashboard.js` | a signed-in hexgate dashboard for a scene |
 | `film/lib/terminal.js` | records a terminal app for the live Claude scene |
 | `film/lib/env.js` | what the film command passes to a script |
-| `film/tools/render.py` | titles, subtitles, speed, the join |
+| `film/STYLE.md` | the Hexgate video style: palette, cards, subtitles, voice |
+| `film/lib/title-card.html`, `film/lib/cards.js` | the title card, and its renderer (a clip per scene) |
+| `film/tools/render.py` | cards, subtitles, speed, the voiceover mix and narration track, the join |
 | `film/tools/speed.py` | cuts the long live recording down |
 | `film/tools/sheet.py` | contact sheets: how a take is checked and timed |
 | `film/devops/` | the DevOps demo: `shipyard.js` (app moves), `01-…js` to `06-…js`, `cut.json` |
@@ -147,9 +154,13 @@ script what Claude does, so the take is steered as it runs, then cut.
 ## cut.json
 
 ```json
-{ "id": "05", "title": "Same request, now blocked", "trim": 0.2,
-  "rate": 1.7, "fast": [[24.0, 32.0, 3]],
-  "subs": [[23.5, 32.5, "Sam sends the exact same request.", "top"]] }
+{ "id": "05", "title": "Same request, now blocked",
+  "card": { "eyebrow": "THE PAYOFF", "tone": "green", "lines": ["Same request,", "now blocked"],
+            "lead": "Same prompt, different answer, **decided by the role**." },
+  "trim": 0.2, "rate": 1.7, "fast": [[24.0, 32.0, 3]],
+  "subs": [[23.5, 32.5, "Sam sends the exact same request.", "top"]],
+  "vo": [[111.88, "Prod is healthy on v2.4.0, and every step is logged.",
+          "Prod is healthy on two point four, and every step is logged."]] }
 ```
 
 - Times are seconds in the scene's clip (`<id>.mp4`), whatever the speed.
@@ -161,10 +172,44 @@ script what Claude does, so the take is steered as it runs, then cut.
 - `subs`: `[start, end, text]`, plus `"top"` when the bottom of the screen is
   what the viewer reads (the message being typed).
 - `speed` (02 only): how the raw terminal recording is cut, see above.
+- `card`: the title card (film/STYLE.md, "Title cards"). The part number is the
+  scene id.
+- `vo`: `[start, text]` or `[start, text, said]`, one per voiceover clip, in
+  order: the nn-th line plays `vo/<id>-<nn>.mp3`. `text` is the line as
+  written (the narration subtitle track uses it), `said` the form the voice
+  reads when it differs (numbers and names in words).
 
-Timing rules: the title is the first 3.3 s of each scene, and a subtitle shows
-only after it. Keep each subtitle on screen at least 2 s of output (clip time
+Timing rules: the card is the first 3.9 s of each scene (3.3 s, then a 0.6 s
+dissolve), and a subtitle shows only after it. A part's first voice line
+starts on the card (it names the part); each line starts on the beat it
+names and ends before the next one starts (the join warns when one runs
+over). Keep each subtitle on screen at least 2 s of output (clip time
 ÷ rate). Lines are short, spoken, and never explain more than what's on screen.
+
+## Voiceover
+
+The voice is made last, once the cut is right: its lines are timed on the
+film.
+
+1. **Write the lines** in the scenario (**Voiceover** under each part): what a
+   person would say over these pictures, a bit fuller than the subtitles, about
+   2.5 words a second. Add the `said:` form where numbers or names read
+   differently.
+2. **Time them** into `cut.json` (`vo`), from contact sheets of each clip: the
+   start of the beat each line names, in clip seconds.
+3. **Make the clips** with ElevenLabs (settings in film/STYLE.md, "Voice"):
+   one call per line, the `said` text when there is one, the first take, saved
+   as `.run/film/<demo>/vo/<id>-<nn>.mp3` (nn from 01, in the line's order).
+   With the ElevenLabs MCP connected, Claude makes them; without it, ask the
+   person for the clips or an API key. The clips cost credits: keep the folder
+   when re-filming, and only remake the lines whose text changed.
+4. **Join**: `./demo/run film <demo> render`. It warns about a line without a
+   clip and about a clip that runs into the next line: shorten the line, or
+   move the next one later.
+
+The film gets the voice as its audio track, mixed and normalised, and the
+narration as a soft subtitle track (a sentence per cue), alongside the burned
+in subtitles.
 
 ## Checking a take
 
@@ -193,6 +238,8 @@ and readable, and read the subtitle times off it. Check the film decodes:
   checks): the mock desktop is served on the app's own origin.
 - **A failed script leaves a blank video**: Playwright only finalizes it on
   close. Fix the script and re-run the scene.
+- **A card with the wrong fonts**: Inter and JetBrains Mono load from Google
+  Fonts; `cards.js` fails rather than render a card in fallback fonts.
 - **Two joins at once corrupt the film**: the join writes
   `<demo>.partial.mp4` and renames it, but don't start a second one.
 - **The dashboard's audit times are an hour off** (11:55 UTC shown for 12:55
@@ -200,8 +247,9 @@ and readable, and read the subtitle times off it. Check the film decodes:
 
 ## A new demo
 
-1. `SCENARIO_<DEMO>.md`: the scenes, their beats and subtitle lines.
+1. `SCENARIO_<DEMO>.md`: the scenes, their beats, their title card, their
+   voiceover and subtitle lines (film/STYLE.md for the tone of each).
 2. `[film]` in `apps/<demo>/demo.toml`: the scene ids and their starting states.
 3. Ask Claude to film it (the `film-demo` skill): it writes
    `film/<demo>/<id>-<name>.js` from the scenario, reusing `film/lib/`, then
-   films, checks and writes `cut.json`.
+   films, checks and writes `cut.json`, then makes the voice.

@@ -59,7 +59,8 @@ Without it, the kit offers a scripted model for rehearsals.
 | `reference/devops/` | the answers: original and secured `agent.py`, the policy; outside the app folder so Claude can't read them |
 | `reference/devops/claude-take/` | what Claude wrote in the filmed session; the later scenes are filmed against it |
 | `apps/devops/ui/` | Shipyard's web UI (Vite + React + Tailwind); the kit builds it |
-| `film/` | the film: scene scripts, `cut.json` (titles, subtitles, pace), render tools. See [FILMING.md](FILMING.md) |
+| `film/` | the film: scene scripts, `cut.json` (title cards, subtitles, voice, pace), render tools. See [FILMING.md](FILMING.md) |
+| `film/STYLE.md` | the Hexgate video style: title cards, palette, subtitles, voice |
 | `DESIGN.md` | why it's built this way |
 
 ## Notes

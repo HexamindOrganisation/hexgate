@@ -3,8 +3,10 @@
 Each scene is a Playwright script in demo/film/<demo>/<id>-*.js. Before a
 scene, the platform and the app are put in the state the scene starts from
 ([film] in demo.toml); after it, the raw take is encoded to <out>/<id>.mp4.
-When every scene's clip exists, the clips are joined into <out>/<demo>.mp4 with
-the titles and subtitles of demo/film/<demo>/cut.json. A "live" scene (Claude
+When every scene's clip exists, the title cards are rendered and the clips are
+joined into <out>/<demo>.mp4 with the cards, subtitles and pace of
+demo/film/<demo>/cut.json, and the voiceover clips in <out>/vo/ if there are
+any (demo/FILMING.md, "Voiceover"). A "live" scene (Claude
 at work) is recorded by hand; `--raw VIDEO` cuts that recording into its clip.
 `render` instead of scene ids only joins the clips. How to write and check
 scenes: demo/FILMING.md.
@@ -163,7 +165,16 @@ def run(demo: demos.Demo, ids: list[str], out: str | None, raw: str | None = Non
         ui.warn(f"not joined yet, no clip for: {', '.join(missing)}")
         print(f"  clips in {out_dir}")
         return
-    ui.step(f"joining {len(scenes)} scenes with titles and subtitles")
+    _node_deps()
+    with ui.spinner("rendering the title cards"):
+        r = subprocess.run(["node", "lib/cards.js", str(cut), str(out_dir)], cwd=FILM,
+                           env={**os.environ, **platform.tool_env()}, capture_output=True, text=True)
+    if r.returncode != 0:
+        ui.fail(f"title cards failed:\n{(r.stderr or r.stdout)[-1500:]}")
+        raise SystemExit(1)
+    voiced = len(list((out_dir / "vo").glob("*.*"))) if (out_dir / "vo").exists() else 0
+    ui.step(f"joining {len(scenes)} scenes with title cards, subtitles"
+            + (f" and {voiced} voiceover clips" if voiced else " (no voiceover clips)"))
     final = out_dir / f"{demo.key}.mp4"
     partial = out_dir / f"{demo.key}.partial.mp4"  # never a half-written film under the real name
     _python(str(FILM / "tools" / "render.py"), str(cut), str(out_dir), str(partial))

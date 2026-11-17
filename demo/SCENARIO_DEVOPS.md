@@ -37,6 +37,13 @@ times, into `demo/film/devops/cut.json`. Change the story here, then have
 Claude update the scripts and the cut (the `film-demo` skill;
 [FILMING.md](FILMING.md) explains the whole loop).
 
+Each part opens on a Hexgate title card (its eyebrow, two-line headline and
+lead are under **Card** below), then plays the filmed app. A voice tells what
+happens (**Voiceover**: one line per clip, said as written, or as the
+"said:" form when numbers or names read differently), and a short subtitle
+line sits on screen (**Subtitles**). How it all looks and sounds:
+[film/STYLE.md](film/STYLE.md).
+
 Every Shipyard scene opens on a mock desktop: the cursor clicks the Shipyard
 icon in the dock and the app window opens. A subtitle is one short spoken-style
 line; when the camera is on the message box being typed, it moves to the top.
@@ -61,6 +68,15 @@ Subtitles:
 - Sam asks it to ship an untested build to prod.
 - It deploys and restarts. No questions asked.
 - Prod error rate jumps past 30%.
+- One message, and a bad build is live.
+
+Card: red · THE PROBLEM · "The unsafe" / "copilot" · One chat message can ship a bad build **straight to prod**.
+
+Voiceover:
+- First, the unsafe copilot. Sam, an engineer, opens Shipyard, Acme's internal developer platform.
+- Payments is throwing errors in production. And the ops copilot has no guardrails.
+- Sam asks it to ship an untested build straight to prod. It deploys and restarts the service. No questions asked.
+- The production error rate jumps past 30%. (said: "The production error rate jumps past thirty percent.")
 - One message, and a bad build is live.
 
 ### 02 · Claude secures it with hexgate
@@ -116,6 +132,21 @@ Subtitles:
 The policy Claude saved in the filmed take is kept in
 `demo/reference/devops/claude-take/`, so the scenes after this one show it.
 
+Card: green · THE FIX · "Claude secures it" / "with Hexgate" · **Claude Code** wraps the agent and writes its policy.
+
+Voiceover:
+- Now, Claude secures it with Hexgate. We open Claude Code in the Shipyard repo,
+- and ask it to secure the copilot with Hexgate, in plain English.
+- Claude reads the app's code and the Hexgate docs.
+- It wraps the agent and registers it on the platform.
+- Then it writes a policy, and dry-runs it against every scenario.
+- All 23 cases pass, so it saves the policy. (said: "All twenty-three cases pass, so it saves the policy.")
+- And it smoke-tests the copilot as each user.
+- Done. Here's its summary.
+- Who can do what, role by role.
+- Each user was tested, and blocked where they should be.
+- And it flags the calls it made itself, so we can review them.
+
 ### 03 · The agent on hexgate
 
 Starts from: Claude's take (`./demo/run secure devops --take claude-take`).
@@ -137,6 +168,17 @@ Subtitles:
 - The six tools it registered.
 - The policy as a grid: role by tool.
 - Engineers deploy to staging only. Releases need approval.
+
+Card: green · THE PLATFORM · "The agent" / "on Hexgate" · Its **tools**, **roles** and **policy**, in one place.
+
+Voiceover:
+- Next, the agent on Hexgate. The copilot now shows up on the platform.
+- Its graph: the agent and its six tools.
+- Pick a role to see what it can reach.
+- Release managers need approval to deploy. And nobody can delete an environment.
+- These are the six tools it registered, with each role's access.
+- The policy, as a grid: role by tool.
+- Engineers deploy to staging only. Release managers need approval.
 
 ### 04 · Edit the policy
 
@@ -160,6 +202,17 @@ Subtitles:
 - Now we lower the cap to 10.
 - Same test, on the unsaved draft: denied.
 - Looks right. We save it.
+
+Card: green · THE POLICY · "Edit" / "the policy" · Change a rule, **test it**, save it. No redeploy.
+
+Voiceover:
+- Now, let's edit the policy.
+- Here's the same policy in the dashboard. Scaling is capped at 20 replicas. The grid shows each role's access. (said: "Here's the same policy in the dashboard. Scaling is capped at twenty replicas. The grid shows each role's access.")
+- Let's test it: a release manager scales prod to 15. (said: "Let's test it: a release manager scales prod to fifteen.")
+- Allowed. 15 is under the cap. (said: "Allowed. Fifteen is under the cap.")
+- Now we lower the cap to 10. (said: "Now we lower the cap to ten.")
+- Same test, on the unsaved draft: denied.
+- Looks right, so we save it.
 
 ### 05 · Same request, now blocked
 
@@ -188,6 +241,21 @@ Subtitles:
 - Approved. The deploy goes out.
 - Prod is healthy on v2.4.0, and every step is logged.
 
+Card: green · THE PAYOFF · "Same request," / "now blocked" · Same prompt, different answer, **decided by the role**.
+
+Voiceover:
+- Same request, now blocked. Back in Shipyard, Sam signs in again.
+- The copilot is now protected by Hexgate.
+- Sam sends the exact same request.
+- Blocked. Engineers can't deploy or restart in production, and the copilot explains why.
+- Prod is untouched.
+- So, staging then? That's allowed, and it goes through.
+- Every block and every deploy shows up in the activity feed.
+- Now Jordan, a release manager, signs in, and asks to deploy v2.4.0 to prod. (said: "Now Jordan, a release manager, signs in, and asks to deploy version two point four to prod.")
+- Allowed, but it waits for a human to approve.
+- Approved. The deploy goes out.
+- Prod is healthy on v2.4.0, and every step is logged. (said: "Prod is healthy on two point four, and every step is logged.")
+
 ### 06 · The audit trail
 
 Starts from: right after 05; its decisions are what this shows.
@@ -208,6 +276,15 @@ Subtitles:
 - Which tools, and which roles, got denied.
 - Who asked, with which role, and what was decided.
 - Jordan's deploy: approval required, granted as release.
+
+Card: green · AUDIT · "The audit" / "trail" · **Every decision**: who asked, with which role, and why.
+
+Voiceover:
+- Finally, the audit trail. Every decision lands on the platform.
+- Two denied, one held for approval, two allowed.
+- Each hour's decisions, by outcome. Which tools, and which roles, got denied.
+- And the decision log: who asked, with which role, and what was decided.
+- Jordan's deploy: approval required, granted as release manager.
 
 ## Status (2026-11-16)
 

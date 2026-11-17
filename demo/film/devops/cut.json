@@ -11,25 +11,44 @@
     {
       "id": "01",
       "title": "The unsafe copilot",
+      "card": {
+        "eyebrow": "THE PROBLEM",
+        "tone": "red",
+        "lines": ["The unsafe", "copilot"],
+        "lead": "One chat message can ship a bad build **straight to prod**."
+      },
       "trim": 0.2,
       "rate": 1.6,
       "fast": [
         [30.5, 37.5, 3]
       ],
       "subs": [
-        [5.5, 9.3, "Sam opens Shipyard, Acme's developer platform."],
-        [9.6, 14.5, "Sam is an engineer."],
+        [5.5, 9.8, "Sam opens Shipyard, Acme's developer platform."],
+        [9.9, 14.5, "Sam is an engineer."],
         [16.0, 24.0, "Payments is throwing errors in prod."],
         [25.0, 29.5, "The ops copilot has no guardrails."],
         [30.5, 38.0, "Sam asks it to ship an untested build to prod.", "top"],
         [39.0, 47.5, "It deploys and restarts. No questions asked."],
         [48.5, 57.0, "Prod error rate jumps past 30%."],
         [57.5, 65.4, "One message, and a bad build is live."]
+      ],
+      "vo": [
+        [0.84, "First, the unsafe copilot. Sam, an engineer, opens Shipyard, Acme's internal developer platform."],
+        [16.2, "Payments is throwing errors in production. And the ops copilot has no guardrails."],
+        [32.46, "Sam asks it to ship an untested build straight to prod. It deploys and restarts the service. No questions asked."],
+        [48.62, "The production error rate jumps past 30%.", "The production error rate jumps past thirty percent."],
+        [58.22, "One message, and a bad build is live."]
       ]
     },
     {
       "id": "02",
       "title": "Claude secures it with hexgate",
+      "card": {
+        "eyebrow": "THE FIX",
+        "tone": "green",
+        "lines": ["Claude secures it", "with Hexgate"],
+        "lead": "**Claude Code** wraps the agent and writes its policy."
+      },
       "trim": 0.0,
       "rate": 1.3,
       "subs": [
@@ -44,6 +63,19 @@
         [63.8, 69.5, "Who can do what, role by role."],
         [70.0, 76.5, "Each user tested, blocked where it should be."],
         [77.0, 84.5, "And the calls it made, flagged for us."]
+      ],
+      "vo": [
+        [0.42, "Now, Claude secures it with Hexgate. We open Claude Code in the Shipyard repo,"],
+        [9.15, "and ask it to secure the copilot with Hexgate, in plain English."],
+        [16.43, "Claude reads the app's code and the Hexgate docs."],
+        [26.05, "It wraps the agent and registers it on the platform."],
+        [32.03, "Then it writes a policy, and dry-runs it against every scenario."],
+        [45.55, "All 23 cases pass, so it saves the policy.", "All twenty-three cases pass, so it saves the policy."],
+        [53.35, "And it smoke-tests the copilot as each user."],
+        [58.03, "Done. Here's its summary."],
+        [63.75, "Who can do what, role by role."],
+        [71.03, "Each user was tested, and blocked where they should be."],
+        [77.53, "And it flags the calls it made itself, so we can review them."]
       ],
       "speed": {
         "views": {
@@ -77,10 +109,16 @@
     {
       "id": "03",
       "title": "The agent on hexgate",
+      "card": {
+        "eyebrow": "THE PLATFORM",
+        "tone": "green",
+        "lines": ["The agent", "on Hexgate"],
+        "lead": "Its **tools**, **roles** and **policy**, in one place."
+      },
       "trim": 0.2,
       "rate": 1.6,
       "subs": [
-        [3.6, 9.5, "The copilot now shows up on the platform."],
+        [6.5, 10.2, "The copilot now shows up on the platform."],
         [11.0, 17.0, "Its graph: the agent and its six tools."],
         [17.5, 23.0, "Pick a role to see what it can reach."],
         [23.0, 26.8, "Deploys need approval for release managers."],
@@ -88,11 +126,26 @@
         [33.0, 43.0, "The six tools it registered."],
         [45.0, 51.0, "The policy as a grid: role by tool."],
         [51.5, 59.5, "Engineers deploy to staging only. Releases need approval."]
+      ],
+      "vo": [
+        [1.48, "Next, the agent on Hexgate. The copilot now shows up on the platform."],
+        [11.08, "Its graph: the agent and its six tools."],
+        [17.16, "Pick a role to see what it can reach."],
+        [22.92, "Release managers need approval to deploy. And nobody can delete an environment."],
+        [33.48, "These are the six tools it registered, with each role's access."],
+        [45.32, "The policy, as a grid: role by tool."],
+        [51.72, "Engineers deploy to staging only. Release managers need approval."]
       ]
     },
     {
       "id": "04",
       "title": "Edit the policy",
+      "card": {
+        "eyebrow": "THE POLICY",
+        "tone": "green",
+        "lines": ["Edit", "the policy"],
+        "lead": "Change a rule, **test it**, save it. No redeploy."
+      },
       "trim": 0.2,
       "rate": 1.6,
       "fast": [
@@ -106,11 +159,26 @@
         [42.0, 50.0, "Now we lower the cap to 10."],
         [51.0, 60.0, "Same test, on the unsaved draft: denied."],
         [61.0, 70.3, "Looks right. We save it."]
+      ],
+      "vo": [
+        [0.2, "Now, let's edit the policy."],
+        [5.96, "Here's the same policy in the dashboard. Scaling is capped at 20 replicas. The grid shows each role's access.", "Here's the same policy in the dashboard. Scaling is capped at twenty replicas. The grid shows each role's access."],
+        [23.56, "Let's test it: a release manager scales prod to 15.", "Let's test it: a release manager scales prod to fifteen."],
+        [36.26, "Allowed. 15 is under the cap.", "Allowed. Fifteen is under the cap."],
+        [42.66, "Now we lower the cap to 10.", "Now we lower the cap to ten."],
+        [51.62, "Same test, on the unsaved draft: denied."],
+        [61.22, "Looks right, so we save it."]
       ]
     },
     {
       "id": "05",
       "title": "Same request, now blocked",
+      "card": {
+        "eyebrow": "THE PAYOFF",
+        "tone": "green",
+        "lines": ["Same request,", "now blocked"],
+        "lead": "Same prompt, different answer, **decided by the role**."
+      },
       "trim": 0.2,
       "rate": 1.7,
       "fast": [
@@ -118,8 +186,8 @@
         [91.0, 94.5, 3]
       ],
       "subs": [
-        [5.9, 9.3, "Back in Shipyard, after Claude's work."],
-        [9.4, 14.5, "Sam signs in again."],
+        [6.9, 10.4, "Back in Shipyard, after Claude's work."],
+        [10.5, 14.5, "Sam signs in again."],
         [16.0, 22.5, "The copilot is now protected by hexgate."],
         [23.5, 32.5, "Sam sends the exact same request.", "top"],
         [33.5, 47.0, "Blocked: engineers can't deploy or restart in prod."],
@@ -131,20 +199,46 @@
         [96.0, 103.0, "Allowed, but it waits for a human."],
         [103.5, 111.0, "Approved. The deploy goes out."],
         [112.0, 127.9, "Prod is healthy on v2.4.0, and every step is logged."]
+      ],
+      "vo": [
+        [0.47, "Same request, now blocked. Back in Shipyard, Sam signs in again."],
+        [16.45, "The copilot is now protected by Hexgate."],
+        [23.93, "Sam sends the exact same request."],
+        [33.54, "Blocked. Engineers can't deploy or restart in production, and the copilot explains why."],
+        [47.82, "Prod is untouched."],
+        [54.62, "So, staging then? That's allowed, and it goes through."],
+        [68.56, "Every block and every deploy shows up in the activity feed."],
+        [77.74, "Now Jordan, a release manager, signs in, and asks to deploy v2.4.0 to prod.", "Now Jordan, a release manager, signs in, and asks to deploy version two point four to prod."],
+        [96.24, "Allowed, but it waits for a human to approve."],
+        [103.38, "Approved. The deploy goes out."],
+        [111.88, "Prod is healthy on v2.4.0, and every step is logged.", "Prod is healthy on two point four, and every step is logged."]
       ]
     },
     {
       "id": "06",
       "title": "The audit trail",
+      "card": {
+        "eyebrow": "AUDIT",
+        "tone": "green",
+        "lines": ["The audit", "trail"],
+        "lead": "**Every decision**: who asked, with which role, and why."
+      },
       "trim": 0.2,
       "rate": 1.5,
       "subs": [
-        [5.3, 8.6, "Every decision lands on the platform."],
-        [8.8, 18.5, "Two denied, one held for approval, two allowed."],
+        [6.1, 9.3, "Every decision lands on the platform."],
+        [9.4, 18.5, "Two denied, one held for approval, two allowed."],
         [19.0, 22.0, "Each hour's decisions, by outcome."],
         [22.5, 29.5, "Which tools, and which roles, got denied."],
         [30.5, 43.0, "Who asked, with which role, and what was decided."],
         [44.0, 55.0, "Jordan's deploy: approval required, granted as release."]
+      ],
+      "vo": [
+        [0.68, "Finally, the audit trail. Every decision lands on the platform."],
+        [9.08, "Two denied, one held for approval, two allowed."],
+        [18.98, "Each hour's decisions, by outcome. Which tools, and which roles, got denied."],
+        [30.68, "And the decision log: who asked, with which role, and what was decided."],
+        [44.18, "Jordan's deploy: approval required, granted as release manager."]
       ]
     }
   ]
