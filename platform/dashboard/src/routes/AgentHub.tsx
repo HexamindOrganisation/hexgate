@@ -46,6 +46,7 @@ import {
   toolCounter,
 } from "@/lib/agent-graph";
 import {
+  GRAPH_ERROR_TEXT,
   graphErrorOf,
   roleOptionsFor,
   rolesThatRun,
@@ -166,6 +167,8 @@ export function AgentHub() {
   // A role the policy no longer has isn't a view of anything: back to all.
   if (role && graph && !graph.roles.includes(role)) setRole(null);
   const [pickingRole, setPickingRole] = useState(false);
+  // Whether the open graph dialog is the every-role one (from Resources).
+  const [graphEveryRole, setGraphEveryRole] = useState(false);
   const roleQuery = usePolicyGraph(
     scope.projectId,
     role ?? undefined,
@@ -188,6 +191,7 @@ export function AgentHub() {
           : null,
     [role, subgraph, projectGraph, agent],
   );
+  const reachLoading = graphQuery.isLoading || graphQuery.isPlaceholderData;
   const viewLoading = role
     ? roleQuery.isLoading || roleQuery.isPlaceholderData
     : graphQuery.isLoading || graphQuery.isPlaceholderData;
@@ -328,6 +332,20 @@ export function AgentHub() {
     );
   }
 
+  const rolePicker = pickingRole && (
+    <RolePickerDialog
+      options={roleOptions}
+      picked={role}
+      onClose={() => setPickingRole(false)}
+      onApply={(next) => {
+        setRole(next);
+        setPickingRole(false);
+        // Picking a role is asking for that role's graph.
+        setGraphEveryRole(false);
+      }}
+    />
+  );
+
   return (
     <div className="mx-auto max-w-[960px] space-y-4">
       <Breadcrumb name={agent.name} />
@@ -360,18 +378,24 @@ export function AgentHub() {
             // the agent's own node to draw.
             openGraph:
               scope.projectId && view && view.nodes.length > 1
-                ? () => setGraphOpen(true)
+                ? () => {
+                    setGraphEveryRole(false);
+                    setGraphOpen(true);
+                  }
                 : null,
             // The previous project's graph, kept while this one loads, isn't
             // this agent's: show it as loading.
             graphLoading: viewLoading,
             graphError: viewError,
             // Resources reads the every-role graph: its own load state.
-            reachLoading: graphQuery.isLoading || graphQuery.isPlaceholderData,
+            reachLoading,
             reachError: graphError,
             openAnyGraph:
               scope.projectId && subgraph && subgraph.nodes.length > 1
-                ? () => setGraphOpen(true)
+                ? () => {
+                    setGraphEveryRole(true);
+                    setGraphOpen(true);
+                  }
                 : null,
             classic: !!policyFiles.data && !modular,
             playgroundLive,
@@ -385,26 +409,36 @@ export function AgentHub() {
           open
           onOpenChange={setGraphOpen}
           agent={agent.name}
-          graph={viewLoading ? null : view}
-          loading={viewLoading}
-          error={role ? roleQuery.error : graphQuery.error}
+          // From Resources it's the every-role graph, as that tab is.
+          graph={
+            graphEveryRole
+              ? reachLoading
+                ? null
+                : subgraph
+              : viewLoading
+                ? null
+                : view
+          }
+          loading={graphEveryRole ? reachLoading : viewLoading}
+          error={graphEveryRole || !role ? graphQuery.error : roleQuery.error}
           options={graphOptions}
-          roleControl={rolesButton}
-          flowKey={flowKey}
-          role={role}
-        />
+          roleControl={
+            graphEveryRole ? (
+              <span className="text-[11px] text-muted-foreground">
+                every role
+              </span>
+            ) : (
+              rolesButton
+            )
+          }
+          flowKey={graphEveryRole ? `${flowKey}:all` : flowKey}
+          role={graphEveryRole ? null : role}
+        >
+          {/* Nested, so the picker is a layer of this dialog, not a rival. */}
+          {rolePicker}
+        </PolicyGraphDialog>
       )}
-      {pickingRole && (
-        <RolePickerDialog
-          options={roleOptions}
-          picked={role}
-          onClose={() => setPickingRole(false)}
-          onApply={(next) => {
-            setRole(next);
-            setPickingRole(false);
-          }}
-        />
-      )}
+      {!graphOpen && rolePicker}
     </div>
   );
 }
@@ -938,11 +972,7 @@ function graphPlaceholder(
   role: string | null,
 ): string {
   if (loading) return "Loading graph…";
-  if (error === "compose")
-    return "The policy modules don't compose, so there's no graph: fix the lints in Policies.";
-  if (error === "gone")
-    return "You don't have access to this project's policy any more.";
-  if (error === "load") return "Couldn't load the graph. Refresh to retry.";
+  if (error) return GRAPH_ERROR_TEXT[error];
   if (classic)
     return `${name} is governed by its own policy file. The graph appears once the project uses policy.yaml or role bindings.`;
   // A role that gives it nothing is a fact about the role, not the policy.

@@ -149,3 +149,11 @@ export function graphErrorOf(error: unknown): GraphError {
   const status = error instanceof ApiError ? error.status : null;
   return status === 422 ? "compose" : status === 404 ? "gone" : "load";
 }
+
+/** What to tell the user about a failed graph. */
+export const GRAPH_ERROR_TEXT: Record<GraphError, string> = {
+  compose:
+    "The policy modules don't compose, so there's no graph: fix the lints in Policies.",
+  gone: "You don't have access to this project's policy any more.",
+  load: "Couldn't load the graph. Refresh to retry.",
+};

@@ -57,6 +57,7 @@ export function AgentsPage() {
     setFiltersFor(scope.projectId);
     setFilters(NO_FILTERS);
     setQuery("");
+    setFiltering(false);
   }
   const manifests = useAgentManifests(scope.projectId);
   // 24h activity per agent; shares Home's cache entry.
@@ -185,6 +186,23 @@ export function AgentsPage() {
   }
 
   const agents = manifests.data ?? [];
+  // A role or framework the project no longer has can't be unticked in the
+  // dialog (it isn't listed): drop it once the data says it's gone.
+  if (graphKnown && filters.roles.some((r) => !graph.data!.roles.includes(r)))
+    setFilters((f) => ({
+      ...f,
+      roles: f.roles.filter((r) => graph.data!.roles.includes(r)),
+    }));
+  if (
+    manifests.data &&
+    filters.frameworks.some((fw) => !facts.some((a) => a.framework === fw))
+  )
+    setFilters((f) => ({
+      ...f,
+      frameworks: f.frameworks.filter((fw) =>
+        facts.some((a) => a.framework === fw),
+      ),
+    }));
   // Filters set whose data isn't there: kept, but said so.
   const unapplied = [
     filters.activity.length > 0 && !summary.data && "24h activity",
@@ -264,7 +282,10 @@ export function AgentsPage() {
       )}
       {toolbar && unapplied.length > 0 && (
         <p className="-mt-1 mb-3 text-meta text-muted-foreground">
-          Not applied until their data loads: {unapplied.join(", ")}.
+          {/* A failed load won't come on its own: say so, not "until". */}
+          {summaryFailed || graphFailed
+            ? `Not applied, as their data couldn't load: ${unapplied.join(", ")}.`
+            : `Not applied until their data loads: ${unapplied.join(", ")}.`}
         </p>
       )}
       {filtering && (
@@ -274,6 +295,8 @@ export function AgentsPage() {
           roles={graphKnown ? (graph.data?.roles ?? []) : []}
           activityKnown={!!summary.data}
           graphKnown={graphKnown}
+          activityFailed={summaryFailed}
+          graphFailed={graphFailed}
           applied={filters}
           onApply={(next) => {
             setFilters(next);

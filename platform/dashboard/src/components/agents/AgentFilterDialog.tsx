@@ -38,6 +38,8 @@ export function AgentFilterDialog({
   roles,
   activityKnown,
   graphKnown,
+  activityFailed = false,
+  graphFailed = false,
   applied,
   onApply,
   onClose,
@@ -49,6 +51,9 @@ export function AgentFilterDialog({
   activityKnown: boolean;
   /** The policy graph loaded (delegation and roles come from it). */
   graphKnown: boolean;
+  /** Their loads failed, rather than still running. */
+  activityFailed?: boolean;
+  graphFailed?: boolean;
   applied: AgentFilters;
   onApply: (f: AgentFilters) => void;
   onClose: () => void;
@@ -121,7 +126,12 @@ export function AgentFilterDialog({
           </Section>
           <Section
             title="Last 24 hours"
-            off={!activityKnown && "The last 24 hours haven't loaded."}
+            off={
+              !activityKnown &&
+              (activityFailed
+                ? "The last 24 hours couldn't load."
+                : "The last 24 hours haven't loaded.")
+            }
           >
             {ACTIVITY.map(([v, label]) => (
               <Check
@@ -155,7 +165,12 @@ export function AgentFilterDialog({
           {(roles.length > 0 || !graphKnown) && (
             <Section
               title="Run by role"
-              off={!graphKnown && "The policy graph hasn't loaded."}
+              off={
+                !graphKnown &&
+                (graphFailed
+                  ? "The policy graph couldn't load."
+                  : "The policy graph hasn't loaded.")
+              }
             >
               {roles.length > 8 && (
                 <SearchField
@@ -189,7 +204,12 @@ export function AgentFilterDialog({
           )}
           <Section
             title="Delegation"
-            off={!graphKnown && "The policy graph hasn't loaded."}
+            off={
+              !graphKnown &&
+              (graphFailed
+                ? "The policy graph couldn't load."
+                : "The policy graph hasn't loaded.")
+            }
           >
             {DELEGATION.map(([v, label]) => (
               <Check

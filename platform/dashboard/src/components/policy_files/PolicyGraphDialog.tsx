@@ -24,6 +24,7 @@ import { matchesQuery, normalizeQuery } from "@/lib/search";
 import type { ToolCounts } from "@/lib/agent-graph";
 import {
   compactAgentGraph,
+  GRAPH_ERROR_TEXT,
   graphErrorOf,
   type Verdict,
 } from "@/lib/agent-graph-view";
@@ -873,6 +874,13 @@ export function PolicyFlow({
     [graph, isAgent],
   );
   const shown = view.graph;
+  // A new drawn graph (refetch, role) re-indexes its edges: a hover keyed by
+  // the old index would light up another edge.
+  const [hoverFor, setHoverFor] = useState(shown);
+  if (hoverFor !== shown) {
+    setHoverFor(shown);
+    setHover(null);
+  }
   const self = agent ? graph.nodes[0]?.id : undefined;
   const pinned =
     pinnedId && shown.nodes.some((n) => n.id === pinnedId) ? pinnedId : null;
@@ -1304,12 +1312,7 @@ export function PolicyFlow({
 
 /** Why the graph failed, by status (as the agent hub reads it). */
 function graphErrorText(error: unknown): string {
-  return {
-    compose:
-      "the modules don't compose — fix the lints, then reopen the graph.",
-    gone: "you don't have access to this project's policy.",
-    load: "couldn't load the graph — try again.",
-  }[graphErrorOf(error)];
+  return GRAPH_ERROR_TEXT[graphErrorOf(error)];
 }
 
 /** One agent's graph, full size: the hub's Expand. The hub owns the data and
@@ -1325,6 +1328,7 @@ export function PolicyGraphDialog({
   roleControl,
   flowKey,
   role,
+  children,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1340,6 +1344,8 @@ export function PolicyGraphDialog({
   flowKey?: string;
   /** The role the graph is for, if one is picked. */
   role?: string | null;
+  /** Layers of this dialog, e.g. the role picker opened from it. */
+  children?: React.ReactNode;
 }) {
   const errorText = error ? graphErrorText(error) : null;
   return (
@@ -1387,6 +1393,7 @@ export function PolicyGraphDialog({
             </div>
           )}
         </div>
+        {children}
       </DialogContent>
     </Dialog>
   );

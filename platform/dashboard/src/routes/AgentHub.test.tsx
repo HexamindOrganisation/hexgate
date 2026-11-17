@@ -24,8 +24,20 @@ vi.mock(
     PolicyFlow: ({ graph }: { graph: { nodes: unknown[] } }) => (
       <div data-testid="agent-graph">{graph.nodes.length} nodes</div>
     ),
-    PolicyGraphDialog: ({ open, agent }: { open: boolean; agent?: string }) =>
-      open ? <div role="dialog" aria-label={`${agent} policy graph`} /> : null,
+    PolicyGraphDialog: ({
+      open,
+      agent,
+      roleControl,
+    }: {
+      open: boolean;
+      agent?: string;
+      roleControl?: React.ReactNode;
+    }) =>
+      open ? (
+        <div role="dialog" aria-label={`${agent} policy graph`}>
+          {roleControl}
+        </div>
+      ) : null,
   }),
 );
 
@@ -819,9 +831,11 @@ describe("AgentHub", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: "Open graph →" }),
     );
-    expect(
-      await screen.findByRole("dialog", { name: "support_bot policy graph" }),
-    ).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", {
+      name: "support_bot policy graph",
+    });
+    // Resources is the every-role view, and so is the graph it opens.
+    expect(await within(dialog).findByText("every role")).toBeInTheDocument();
   });
 
   it("lists sub-agents without verdicts on a project with no graph", async () => {
