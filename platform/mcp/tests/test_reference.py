@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -47,9 +48,13 @@ async def test_policy_reference_happy_path():
 
 
 async def test_when_section_is_known_then_policy_reference_returns_it():
-    text = await call(reference.load_sections(REPO_DOCS), section="yaml-shape")
+    sections = reference.load_sections(REPO_DOCS)
 
-    assert text == (REPO_DOCS / "yaml-shape.mdx").read_text(encoding="utf-8")
+    text = await call(sections, section="yaml-shape")
+
+    raw = (REPO_DOCS / "yaml-shape.mdx").read_text(encoding="utf-8")
+    assert text == reference.absolute_links(raw, set(sections))
+    assert "](https://docs.hexgate.ai/concepts/skills)" in text
 
 
 @pytest.mark.parametrize("section", ["nope", "yaml-shape.mdx", "../../README"])
@@ -120,3 +125,47 @@ def test_when_policy_reference_is_called_then_text_is_sent_once(key):
     assert response.status_code == 200
     assert '"isError":false' in response.text
     assert "structuredContent" not in response.text
+
+
+def test_absolute_links_happy_path():
+    text = "[a](/policy/constraints#end-to-end) [b](/concepts/skills) [c](#x)"
+
+    linked = reference.absolute_links(text, {"constraints"})
+
+    assert linked == (
+        "[a](/policy/constraints#end-to-end) "
+        "[b](https://docs.hexgate.ai/concepts/skills) [c](#x)"
+    )
+
+
+def test_when_a_policy_page_is_not_served_then_absolute_links_points_at_the_site():
+    linked = reference.absolute_links("[a](/policy/gone)", {"constraints"})
+
+    assert linked == "[a](https://docs.hexgate.ai/policy/gone)"
+
+
+def slugs(text: str) -> set[str]:
+    """The anchor of every heading outside code fences, as the docs site
+    builds it: lower case, punctuation dropped, spaces as hyphens."""
+    found, fenced = set(), False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        elif not fenced and (heading := re.match(r"#{1,6} (.+)", line)):
+            words = re.sub(r"[^a-z0-9 _-]", "", heading.group(1).lower())
+            found.add(words.strip().replace(" ", "-"))
+    return found
+
+
+def test_served_docs_link_only_to_served_pages():
+    # An agent follows a relative link by calling policy_reference, which
+    # serves only docs/policy; every other site link is made absolute.
+    sections = reference.load_sections(REPO_DOCS)
+    broken = []
+    for name, text in sections.items():
+        for target in re.findall(r"\]\((/[^)\s]*|#[^)\s]*)\)", text):
+            page, _, anchor = target.partition("#")
+            page = page.removeprefix("/policy/") if page else name
+            if page not in sections or (anchor and anchor not in slugs(sections[page])):
+                broken.append(f"{name}: {target}")
+    assert broken == []
