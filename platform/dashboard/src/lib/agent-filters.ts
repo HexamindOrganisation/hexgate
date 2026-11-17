@@ -32,11 +32,13 @@ export type AgentFacts = {
   name: string;
   registered: boolean;
   framework: string | null;
-  /** 24h counts; null while the summary hasn't loaded. */
+  /** 24h counts; null while the summary hasn't loaded (or failed): then the
+   * activity filters don't apply, rather than hide every agent. */
   activity: { all: number; deny: number; needs_approval: number } | null;
   reaches: boolean;
   calledBy: boolean;
-  /** Roles that run it; null when no role gates running it. */
+  /** Roles that run it; null when no role gates running it, or the graph
+   * isn't loaded: then the role filter keeps it. */
   runBy: Set<string> | null;
 };
 
@@ -70,7 +72,11 @@ const ACTIVITY: Record<Activity, (a: AgentFacts["activity"]) => boolean> = {
 export function matches(f: AgentFilters, a: AgentFacts): boolean {
   if (f.status === "registered" && !a.registered) return false;
   if (f.status === "unregistered" && a.registered) return false;
-  if (f.activity.length && !f.activity.some((k) => ACTIVITY[k](a.activity)))
+  if (
+    f.activity.length &&
+    a.activity &&
+    !f.activity.some((k) => ACTIVITY[k](a.activity))
+  )
     return false;
   if (f.frameworks.length && !f.frameworks.includes(a.framework ?? ""))
     return false;

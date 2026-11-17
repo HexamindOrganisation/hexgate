@@ -683,6 +683,8 @@ function NodePanel({
 
 type BypassWarning = {
   toolId: string;
+  /** The node of the agent that escapes its limit. */
+  strictId: string;
   tool: string;
   strict: string;
   loose: string;
@@ -743,6 +745,7 @@ function bypassWarnings(
         seen.add(key);
         out.push({
           toolId,
+          strictId: a.agent,
           tool: labelOf(toolId),
           strict: labelOf(a.agent),
           loose: labelOf(b.agent),
@@ -856,8 +859,12 @@ export type AgentGraphOptions = {
   onMoreRoles?: () => void;
   /** "+N more" sub-agents was clicked. */
   onMoreAgents?: () => void;
-  /** The project graph, for constraint-bypass paths through sub-agents. */
+  /** The project graph (for the picked roles), for constraint-bypass paths
+   * through sub-agents. */
   projectGraph?: PolicyGraph;
+  /** The project node that stands for this agent: its own, or `agent:*`
+   * when the policy doesn't declare it. Its bypass paths are this agent's. */
+  sourceId?: string;
 };
 
 export function PolicyFlow({
@@ -897,17 +904,23 @@ export function PolicyFlow({
     pinnedId && shown.nodes.some((n) => n.id === pinnedId) ? pinnedId : null;
   const openGroup = group && groups.has(group) ? group : null;
   const lay = useMemo(() => layeredLayout(shown), [shown]);
-  const labelOf = useMemo(
-    () => labelLookup(agent?.projectGraph ?? graph),
-    [agent?.projectGraph, graph],
-  );
+  // Project labels, then this graph's (its agent relabelled from a `*`
+  // stand-in), so every panel names the agent being viewed.
+  const projectGraph = agent?.projectGraph;
+  const sourceId = agent?.sourceId;
+  const labelOf = useMemo(() => {
+    const nodes = [...(projectGraph?.nodes ?? []), ...graph.nodes];
+    if (sourceId && graph.nodes[0])
+      nodes.push({ ...graph.nodes[0], id: sourceId });
+    return labelLookup({ nodes, edges: [], roles: [] });
+  }, [projectGraph, graph, sourceId]);
   // One agent's graph has none of its sub-agents' tools: find bypass paths in
-  // the project graph, keeping those that start at this agent.
+  // the project graph, keeping those that start where this agent stands.
   const warnings = useMemo(() => {
-    const all = bypassWarnings(agent?.projectGraph ?? graph, labelOf);
-    const name = self && graph.nodes[0]?.label;
-    return name ? all.filter((w) => w.strict === name) : all;
-  }, [agent?.projectGraph, graph, labelOf, self]);
+    const all = bypassWarnings(projectGraph ?? graph, labelOf);
+    const from = sourceId ?? self;
+    return from ? all.filter((w) => w.strictId === from) : all;
+  }, [projectGraph, graph, labelOf, sourceId, self]);
   const kindOf = useMemo(
     () => new Map(shown.nodes.map((n) => [n.id, n.kind])),
     [shown],
@@ -1083,8 +1096,8 @@ export function PolicyFlow({
           const e = shown.edges[Number(edge.id.slice(1))];
           if (!e) return;
           // An edge into a group or "+N" node acts like a click on it.
-          if (kindOf.get(e.target) === "group" || e.verdict === "mixed")
-            return clickNode(e.target);
+          const k = kindOf.get(e.target);
+          if (k === "group" || k === "more-agents") return clickNode(e.target);
           setSelected(e as PolicyGraphEdge);
         }}
         onNodeClick={(_, node) => clickNode(node.id)}
@@ -1299,6 +1312,7 @@ export function PolicyGraphDialog({
   error,
   options,
   roleControl,
+  flowKey,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1310,6 +1324,8 @@ export function PolicyGraphDialog({
   options: AgentGraphOptions;
   /** The role picker button. */
   roleControl?: React.ReactNode;
+  /** Remounts (and refits) the canvas for a new agent or role set. */
+  flowKey?: string;
 }) {
   const errorText = error ? graphErrorText(error) : null;
   return (
@@ -1347,7 +1363,7 @@ export function PolicyGraphDialog({
             </div>
           )}
           {graph && graph.nodes.length > 1 && (
-            <PolicyFlow graph={graph} agent={options} />
+            <PolicyFlow key={flowKey} graph={graph} agent={options} />
           )}
           {graph && graph.nodes.length <= 1 && (
             <div className="grid h-full place-items-center font-mono text-xs text-muted-foreground">

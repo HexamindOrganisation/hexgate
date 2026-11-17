@@ -128,6 +128,7 @@ export function InspectorTabs({
   agentNames,
   inspectAgent,
   onInspectAgentChange,
+  unsaved = false,
 }: {
   projectId: string;
   resolved: ResolvedPolicy | undefined | null;
@@ -141,6 +142,8 @@ export function InspectorTabs({
   agentNames: string[];
   inspectAgent: string;
   onInspectAgentChange: (agent: string) => void;
+  /** Unsaved edits: the graph opens in a new tab so they survive. */
+  unsaved?: boolean;
 }) {
   const [tab, setTab] = useState<Tab>("resolved");
   const [graphOpen, setGraphOpen] = useState(false);
@@ -195,6 +198,7 @@ export function InspectorTabs({
         // Graphs are per agent: pick one and open its hub.
         <AgentGraphPicker
           agents={agentNames}
+          newTab={unsaved}
           onClose={() => setGraphOpen(false)}
         />
       )}

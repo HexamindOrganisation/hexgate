@@ -64,6 +64,21 @@ function renderInspector(
 afterEach(() => vi.restoreAllMocks());
 
 describe("InspectorTabs", () => {
+  it("opens the hub in a new tab while edits are unsaved", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    renderInspector({ agentNames: ["support_bot"], unsaved: true });
+    await userEvent.click(screen.getByRole("button", { name: /Graph/ }));
+    expect(screen.getByText(/unsaved edits/)).toBeInTheDocument();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "support_bot" }),
+    );
+    expect(open).toHaveBeenCalledWith(
+      "/agents/support_bot",
+      "_blank",
+      "noopener",
+    );
+  });
+
   it("opens an agent's hub from the Graph picker", async () => {
     renderWithProviders(
       <Routes>

@@ -18,10 +18,13 @@ import { pluralise } from "@/lib/format";
 
 export function AgentGraphPicker({
   agents,
+  newTab = false,
   onClose,
 }: {
   /** Agents the policy names. */
   agents: string[];
+  /** Open the hub in a new tab, so the page's unsaved edits survive. */
+  newTab?: boolean;
   onClose: () => void;
 }) {
   const navigate = useNavigate();
@@ -32,7 +35,8 @@ export function AgentGraphPicker({
   }, [agents, query]);
   const open = (name: string) => {
     onClose();
-    navigate(agentHubPath(name));
+    if (newTab) window.open(agentHubPath(name), "_blank", "noopener");
+    else navigate(agentHubPath(name));
   };
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -42,6 +46,8 @@ export function AgentGraphPicker({
           <DialogDescription>
             Each agent has its graph on its own page: its roles, tools and the
             sub-agents it reaches.
+            {newTab &&
+              " You have unsaved edits, so it opens in a new tab; it shows the saved policy."}
           </DialogDescription>
         </div>
         {agents.length > 0 ? (

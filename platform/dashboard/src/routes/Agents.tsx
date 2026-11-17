@@ -73,29 +73,30 @@ export function AgentsPage() {
         : new Map(),
     [graph.data, graph.isPlaceholderData, manifests.data],
   );
-  // What the filter reads off each agent.
-  const facts = useMemo<AgentFacts[]>(() => {
+  // Which roles run each agent: one pass per graph, not per summary poll.
+  const runBy = useMemo(() => {
     const g = graph.data && !graph.isPlaceholderData ? graph.data : undefined;
-    return (manifests.data ?? []).map((a) => {
-      const reach = reachByAgent.get(a.name);
-      return {
-        name: a.name,
-        registered: !!a.manifest,
-        framework: a.manifest?.framework?.trim() || null,
-        activity: summary.data ? (activityOf(a.name) ?? ZERO) : null,
-        reaches: !!reach?.reaches.length,
-        calledBy: !!reach?.calledBy.length,
-        runBy: rolesThatRun(g, a.name),
-      };
-    });
-  }, [
-    manifests.data,
-    reachByAgent,
-    summary.data,
-    activityOf,
-    graph.data,
-    graph.isPlaceholderData,
-  ]);
+    return new Map(
+      (manifests.data ?? []).map((a) => [a.name, rolesThatRun(g, a.name)]),
+    );
+  }, [graph.data, graph.isPlaceholderData, manifests.data]);
+  // What the filter reads off each agent.
+  const facts = useMemo<AgentFacts[]>(
+    () =>
+      (manifests.data ?? []).map((a) => {
+        const reach = reachByAgent.get(a.name);
+        return {
+          name: a.name,
+          registered: !!a.manifest,
+          framework: a.manifest?.framework?.trim() || null,
+          activity: activityOf(a.name),
+          reaches: !!reach?.reaches.length,
+          calledBy: !!reach?.calledBy.length,
+          runBy: runBy.get(a.name) ?? null,
+        };
+      }),
+    [manifests.data, reachByAgent, activityOf, runBy],
+  );
 
   // The 24h summary never loaded, so every count reads "—"; or a later poll
   // (of it or the agent list) failed, so what's shown is the last loaded.
@@ -246,6 +247,15 @@ export function AgentsPage() {
           <FilterChips f={filters} setF={setFilters} />
         </div>
       )}
+      {toolbar &&
+        ((filters.activity.length > 0 && !summary.data) ||
+          (filters.roles.length > 0 && !graph.data)) && (
+          <p className="-mt-1 mb-3 text-meta text-muted-foreground">
+            {filters.activity.length > 0 && !summary.data
+              ? "The last 24 hours haven't loaded, so the activity filters aren't applied."
+              : "The policy graph hasn't loaded, so the role filter isn't applied."}
+          </p>
+        )}
       {filtering && (
         <AgentFilterDialog
           facts={facts}
@@ -420,8 +430,6 @@ export function AgentsPage() {
     </div>
   );
 }
-
-const ZERO = { all: 0, deny: 0, needs_approval: 0 };
 
 const ACTIVITY_LABEL = {
   deny: "Has denials · 24h",

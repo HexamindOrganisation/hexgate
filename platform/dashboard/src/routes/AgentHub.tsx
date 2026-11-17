@@ -44,6 +44,7 @@ import {
   agentReachCounts,
   agentReachEdges,
   agentSubgraph,
+  standsFor,
   toolCountOf,
 } from "@/lib/agent-graph";
 import { roleOptionsFor } from "@/lib/agent-graph-view";
@@ -187,9 +188,12 @@ export function AgentHub() {
     [graph, subgraph],
   );
   const navigate = useNavigate();
+  // The project graph for the picked roles: sub-agents' tool counts and
+  // bypass paths follow the same roles as the drawn graph.
+  const projectGraph = filtered ? rolesGraph.data : graph;
   const toolCount = useCallback(
-    (n: string) => (graph ? toolCountOf(graph, n) : 0),
-    [graph],
+    (n: string) => (projectGraph ? toolCountOf(projectGraph, n) : 0),
+    [projectGraph],
   );
   const graphOptions = useMemo<AgentGraphOptions | null>(
     () =>
@@ -205,11 +209,16 @@ export function AgentHub() {
               setGraphOpen(false);
               navigate(`${agentHubPath(agent.name)}/resources`);
             },
-            projectGraph: graph,
+            projectGraph,
+            sourceId:
+              (projectGraph && standsFor(projectGraph, agent.name)) ??
+              undefined,
           }
         : null,
-    [agent, toolCount, navigate, graph],
+    [agent, toolCount, navigate, projectGraph],
   );
+  // A new agent or role set is a new graph: start it fresh and fitted.
+  const flowKey = `${agent?.name}:${roles.join(",")}`;
   const rolesButton = (
     <RolesButton
       total={roleOptions.length}
@@ -330,6 +339,7 @@ export function AgentHub() {
             graphOptions,
             rolesButton,
             rolesPicked: roles.length,
+            flowKey,
             subAgents,
             // One dialog for every entry point; only when there's more than
             // the agent's own node to draw.
@@ -358,6 +368,7 @@ export function AgentHub() {
           error={filtered ? rolesGraph.error : graphQuery.error}
           options={graphOptions}
           roleControl={rolesButton}
+          flowKey={flowKey}
         />
       )}
       {pickingRoles && (
@@ -396,6 +407,8 @@ export interface HubContext {
   rolesButton: React.ReactNode;
   /** How many roles the drawn graph is for (0 = every role). */
   rolesPicked: number;
+  /** Changes with the agent and roles, to remount (and refit) the canvas. */
+  flowKey: string;
   /** The manifest's sub-agents; null when it records none. */
   subAgents: SubAgentRow[] | null;
   /** Opens the agent's graph dialog; null when there's no graph to show. */
@@ -781,6 +794,7 @@ function AgentOverview({
   graphOptions,
   rolesButton,
   rolesPicked,
+  flowKey,
   graphLoading,
   graphError,
   classic,
@@ -867,7 +881,12 @@ function AgentOverview({
       )}
       {hasGraph ? (
         <div className="h-[420px] border-t border-border">
-          <PolicyFlow graph={view} embedded agent={graphOptions ?? undefined} />
+          <PolicyFlow
+            key={flowKey}
+            graph={view}
+            embedded
+            agent={graphOptions ?? undefined}
+          />
         </div>
       ) : (
         <Placeholder>

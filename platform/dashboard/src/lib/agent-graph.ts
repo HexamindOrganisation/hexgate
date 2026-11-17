@@ -43,14 +43,25 @@ export function agentSubgraph(
   const edges = graph.edges
     .filter(
       (e) =>
-        (e.source === sourceId && e.target !== sourceId) ||
+        e.source === sourceId ||
         ((e.target === node.id || e.target === sourceId) &&
           e.kind === "admission"),
     )
-    .map(repoint);
+    .map(repoint)
+    // A reach to itself (through `*` too) is no sub-agent.
+    .filter((e) => e.source !== e.target);
   const keep = new Set(edges.flatMap((e) => [e.source, e.target]));
   const nodes = graph.nodes.filter((n) => keep.has(n.id) && n.id !== node.id);
   return { nodes: [node, ...nodes], edges, roles: graph.roles };
+}
+
+/** The project node whose edges stand for `agentName` (its own, or `*`'s
+ * when the policy doesn't declare it); null when it isn't in the graph. */
+export function standsFor(
+  graph: PolicyGraph,
+  agentName: string,
+): string | null {
+  return resolveAgent(graph, agentName)?.sourceId ?? null;
 }
 
 /** How many tools each agent may call (never through a denied edge), by

@@ -315,4 +315,18 @@ describe("agentReachEdges", () => {
     expect(agentReachEdges(G, "b").size).toBe(0);
     expect(agentReachEdges(G, "ghost").size).toBe(0);
   });
+
+  describe("agentSubgraph through *", () => {
+    it("drops *'s reach to the agent itself", () => {
+      const g: PolicyGraph = {
+        roles: [],
+        nodes: [
+          { id: "agent:*", kind: "agent", label: "*" },
+          { id: "agent:x", kind: "agent", label: "x" },
+        ],
+        edges: [edge("agent:*", "agent:x", "reach")],
+      };
+      expect(agentSubgraph(g, "x").edges).toHaveLength(0);
+    });
+  });
 });

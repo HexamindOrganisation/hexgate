@@ -97,7 +97,12 @@ function columnsOf(graph: LayoutGraph): {
   bfs(agents.filter((id) => admitted.has(id) || !reached.has(id)));
   for (const id of agents) if (!depth.has(id)) bfs([id]);
 
-  const maxAgent = Math.max(0, ...agents.map((id) => depth.get(id)!));
+  // "+N more" sub-agents sits with the first hop of sub-agents.
+  const moreAgents = graph.nodes.some((n) => n.kind === "more-agents");
+  const maxAgent = Math.max(
+    moreAgents ? 1 : 0,
+    ...agents.map((id) => depth.get(id)!),
+  );
   const col: Record<string, number> = {};
   for (const n of graph.nodes) {
     col[n.id] =
@@ -105,7 +110,9 @@ function columnsOf(graph: LayoutGraph): {
         ? 0
         : n.kind === "agent"
           ? 1 + depth.get(n.id)!
-          : 2 + maxAgent;
+          : n.kind === "more-agents"
+            ? 2
+            : 2 + maxAgent;
   }
   return { col, nCols: maxAgent + 3 };
 }
