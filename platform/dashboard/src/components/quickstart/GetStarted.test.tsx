@@ -35,6 +35,9 @@ describe("GetStarted", () => {
       <GetStarted hasKey={false} hasAgent hasDecision={false} />,
     );
     expect(screen.getByText(/1 of 3 done/)).toBeInTheDocument();
+    // Screen readers get each step's state, not just its number.
+    expect(screen.getAllByText("To do:")).toHaveLength(2);
+    expect(screen.getAllByText("Done:")).toHaveLength(1);
     expect(screen.getByRole("link", { name: /mint a key/i })).toHaveAttribute(
       "href",
       "/tokens?mint=1",

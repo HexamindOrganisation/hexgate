@@ -232,7 +232,9 @@ export function HomePage() {
     queryKey: ["audit", "list", pid, { window: "90d", limit: 1 }],
     enabled: on,
     queryFn: () => api.listAuditDecisions({ window: "90d", limit: 1 }, pid!),
-    refetchInterval: SLOW_MS,
+    retry: 1,
+    // Once there's a decision the answer can't change: stop asking.
+    refetchInterval: (q) => (q.state.data?.rows.length ? false : SLOW_MS),
   });
   // Usage is best-effort: a member without access just doesn't get it.
   const usageQ = useQuery({
@@ -309,16 +311,24 @@ export function HomePage() {
   const hasAgent = agentsQ.isSuccess
     ? agents.some((a) => a.manifest)
     : undefined;
-  const hasDecision = everQ.isSuccess ? everQ.data.rows.length > 0 : undefined;
+  // A failed check reads as "not yet": the step stays to do, but the key and
+  // agent steps still show instead of the whole card disappearing.
+  const hasDecision = everQ.isSuccess
+    ? everQ.data.rows.length > 0
+    : everQ.isError
+      ? false
+      : undefined;
 
   // A project with no agents is where the quickstart helps most: offer it
   // unprompted once (closing it sets quickstartSeen); the checklist stays.
   const openQuickstart = useUi((s) => s.openQuickstart);
   const quickstartSeen = useUi((s) => s.quickstartSeen);
-  const noAgents = agentsQ.isSuccess && agents.length === 0;
+  // Same rule as the checklist's register step: no agent with a manifest.
+  const noRegisteredAgent = hasAgent === false;
   useEffect(() => {
-    if (noAgents && !quickstartSeen) openQuickstart(QUICKSTART_STEP.idea);
-  }, [noAgents, quickstartSeen, openQuickstart]);
+    if (noRegisteredAgent && !quickstartSeen)
+      openQuickstart(QUICKSTART_STEP.idea);
+  }, [noRegisteredAgent, quickstartSeen, openQuickstart]);
 
   const maxAgentCalls = Math.max(
     ...agents.map((a) => activityOf(a.name)?.all ?? 0),
@@ -534,13 +544,20 @@ export function HomePage() {
           ) : (
             <PanelNote>
               No decisions in the last 24 hours.{" "}
-              <button
-                type="button"
-                onClick={() => openQuickstart(QUICKSTART_STEP.idea)}
-                className="text-primary hover:underline"
-              >
-                Getting started
-              </button>
+              {hasDecision === false ? (
+                // Never had one: the walkthrough, not an empty audit log.
+                <button
+                  type="button"
+                  onClick={() => openQuickstart(QUICKSTART_STEP.idea)}
+                  className="text-primary hover:underline"
+                >
+                  Getting started
+                </button>
+              ) : (
+                <Link to={auditUrl()} className="text-primary hover:underline">
+                  Open audit
+                </Link>
+              )}
             </PanelNote>
           )}
         </Panel>

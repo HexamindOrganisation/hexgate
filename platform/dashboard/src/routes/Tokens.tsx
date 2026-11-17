@@ -29,6 +29,7 @@ import { DocsLink } from "@/components/DocsLink";
 import { DOC_PATHS } from "@/lib/docs";
 import { api, type TokenListItem, type TokenMintResponse } from "@/lib/api";
 import { useProjectScoped } from "@/lib/active";
+import { useCopy } from "@/lib/use-copy";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/page-header";
 import { isStaleKey } from "@/lib/keys";
@@ -76,10 +77,8 @@ function JustMintedBanner({
   onDismiss: () => void;
 }) {
   // Brief "Copied!" feedback on successful copy, with a label since this
-  // is the prominent action on the dialog. 1200ms is long enough to
-  // register, short enough that the operator who clicks twice doesn't see
-  // a stale checkmark.
-  const [copied, setCopied] = useState(false);
+  // is the prominent action on the dialog.
+  const [copied, copy] = useCopy();
   // Copy-only \u2014 no reveal UI. Matches the show-once + copy-only pattern
   // GitHub / AWS / Stripe / Vercel / Discord use for API tokens. The
   // mask still shows the env-tagged prefix and the last 4 chars so the
@@ -118,11 +117,7 @@ function JustMintedBanner({
         <Button
           variant="default"
           size="sm"
-          onClick={async () => {
-            await navigator.clipboard.writeText(token.full);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
-          }}
+          onClick={() => copy(token.full)}
           className="gap-1.5"
         >
           {copied ? (

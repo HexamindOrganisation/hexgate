@@ -298,4 +298,44 @@ describe("HomePage", () => {
       ),
     ).toBe(true);
   });
+
+  it("offers the quickstart when the only agent has no manifest", async () => {
+    stub({
+      "/v1/projects/p1/agents/manifest": [
+        {
+          name: "draft",
+          manifest: null,
+          version: null,
+          content_hash: "",
+          updated_at: "",
+        },
+      ],
+    });
+    renderWithProviders(<HomePage />);
+    await waitFor(() => expect(useUi.getState().quickstartOpen).toBe(true));
+  });
+
+  it("keeps the checklist when the decision check fails", async () => {
+    // No route for audit/decisions: both the feed and the 90-day check 404.
+    stub({ "/v1/projects/p1/audit/decisions": undefined });
+    renderWithProviders(<HomePage />);
+    expect(
+      await screen.findByText(/1 of 3 done/, {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
+  });
+
+  it("points a project that never had a decision at the quickstart", async () => {
+    stub({
+      "/v1/projects/p1/audit/decisions": {
+        rows: [],
+        total: 0,
+        limit: 7,
+        offset: 0,
+      },
+    });
+    renderWithProviders(<HomePage />);
+    expect(
+      await screen.findByRole("button", { name: "Getting started" }),
+    ).toBeInTheDocument();
+  });
 });

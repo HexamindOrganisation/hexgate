@@ -138,11 +138,17 @@ export function GetStarted({ hasKey, hasAgent, hasDecision }: SetupState) {
                   ? "bg-success/15 text-success"
                   : "bg-primary/10 text-primary",
               )}
-              aria-label={
-                item.done === null ? undefined : item.done ? "Done" : "To do"
-              }
             >
-              {item.done ? <Check className="size-3.5" /> : i + 1}
+              {item.done ? (
+                <Check className="size-3.5" aria-hidden="true" />
+              ) : (
+                <span aria-hidden="true">{i + 1}</span>
+              )}
+              {item.done !== null && (
+                <span className="sr-only">
+                  {item.done ? "Done:" : "To do:"}
+                </span>
+              )}
             </span>
             <div className="flex min-w-0 flex-col gap-1">
               <span

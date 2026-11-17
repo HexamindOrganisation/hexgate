@@ -26,6 +26,8 @@ import {
 } from "@/components/ui/dialog";
 import {
   ENV_FILE,
+  QUICKSTART_STEP_IDS,
+  type QuickstartStepId,
   FRAMEWORKS,
   POLICY_YAML,
   REGISTER,
@@ -44,20 +46,13 @@ import {
 } from "@/components/quickstart/scenes";
 import { DOC_PATHS, docsUrl, mintKeyPath } from "@/lib/docs";
 import { useUi } from "@/lib/ui";
+import { useCopy } from "@/lib/use-copy";
 import { cn } from "@/lib/utils";
 
 /** A dark code block with a copy button. */
 function CodeBlock({ title, code }: { title: string; code: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    navigator.clipboard
-      ?.writeText(code)
-      .then(() => {
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1400);
-      })
-      .catch(() => undefined);
-  };
+  const [copied, copyText] = useCopy();
+  const copy = () => void copyText(code);
   return (
     <div className="overflow-hidden rounded-lg border border-white/10 bg-[#0a0d14] text-slate-200">
       <div className="flex items-center justify-between gap-2 px-3 pt-2 font-mono text-[11px] text-slate-500">
@@ -113,7 +108,7 @@ function FrameworkPicker({
 }
 
 interface Step {
-  id: string;
+  id: QuickstartStepId;
   title: string;
   body: (ctx: StepCtx) => ReactNode;
   scene: (ctx: StepCtx) => ReactNode;
@@ -126,10 +121,9 @@ interface StepCtx {
   setFramework: (f: Framework) => void;
 }
 
-// Order must match QUICKSTART_STEP in content.ts.
-const STEPS: Step[] = [
-  {
-    id: "idea",
+// Keyed by id; QUICKSTART_STEP_IDS (content.ts) sets the order.
+const STEP_DEFS: Record<QuickstartStepId, Omit<Step, "id">> = {
+  idea: {
     title: "Same request, different answer",
     body: () => (
       <>
@@ -148,8 +142,7 @@ const STEPS: Step[] = [
     ),
     scene: () => <IdeaScene />,
   },
-  {
-    id: "key",
+  key: {
     title: "Mint an API key",
     body: () => (
       <>
@@ -164,8 +157,7 @@ const STEPS: Step[] = [
     scene: () => <KeyScene />,
     action: { label: "Mint an API key", to: mintKeyPath("refund-agent-dev") },
   },
-  {
-    id: "register",
+  register: {
     title: "Register and wrap your agent",
     body: ({ framework, setFramework }) => (
       <>
@@ -187,8 +179,7 @@ const STEPS: Step[] = [
     scene: ({ framework }) => <RegisterScene framework={framework} />,
     action: { label: "Open Agents", to: "/agents" },
   },
-  {
-    id: "policy",
+  policy: {
     title: "Put your policy on the platform",
     body: () => (
       <>
@@ -207,8 +198,7 @@ const STEPS: Step[] = [
     scene: () => <PolicyScene />,
     action: { label: "Open Policies", to: "/policies" },
   },
-  {
-    id: "run",
+  run: {
     title: "Run it as two roles",
     body: () => (
       <>
@@ -232,8 +222,7 @@ const STEPS: Step[] = [
     scene: () => <RunScene />,
     action: { label: "Open Audit", to: "/audit" },
   },
-  {
-    id: "live",
+  live: {
     title: "Change a rule, no redeploy",
     body: () => (
       <>
@@ -253,7 +242,12 @@ const STEPS: Step[] = [
     scene: () => <LiveScene />,
     action: { label: "Open Playground", to: "/playground" },
   },
-];
+};
+
+const STEPS: Step[] = QUICKSTART_STEP_IDS.map((id) => ({
+  id,
+  ...STEP_DEFS[id],
+}));
 
 export function QuickstartDialog() {
   const open = useUi((s) => s.quickstartOpen);
@@ -264,6 +258,7 @@ export function QuickstartDialog() {
   // Bumped by "Replay" so the scene remounts and its animation restarts.
   const [replay, setReplay] = useState(0);
   const primaryRef = useRef<HTMLButtonElement>(null);
+  const pendingNav = useRef<string | null>(null);
   const [framework, setFramework] = useState<Framework>("langchain");
 
   const step = STEPS[index];
@@ -286,6 +281,14 @@ export function QuickstartDialog() {
         // Ligatures would render <= and == as glyphs that differ from what Copy
         // puts on the clipboard.
         className="flex h-[min(680px,92vh)] max-w-5xl flex-col gap-0 overflow-hidden p-0 [font-variant-ligatures:none]"
+        onCloseAutoFocus={(e) => {
+          const to = pendingNav.current;
+          if (!to) return;
+          pendingNav.current = null;
+          // Focus moves to the page we open, not back to the opener.
+          e.preventDefault();
+          navigate(to);
+        }}
         onOpenAutoFocus={(e) => {
           // Land on the primary action rather than the first button (Replay).
           e.preventDefault();
@@ -357,9 +360,12 @@ export function QuickstartDialog() {
                 size="sm"
                 className="mt-4 gap-1.5"
                 onClick={() => {
-                  // Keeps the step, so reopening resumes here.
+                  // Keeps the step, so reopening resumes here. The page opens
+                  // once the dialog has closed (onCloseAutoFocus), so a dialog
+                  // that page opens (Mint API key) isn't fighting this one's
+                  // focus scope on the way out.
+                  pendingNav.current = step.action!.to;
                   close();
-                  navigate(step.action!.to);
                 }}
               >
                 {step.action.label}

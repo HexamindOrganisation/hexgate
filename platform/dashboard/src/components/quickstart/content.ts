@@ -4,16 +4,23 @@
  * in sync with the policy there and in README.md.
  */
 
-/** Each step's index in the dialog — Home's setup checklist opens it at
- * one. Keep in step with STEPS in QuickstartDialog.tsx. */
-export const QUICKSTART_STEP = {
-  idea: 0,
-  key: 1,
-  register: 2,
-  policy: 3,
-  run: 4,
-  live: 5,
-} as const;
+/** The quickstart's steps, in order: the one place that order is defined.
+ * The dialog builds its step list from it, and Home's "Get started"
+ * checklist opens the dialog at `QUICKSTART_STEP[id]`. */
+export const QUICKSTART_STEP_IDS = [
+  "idea",
+  "key",
+  "register",
+  "policy",
+  "run",
+  "live",
+] as const;
+
+export type QuickstartStepId = (typeof QUICKSTART_STEP_IDS)[number];
+
+export const QUICKSTART_STEP = Object.fromEntries(
+  QUICKSTART_STEP_IDS.map((id, i) => [id, i]),
+) as Record<QuickstartStepId, number>;
 
 export type Framework = "langchain" | "openai" | "adk" | "pydantic";
 

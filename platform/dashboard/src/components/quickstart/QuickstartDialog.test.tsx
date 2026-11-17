@@ -90,7 +90,8 @@ describe("QuickstartDialog", () => {
     renderDialog();
     await user.click(screen.getByRole("button", { name: /next/i }));
     await user.click(screen.getByRole("button", { name: "Mint an API key" }));
-    expect(screen.getByText("api keys page")).toBeInTheDocument();
+    // The page opens once the dialog has closed.
+    expect(await screen.findByText("api keys page")).toBeInTheDocument();
     expect(useUi.getState().quickstartOpen).toBe(false);
     expect(useUi.getState().quickstartSeen).toBe(true);
     // Leaving for a page keeps the step, so reopening resumes there.

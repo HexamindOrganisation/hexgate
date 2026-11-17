@@ -484,8 +484,12 @@ reports the decision back.
           async for event in stream_agent(agent, handler, "Refund $400 on order O-42"):
               ...  # render events however you like
 
-  asyncio.run(refund_as("support"))   # refund_order blocked → model sees [policy_denied]
-  asyncio.run(refund_as("billing"))   # refund_order allowed → the refund runs
+  async def main():
+      # One event loop for both runs, as in the platform scripts above.
+      await refund_as("support")   # refund_order blocked → model sees [policy_denied]
+      await refund_as("billing")   # refund_order allowed → the refund runs
+
+  asyncio.run(main())
   ```
 
   See [Which path do I pick?](/two-paths) for when to use the local loop and when
