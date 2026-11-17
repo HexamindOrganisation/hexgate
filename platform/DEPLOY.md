@@ -476,6 +476,11 @@ plane is fine.
 `oauth_refresh_token` or `oauth_authorization_code` 500s, so MCP clients can't finish a login or refresh,
 while the rest of the control plane is fine.
 
+`postgres/0006` is not scoped: the API's startup seed reads the default
+`organization` row, so a build that has the new `organization` column fails at
+boot with `UndefinedColumn` and never serves a request, bearer routes included.
+Run `make platform-migrate` before `platform-up`.
+
 The ClickHouse migrations fail differently again — not a 500 on the routes that
 touch the table, but the boot-time `verify_all` crash loop described above.
 
@@ -490,6 +495,7 @@ running — see *Materialized views and the writers* below.
 | control-plane actor columns | `postgres/0002_actor_columns.sql` |
 | actor trail on the compose file store | `postgres/0003_policy_file_actor_columns.sql` |
 | OAuth refresh tokens linked to their authorization code, a replay mark and an `expires_at` index on the code | `postgres/0005_oauth_refresh_code_link.sql` |
+| policy assistant: the org's `assistant_mode` and the change that last wrote a policy file | `postgres/0006_assistant_change.sql` |
 | policy_decision `attributes` | `clickhouse/0001_add_policy_decision_attributes.sql` |
 | run attribution on decisions/usage | `clickhouse/0002_add_run_columns.sql` |
 | LLM message logging (`llm_message` table) | `clickhouse/0003_add_llm_message.sql` — required before the build that stores `hexgate.messages` |
