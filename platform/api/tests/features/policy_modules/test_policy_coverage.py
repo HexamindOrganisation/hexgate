@@ -403,3 +403,14 @@ def test_when_project_does_not_compose_then_422(client, monkeypatch):
 
     assert r.status_code == 422
     assert "nope.yaml" in r.json()["detail"]
+
+
+async def test_when_agent_is_not_registered_then_404(client, register):
+    pid = _project(client)
+    await register(pid, "bot", ["read_ticket"])
+
+    r = client.get(f"/v1/projects/{pid}/policy/coverage", params={"agent": "bto"})
+
+    # An empty list would read as "no gaps" for the agent asked about.
+    assert r.status_code == 404
+    assert "'bto'" in r.json()["detail"]

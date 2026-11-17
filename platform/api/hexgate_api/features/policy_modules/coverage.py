@@ -60,8 +60,10 @@ async def project_coverage(
     against the policy it enforces: the project policy when the project has
     one (``is_modular``), else its own ``policy_yaml``. Raises the SDK's
     compose errors (:func:`service.compose_error_types`) when the project
-    policy doesn't resolve; an agent whose own policy doesn't load gets an
-    entry marked ``policy_error`` instead, so it doesn't hide the others."""
+    policy doesn't resolve, and :class:`service.UnknownAgentError` for an
+    ``agent`` not registered (an empty list would read as "no gaps"); an
+    agent whose own policy doesn't load gets an entry marked ``policy_error``
+    instead, so it doesn't hide the others."""
     from hexgate_api.features.agents.service import latest_manifests
 
     enforced: dict[str, _Enforced | None]
@@ -74,6 +76,8 @@ async def project_coverage(
         )
         enforced = _own_policies(rows.all())
         names = list(enforced)
+    if agent is not None and not names:
+        raise service.UnknownAgentError(agent)
     manifests = await latest_manifests(session, project_id, list(names))
     return [
         _agent_coverage(name, enforced[name], manifests.get(name)) for name in names

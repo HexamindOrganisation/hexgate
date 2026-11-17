@@ -639,11 +639,17 @@ async def api_policy_coverage(
     nothing), and whether the agent has a policy of its own. Judged against
     the project policy when the project has one, else against each agent's own
     policy; one that doesn't load marks that agent's entry ``policy_error``.
-    422 if the project policy can't be composed."""
+    422 if the project policy can't be composed; 404 for an ``agent`` not
+    registered."""
     try:
         agents = await coverage.project_coverage(session, project_id, agent)
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except service.UnknownAgentError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"agent {exc.args[0]!r} is not registered in this project",
+        ) from exc
     return PolicyCoverageResponse(agents=agents)
 
 
