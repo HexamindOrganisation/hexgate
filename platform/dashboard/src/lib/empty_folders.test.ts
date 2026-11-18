@@ -5,7 +5,13 @@ import type { PolicyFileRead } from "./api";
 import { useEmptyFolders } from "./empty_folders";
 
 function file(name: string): PolicyFileRead {
-  return { name, content: "", content_hash: "h", updated_at: "t" };
+  return {
+    name,
+    content: "",
+    content_hash: "h",
+    text_hash: "t",
+    updated_at: "t",
+  };
 }
 
 const KEY = "hexgate-empty-folders:p1";
