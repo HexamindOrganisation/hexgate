@@ -476,11 +476,13 @@ plane is fine.
 `oauth_refresh_token` or `oauth_authorization_code` 500s, so MCP clients can't finish a login or refresh,
 while the rest of the control plane is fine.
 
-`postgres/0006` is not scoped: the API's startup seed reads the default
-`organization` row, so a build whose model has the new column fails at boot
-against an unmigrated database, with `UndefinedColumn`, and never serves a
-request, bearer routes included.
-Run `make platform-migrate` before `platform-up`.
+`postgres/0006` is scoped the same way on the deploy stacks: with
+`HEXGATE_SEED=skip` the API boots, and every route that loads an `organization`
+or a `policy_file` returns 500 with `UndefinedColumn`. That includes
+`GET /v1/orgs`, which the dashboard calls on load. Where the seed runs (local,
+or self-hosted without `HEXGATE_SEED=skip`) the API instead fails at boot,
+because the seed reads the default `organization` row. Run
+`make platform-migrate` before `platform-up`.
 
 The ClickHouse migrations fail differently again — not a 500 on the routes that
 touch the table, but the boot-time `verify_all` crash loop described above.
