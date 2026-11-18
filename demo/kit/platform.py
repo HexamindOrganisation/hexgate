@@ -109,6 +109,12 @@ def _tree_stamp(rel: str) -> str:
         ["ls-files", "-o", "--exclude-standard", rel],
     ):
         h.update(subprocess.run(["git", *args], cwd=REPO, capture_output=True).stdout)
+    # Untracked files by content too, so editing one before `git add` rebuilds.
+    untracked = subprocess.run(["git", "ls-files", "-o", "--exclude-standard", "-z", rel],
+                               cwd=REPO, capture_output=True).stdout
+    if untracked:
+        h.update(subprocess.run(["git", "hash-object", "--stdin-paths"], cwd=REPO, capture_output=True,
+                                input=untracked.replace(b"\0", b"\n")).stdout)
     return h.hexdigest()[:16]
 
 
@@ -124,7 +130,9 @@ def _set_stamp(name: str, stamp: str) -> None:
 def pnpm() -> list[str]:
     if shutil.which("pnpm", path=tool_env()["PATH"]):
         return ["pnpm"]
-    return ["corepack", "pnpm"]
+    if shutil.which("corepack", path=tool_env()["PATH"]):
+        return ["corepack", "pnpm"]
+    raise SystemExit("neither pnpm nor corepack found: install pnpm (npm i -g pnpm) and run again")
 
 
 def build_ui(src: Path, out: Path, label: str) -> None:

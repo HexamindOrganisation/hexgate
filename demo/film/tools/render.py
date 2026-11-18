@@ -25,6 +25,7 @@ from __future__ import annotations
 import bisect
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -265,7 +266,7 @@ def main() -> None:
         timeline = render_video(scenes, clips, str(picture))
         lines = vo_lines(scenes, timeline, clips)
         if not lines:
-            picture.replace(out)
+            shutil.move(str(picture), out)  # out may be on another volume
             print(f"-> {out} (no voiceover)")
             return
         audio, srt = Path(tmp) / "voice.wav", Path(tmp) / "narration.srt"

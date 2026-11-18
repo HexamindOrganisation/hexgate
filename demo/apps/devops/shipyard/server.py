@@ -133,7 +133,7 @@ def agent_status() -> dict:
         mod = load_agent()
     except Exception as exc:  # a broken edit: show it, don't crash the page
         return {"protected": False, "error": f"{type(exc).__name__}: {exc}"}
-    model = getattr(mod.copilot, "model", None)
+    model = getattr(getattr(mod, "copilot", None), "model", None)
     return {"protected": is_protected(mod), "error": None, "model": model if isinstance(model, str) else "scripted"}
 
 

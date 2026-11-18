@@ -66,7 +66,9 @@ ok "python 3.13"
 PY() { "$UV" run --no-project --python 3.13 python "$@"; }
 
 # ------------------------------------------------------------ Node 22
-node_ok() { command -v node >/dev/null && [ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -ge 22 ]; }
+# pnpm comes from corepack when it isn't installed; Node 25+ no longer ships corepack.
+node_ok() { command -v node >/dev/null && [ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -ge 22 ] \
+  && { command -v pnpm >/dev/null || command -v corepack >/dev/null; }; }
 PATH="$TOOLS/node/bin:$PATH"
 if ! node_ok; then
   say "installing Node 22 (to build the dashboard)"

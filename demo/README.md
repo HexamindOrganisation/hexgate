@@ -66,7 +66,9 @@ Without it, the kit offers a scripted model for rehearsals.
 ## Notes
 
 - `/v1/demo-login` gives anyone who can reach :8000 an admin session. The
-  kit binds everything to localhost; keep it to your own machine.
+  kit binds the API and the apps to localhost; the MCP server (:8080) listens
+  on every interface, as in a deploy, but answers only with a token from the
+  API. Keep the demo to your own machine.
 - The dashboard remembers the active project per browser. Pick "shipyard"
   once in the top-left switcher.
 - `./demo/run down` stops Docker's containers too (they use a lot of RAM). Their data is kept.

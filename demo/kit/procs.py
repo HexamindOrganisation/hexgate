@@ -16,20 +16,33 @@ from kit.paths import RUN
 PIDS = RUN / "pids"
 
 
+def _started(pid: int) -> str:
+    """When `pid` started, as ps prints it ('' if it's gone): with the pid it
+    names one process, so a pid the system reused after a reboot isn't ours."""
+    try:
+        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True).stdout
+    except FileNotFoundError:
+        return ""
+    return "_".join(out.split())
+
+
 def _read() -> dict[str, int]:
+    """The kit's processes still running: an entry whose pid now belongs to
+    another process is dropped."""
     if not PIDS.exists():
         return {}
     out = {}
     for line in PIDS.read_text().splitlines():
-        name, _, pid = line.partition(" ")
-        if pid.isdigit():
+        name, pid, started = (line.split(" ") + ["", ""])[:3]
+        # No start time: a file from before the kit recorded it; trust the pid once.
+        if pid.isdigit() and (_started(int(pid)) == started if started else alive(int(pid))):
             out[name] = int(pid)
     return out
 
 
 def _write(pids: dict[str, int]) -> None:
     RUN.mkdir(parents=True, exist_ok=True)
-    PIDS.write_text("".join(f"{n} {p}\n" for n, p in pids.items()))
+    PIDS.write_text("".join(f"{n} {p} {_started(p)}\n" for n, p in pids.items()))
 
 
 def alive(pid: int) -> bool:

@@ -176,10 +176,10 @@ def sync_workspace(demo: Demo) -> None:
         _git(demo, "reset", "-q", "--hard")
         _git(demo, "clean", "-fdq")
         # Start from no tracked files, so a file the source dropped goes too.
-        _git(demo, "rm", "-rqf", ".")
+        _git(demo, "rm", "-rqf", "--ignore-unmatch", ".")
     # The app as committed in the hexgate repo; the skill symlink is copied as files.
     shutil.copytree(demo.src, d, dirs_exist_ok=True,
-                    ignore=shutil.ignore_patterns(".venv", "__pycache__", ".env", "demo.toml", "uv.lock",
+                    ignore=shutil.ignore_patterns(".venv", "__pycache__", ".env", "demo.toml",
                                                   "node_modules", *([demo.ui] if demo.ui else [])))
     py = d / "pyproject.toml"
     py.write_text(py.read_text().replace('path = "../../.."', f'path = "{REPO}"'))

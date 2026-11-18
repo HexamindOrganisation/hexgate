@@ -146,16 +146,19 @@ def run(demo: demos.Demo, ids: list[str], out: str | None, raw: str | None = Non
             raise SystemExit(f"no script for scene {sid}: demo/film/{demo.key}/{sid}-*.js")
         ui.step(f"scene {sid}: {script.name}")
         _set_state(demo, state, take)
-        r = subprocess.run(["node", str(script)], cwd=FILM, env=env, capture_output=True, text=True)
-        if r.returncode != 0:
-            ui.fail(f"scene {sid} failed:\n{(r.stderr or r.stdout)[-2000:]}")
-            raise SystemExit(1)
-        take_video = r.stdout.strip().splitlines()[-1]
-        _encode(take_video, out_dir / f"{sid}.mp4")
-        ui.ok(f"{sid}.mp4")
-        if state in ("secured", "fresh") and take:
-            # A scene may edit the policy (04 saves one): put the take's back.
-            demos.put_policy(demo, demo.ref / take / "policy")
+        try:
+            r = subprocess.run(["node", str(script)], cwd=FILM, env=env, capture_output=True, text=True)
+            if r.returncode != 0:
+                ui.fail(f"scene {sid} failed:\n{(r.stderr or r.stdout)[-2000:]}")
+                raise SystemExit(1)
+            take_video = r.stdout.strip().splitlines()[-1]
+            _encode(take_video, out_dir / f"{sid}.mp4")
+            ui.ok(f"{sid}.mp4")
+        finally:
+            if state in ("secured", "fresh") and take:
+                # A scene may edit the policy (04 saves one): put the take's back,
+                # even when the scene failed or was interrupted.
+                demos.put_policy(demo, demo.ref / take / "policy")
 
     if not join:
         print(f"  clips in {out_dir}; join them with ./demo/run film {demo.key} render")

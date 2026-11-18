@@ -146,13 +146,7 @@ COMMIT;
         "ban_enforcement",
         "usage_minute",
     ):
-        try:
-            clickhouse(
-                f"ALTER TABLE hexgate_audit.{table} DELETE WHERE agent_name = '{agent}' "
-                f"AND project_id = '{project}' SETTINGS mutations_sync = 1"
-            )
-        except subprocess.CalledProcessError:
-            # Older schemas have no project_id column on some tables.
-            clickhouse(
-                f"ALTER TABLE hexgate_audit.{table} DELETE WHERE agent_name = '{agent}' SETTINGS mutations_sync = 1"
-            )
+        clickhouse(
+            f"ALTER TABLE hexgate_audit.{table} DELETE WHERE agent_name = '{agent}' "
+            f"AND project_id = '{project}' SETTINGS mutations_sync = 1"
+        )
