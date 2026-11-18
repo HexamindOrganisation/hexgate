@@ -40,6 +40,22 @@ describe("verdictOf", () => {
     expect(verdictOf(call({ outputSummary: held }), false)).toBe("held");
     expect(verdictOf(call({ outputSummary: denied }), false)).toBe("denied");
   });
+
+  it("test_when_older_serve_and_not_permitted_then_denied", () => {
+    const text = "[tool] Tool 'x' is not permitted by this agent's policy";
+    expect(verdictOf(call({ outputSummary: text }), false)).toBe("denied");
+  });
+
+  it("test_when_older_serve_text_has_leading_whitespace_then_still_read", () => {
+    const text = "\n  [tool] Tool 'x' requires human approval";
+    expect(verdictOf(call({ outputSummary: text }), false)).toBe("held");
+  });
+
+  it("test_when_older_serve_failed_without_verdict_text_then_failed", () => {
+    expect(
+      verdictOf(call({ state: "failed", outputSummary: "boom" }), false),
+    ).toBe("failed");
+  });
 });
 
 describe("callKey", () => {
