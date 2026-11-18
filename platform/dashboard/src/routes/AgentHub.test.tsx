@@ -2,7 +2,7 @@
  * and graph, the Resources tab's manifest and per-role policy, and the
  * unknown-agent case. */
 
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Route, Routes, useLocation } from "react-router-dom";
@@ -24,8 +24,20 @@ vi.mock(
     PolicyFlow: ({ graph }: { graph: { nodes: unknown[] } }) => (
       <div data-testid="agent-graph">{graph.nodes.length} nodes</div>
     ),
-    PolicyGraphDialog: ({ open, agent }: { open: boolean; agent?: string }) =>
-      open ? <div role="dialog" aria-label={`${agent} policy graph`} /> : null,
+    PolicyGraphDialog: ({
+      open,
+      agent,
+      roleControl,
+    }: {
+      open: boolean;
+      agent?: string;
+      roleControl?: React.ReactNode;
+    }) =>
+      open ? (
+        <div role="dialog" aria-label={`${agent} policy graph`}>
+          {roleControl}
+        </div>
+      ) : null,
   }),
 );
 
@@ -584,6 +596,52 @@ describe("AgentHub", () => {
     expect(screen.getByTestId("agent-graph")).toBeInTheDocument();
   });
 
+  it("draws the graph for the role picked in the role dialog", async () => {
+    renderHub("support_bot");
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Roles · all 2/ }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: /^support/ }),
+    );
+    await vi.waitFor(() =>
+      expect(
+        fetched.some(
+          (u) =>
+            u.pathname.endsWith("/policy/graph") &&
+            u.searchParams.get("role") === "support",
+        ),
+      ).toBe(true),
+    );
+    expect(
+      await screen.findByRole("button", { name: /Role · support/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("says a picked role gives the agent nothing, not that the policy is empty", async () => {
+    stubFetch("admin");
+    answer(`/v1/projects/${PROJECT}/policy/graph`, {
+      roles: ["support", "guest"],
+      nodes: [{ id: "agent:support_bot", kind: "agent", label: "support_bot" }],
+      edges: [],
+    });
+    renderWithProviders(<Routes>{agentHubRoute()}</Routes>, {
+      initialRoute: "/agents/support_bot",
+    });
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Roles · all 2/ }),
+    );
+    await userEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: /^guest/,
+      }),
+    );
+    expect(
+      await screen.findByText(/As guest, support_bot may use no tools/),
+    ).toBeInTheDocument();
+  });
+
   it("says the policy doesn't compose on a 422", async () => {
     renderHubWithGraph({ detail: "boom" }, 422);
     expect(await screen.findByText(/don't compose/)).toBeInTheDocument();
@@ -773,9 +831,11 @@ describe("AgentHub", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: "Open graph →" }),
     );
-    expect(
-      await screen.findByRole("dialog", { name: "support_bot policy graph" }),
-    ).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", {
+      name: "support_bot policy graph",
+    });
+    // Resources is the every-role view, and so is the graph it opens.
+    expect(await within(dialog).findByText("every role")).toBeInTheDocument();
   });
 
   it("lists sub-agents without verdicts on a project with no graph", async () => {

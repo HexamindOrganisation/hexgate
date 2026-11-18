@@ -411,6 +411,7 @@ export function PoliciesPage() {
                   agentNames={agentNames}
                   inspectAgent={inspectAgent}
                   onInspectAgentChange={setInspectAgent}
+                  unsaved={dirtyKeys.size > 0}
                 />
               </div>
             </div>

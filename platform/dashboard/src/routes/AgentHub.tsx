@@ -19,7 +19,6 @@ import {
 } from "lucide-react";
 
 import {
-  ApiError,
   api,
   type AgentManifestView,
   type PolicyGraph,
@@ -32,6 +31,7 @@ import {
   usePolicyGraph,
   usePolicyMatrix,
 } from "@/lib/policy_files";
+import { useAgentManifests } from "@/lib/agent-manifests";
 import { isModular } from "@/lib/file_tree";
 import { roleModesOf, type RoleMode } from "@/lib/role-modes";
 import { useProjectScoped } from "@/lib/active";
@@ -43,14 +43,28 @@ import {
   agentReachCounts,
   agentReachEdges,
   agentSubgraph,
+  toolCounter,
 } from "@/lib/agent-graph";
+import {
+  GRAPH_ERROR_TEXT,
+  graphErrorOf,
+  roleOptionsFor,
+  rolesThatRun,
+  type GraphError,
+} from "@/lib/agent-graph-view";
+import { agentHubPath } from "@/lib/agent-paths";
 import { rangeSearch } from "@/lib/range-params";
 import { formatDate, pluralise } from "@/lib/format";
 import {
   PolicyFlow,
   PolicyGraphDialog,
   VerdictTag,
+  type AgentGraphOptions,
 } from "@/components/policy_files/PolicyGraphDialog";
+import {
+  RolePickerDialog,
+  RolesButton,
+} from "@/components/policy_files/RolePicker";
 import { ResolvedGrid } from "@/components/policy_files/InspectorTabs";
 import { DetailDrawer } from "@/components/audit/drawer";
 import { EventsTable } from "@/components/audit/pieces";
@@ -96,11 +110,7 @@ export function AgentHub() {
   const { name } = useParams<{ name: string }>();
   const scope = useProjectScoped();
 
-  const manifests = useQuery({
-    queryKey: ["agent-manifests", scope.projectId],
-    queryFn: () => api.listAgentManifests(scope.projectId as string),
-    enabled: !!scope.projectId,
-  });
+  const manifests = useAgentManifests(scope.projectId);
   const agent = manifests.data?.find((m) => m.name === name) ?? null;
 
   // 24h activity, by the same rule as Home and /agents.
@@ -138,18 +148,100 @@ export function AgentHub() {
   const [graphOpen, setGraphOpen] = useState(false);
   // Not a prior project's graph, kept while this one loads.
   const graph = graphQuery.isPlaceholderData ? undefined : graphQuery.data;
-  const status =
-    graphQuery.error instanceof ApiError ? graphQuery.error.status : null;
   const graphError: GraphError | null = !graphQuery.isError
     ? null
-    : status === 422
-      ? "compose"
-      : status === 404
-        ? "gone"
-        : "load";
+    : graphErrorOf(graphQuery.error);
   const subgraph = useMemo(
     () => (graph && agent ? agentSubgraph(graph, agent.name) : null),
     [graph, agent],
+  );
+
+  // The role the drawn graph is for (null = every role); one at a time, as
+  // the graph API resolves one (#483). Each agent starts on every role.
+  const [role, setRole] = useState<string | null>(null);
+  const [roleFor, setRoleFor] = useState(`${scope.projectId}:${name}`);
+  if (roleFor !== `${scope.projectId}:${name}`) {
+    setRoleFor(`${scope.projectId}:${name}`);
+    setRole(null);
+  }
+  // A role the policy no longer has isn't a view of anything: back to all.
+  if (role && graph && !graph.roles.includes(role)) setRole(null);
+  const [pickingRole, setPickingRole] = useState(false);
+  // Whether the open graph dialog is the every-role one (from Resources).
+  const [graphEveryRole, setGraphEveryRole] = useState(false);
+  const roleQuery = usePolicyGraph(
+    scope.projectId,
+    role ?? undefined,
+    !!agent && !!role,
+  );
+  // The project graph for the picked role: what's drawn and its sub-agents'
+  // tool counts follow it.
+  const projectGraph = role
+    ? roleQuery.isPlaceholderData
+      ? undefined
+      : roleQuery.data
+    : graph;
+  // With no role picked, that's the unfiltered subgraph already built.
+  const view = useMemo(
+    () =>
+      !role
+        ? subgraph
+        : projectGraph && agent
+          ? agentSubgraph(projectGraph, agent.name)
+          : null,
+    [role, subgraph, projectGraph, agent],
+  );
+  const reachLoading = graphQuery.isLoading || graphQuery.isPlaceholderData;
+  const viewLoading = role
+    ? roleQuery.isLoading || roleQuery.isPlaceholderData
+    : graphQuery.isLoading || graphQuery.isPlaceholderData;
+  const viewError = role
+    ? roleQuery.isError
+      ? graphErrorOf(roleQuery.error)
+      : null
+    : graphError;
+  const roleOptions = useMemo(
+    () =>
+      graph && agent
+        ? roleOptionsFor(
+            graph.roles,
+            rolesThatRun(graph, [agent.name]).get(agent.name) ?? null,
+          )
+        : [],
+    [graph, agent],
+  );
+  const navigate = useNavigate();
+  // One index per graph, then a lookup per sub-agent.
+  const toolCount = useMemo(
+    () =>
+      projectGraph
+        ? toolCounter(projectGraph)
+        : () => ({ tools: 0, mcpTools: 0 }),
+    [projectGraph],
+  );
+  const graphOptions = useMemo<AgentGraphOptions | null>(
+    () =>
+      agent
+        ? {
+            toolCount,
+            onOpenAgent: (n) => {
+              setGraphOpen(false);
+              navigate(agentHubPath(n));
+            },
+            hasPage: (n) => !!manifests.data?.some((m) => m.name === n),
+            onMoreRoles: () => setPickingRole(true),
+          }
+        : null,
+    [agent, toolCount, navigate, manifests.data],
+  );
+  // A new agent or role is a new graph: start it fresh and fitted.
+  const flowKey = `${scope.projectId}:${agent?.name}:${role ?? ""}`;
+  const rolesButton = (
+    <RolesButton
+      total={roleOptions.length}
+      picked={role}
+      onClick={() => setPickingRole(true)}
+    />
   );
   // Sub-agents come from the manifest (every project has one); the graph only
   // adds each reach's verdict, where the project composes a policy.
@@ -157,9 +249,11 @@ export function AgentHub() {
     const refs = agent?.manifest?.subagents;
     if (!refs) return null;
     // agentSubgraph is empty (not null) when the agent isn't in the graph.
+    // The verdicts read the project graph itself, so a `*` stand-in's reach
+    // (even to `*`, which the drawn graph leaves out) still counts.
     const edges =
-      subgraph && subgraph.nodes.length > 0
-        ? agentReachEdges(subgraph, agent.name)
+      graph && subgraph && subgraph.nodes.length > 0
+        ? agentReachEdges(graph, agent.name)
         : null;
     const names = new Set(manifests.data?.map((m) => m.name));
     // The manifest may list a (name, via) twice (e.g. two as_tool mounts).
@@ -185,7 +279,7 @@ export function AgentHub() {
         calls: activityOf(r.name)?.all ?? null,
       };
     });
-  }, [agent, manifests.data, subgraph, activityOf]);
+  }, [agent, manifests.data, subgraph, graph, activityOf]);
 
   const canManageBans = useCanManageBans();
 
@@ -238,6 +332,20 @@ export function AgentHub() {
     );
   }
 
+  const rolePicker = pickingRole && (
+    <RolePickerDialog
+      options={roleOptions}
+      picked={role}
+      onClose={() => setPickingRole(false)}
+      onApply={(next) => {
+        setRole(next);
+        setPickingRole(false);
+        // Picking a role is asking for that role's graph.
+        setGraphEveryRole(false);
+      }}
+    />
+  );
+
   return (
     <div className="mx-auto max-w-[960px] space-y-4">
       <Breadcrumb name={agent.name} />
@@ -260,17 +368,35 @@ export function AgentHub() {
             activityError: summary.isError && !summary.data,
             activityStale: summary.isError && !!summary.data,
             subgraph,
+            view,
+            graphOptions,
+            rolesButton,
+            role,
+            flowKey,
             subAgents,
             // One dialog for every entry point; only when there's more than
             // the agent's own node to draw.
             openGraph:
-              scope.projectId && subgraph && subgraph.nodes.length > 1
-                ? () => setGraphOpen(true)
+              scope.projectId && view && view.nodes.length > 1
+                ? () => {
+                    setGraphEveryRole(false);
+                    setGraphOpen(true);
+                  }
                 : null,
             // The previous project's graph, kept while this one loads, isn't
             // this agent's: show it as loading.
-            graphLoading: graphQuery.isLoading || graphQuery.isPlaceholderData,
-            graphError,
+            graphLoading: viewLoading,
+            graphError: viewError,
+            // Resources reads the every-role graph: its own load state.
+            reachLoading,
+            reachError: graphError,
+            openAnyGraph:
+              scope.projectId && subgraph && subgraph.nodes.length > 1
+                ? () => {
+                    setGraphEveryRole(true);
+                    setGraphOpen(true);
+                  }
+                : null,
             classic: !!policyFiles.data && !modular,
             playgroundLive,
             servedAgent: served.agentName,
@@ -278,15 +404,41 @@ export function AgentHub() {
           } satisfies HubContext
         }
       />
-      {graphOpen && scope.projectId && (
+      {graphOpen && graphOptions && (
         <PolicyGraphDialog
           open
           onOpenChange={setGraphOpen}
-          projectId={scope.projectId}
-          roleNames={graph?.roles ?? []}
           agent={agent.name}
-        />
+          // From Resources it's the every-role graph, as that tab is.
+          graph={
+            graphEveryRole
+              ? reachLoading
+                ? null
+                : subgraph
+              : viewLoading
+                ? null
+                : view
+          }
+          loading={graphEveryRole ? reachLoading : viewLoading}
+          error={graphEveryRole || !role ? graphQuery.error : roleQuery.error}
+          options={graphOptions}
+          roleControl={
+            graphEveryRole ? (
+              <span className="text-[11px] text-muted-foreground">
+                every role
+              </span>
+            ) : (
+              rolesButton
+            )
+          }
+          flowKey={graphEveryRole ? `${flowKey}:all` : flowKey}
+          role={graphEveryRole ? null : role}
+        >
+          {/* Nested, so the picker is a layer of this dialog, not a rival. */}
+          {rolePicker}
+        </PolicyGraphDialog>
       )}
+      {!graphOpen && rolePicker}
     </div>
   );
 }
@@ -303,11 +455,27 @@ export interface HubContext {
   activityError: boolean;
   /** A later poll failed: the last counts stay, marked as such. */
   activityStale: boolean;
+  /** The agent's graph from the unfiltered project graph (every role). */
   subgraph: PolicyGraph | null;
+  /** The agent's graph as drawn: for the picked roles, or every role. */
+  view: PolicyGraph | null;
+  graphOptions: AgentGraphOptions | null;
+  /** Opens the role picker. */
+  rolesButton: React.ReactNode;
+  /** The role the drawn graph is for; null for every role. */
+  role: string | null;
+  /** Changes with the agent and roles, to remount (and refit) the canvas. */
+  flowKey: string;
   /** The manifest's sub-agents; null when it records none. */
   subAgents: SubAgentRow[] | null;
   /** Opens the agent's graph dialog; null when there's no graph to show. */
   openGraph: (() => void) | null;
+  /** The every-role graph's state, for the Resources tab, which doesn't
+   * follow the picked role. */
+  reachLoading: boolean;
+  reachError: GraphError | null;
+  /** Opens the graph for every role (from Resources). */
+  openAnyGraph: (() => void) | null;
   graphLoading: boolean;
   graphError: GraphError | null;
   /** No policy.yaml: the agent is governed by its own policy file. */
@@ -336,12 +504,12 @@ export function AgentResourcesTab() {
         <ReachesSection
           subAgents={ctx.subAgents}
           unregistered={ctx.agent.manifest === null}
-          onOpenGraph={ctx.openGraph}
+          onOpenGraph={ctx.openAnyGraph}
           // agentSubgraph is empty (not null) when the agent isn't in the graph.
           inGraph={!!ctx.subgraph && ctx.subgraph.nodes.length > 0}
           callsError={ctx.activityError}
-          graphLoading={ctx.graphLoading}
-          graphError={ctx.graphError}
+          graphLoading={ctx.reachLoading}
+          graphError={ctx.reachError}
           callsStale={ctx.activityStale}
         />
       }
@@ -388,6 +556,7 @@ function ReachesSection({
       <div className="px-5 py-4 border-b border-border flex items-center gap-2">
         <Network className="size-4 text-muted-foreground" />
         <span className="text-sm font-medium">Reaches</span>
+        <span className="text-xs text-muted-foreground">for every role</span>
         {subAgents !== null && (
           <Badge variant="outline" className="ml-1 font-mono text-[11px]">
             {subAgents.length}
@@ -670,15 +839,17 @@ function Breadcrumb({ name }: { name: string }) {
   );
 }
 
-type GraphError = "compose" | "gone" | "load";
-
 /** Overview: the 24h strip, then the agent's graph as the centrepiece. */
 function AgentOverview({
   agent,
   activity,
   activityError,
   activityStale,
-  subgraph,
+  view,
+  graphOptions,
+  rolesButton,
+  role,
+  flowKey,
   graphLoading,
   graphError,
   classic,
@@ -696,19 +867,20 @@ function AgentOverview({
     { label: "Resources", value: num(resourceCount(agent)) },
   ];
 
-  // What the agent itself may use: its own outbound edges, never a denied one.
-  const reach = subgraph?.nodes.length ? agentReachCounts(subgraph) : null;
+  // What the agent itself may use (for the picked roles): its own outbound
+  // edges, never a denied one.
+  const reach = view?.nodes.length ? agentReachCounts(view) : null;
   const caption = reach
     ? [
         reach.tools && pluralise(reach.tools, "tool"),
         reach.mcpTools && pluralise(reach.mcpTools, "MCP tool"),
-        reach.agents && pluralise(reach.agents, "agent"),
+        reach.agents && pluralise(reach.agents, "sub-agent"),
       ]
         .filter(Boolean)
         .join(", ")
     : "";
 
-  const hasGraph = !graphLoading && !!subgraph && subgraph.nodes.length > 1;
+  const hasGraph = !graphLoading && !!view && view.nodes.length > 1;
   return (
     <Card className="overflow-hidden p-0">
       <div className="grid grid-cols-2 gap-px border-b border-border bg-border sm:grid-cols-4">
@@ -737,13 +909,21 @@ function AgentOverview({
         <span>
           What <span className="font-mono text-foreground">{agent.name}</span>{" "}
           can reach{hasGraph && ` — ${caption || "nothing it may use yet"}`}
+          {role && (
+            <>
+              {" "}
+              as <span className="font-mono text-foreground">{role}</span>
+            </>
+          )}
         </span>
+        <span className="ml-auto" />
+        {rolesButton}
         {hasGraph && openGraph && (
           <button
             type="button"
             onClick={openGraph}
             title="Open the graph in a larger view"
-            className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent"
           >
             <Maximize2 className="size-3" />
             Expand
@@ -761,11 +941,22 @@ function AgentOverview({
       )}
       {hasGraph ? (
         <div className="h-[420px] border-t border-border">
-          <PolicyFlow graph={subgraph} embedded />
+          <PolicyFlow
+            key={flowKey}
+            graph={view}
+            embedded
+            agent={graphOptions ?? undefined}
+          />
         </div>
       ) : (
         <Placeholder>
-          {graphPlaceholder(graphLoading, graphError, agent.name, classic)}
+          {graphPlaceholder(
+            graphLoading,
+            graphError,
+            agent.name,
+            classic,
+            role,
+          )}
         </Placeholder>
       )}
     </Card>
@@ -778,15 +969,14 @@ function graphPlaceholder(
   error: GraphError | null,
   name: string,
   classic: boolean,
+  role: string | null,
 ): string {
   if (loading) return "Loading graph…";
-  if (error === "compose")
-    return "The policy modules don't compose, so there's no graph: fix the lints in Policies.";
-  if (error === "gone")
-    return "You don't have access to this project's policy any more.";
-  if (error === "load") return "Couldn't load the graph. Refresh to retry.";
+  if (error) return GRAPH_ERROR_TEXT[error];
   if (classic)
     return `${name} is governed by its own policy file. The graph appears once the project uses policy.yaml or role bindings.`;
+  // A role that gives it nothing is a fact about the role, not the policy.
+  if (role) return `As ${role}, ${name} may use no tools or sub-agents.`;
   // The graph comes from the policy, not the manifest.
   return `Nothing in the policy maps roles, tools or reach to ${name} yet.`;
 }
