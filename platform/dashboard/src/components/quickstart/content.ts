@@ -1,7 +1,8 @@
 /**
- * Copy and code for the quickstart dialog. The snippets mirror
- * docs/quickstart.mdx (chapter 4) — keep the two in sync, and keep POLICY_YAML
- * in sync with the policy there and in README.md.
+ * Copy and code for the quickstart dialog. REGISTER and WRAP mirror chapter 4
+ * of docs/quickstart.mdx: keep the two in sync. POLICY_YAML is copied by hand
+ * in README.md, docs/introduction.mdx, docs/quickstart.mdx and (as RULES)
+ * docs/snippets/policy-decider.jsx: change them together.
  */
 
 /** The quickstart's steps, in order: the one place that order is defined.

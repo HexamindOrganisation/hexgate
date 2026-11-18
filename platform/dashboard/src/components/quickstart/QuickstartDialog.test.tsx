@@ -7,8 +7,9 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { QUICKSTART_STEP } from "@/components/quickstart/content";
 import { QuickstartDialog } from "@/components/quickstart/QuickstartDialog";
 import { useUi } from "@/lib/ui";
 import { renderWithProviders } from "@/test/render";
@@ -33,6 +34,20 @@ describe("QuickstartDialog", () => {
       quickstartSeen: false,
       quickstartStep: 0,
     });
+  });
+
+  it("tells assistive tech when a copy fails", async () => {
+    const user = userEvent.setup();
+    useUi.setState({ quickstartStep: QUICKSTART_STEP.register });
+    renderDialog();
+    // The register step installs the SDK before registering.
+    expect(screen.getByText(/pip install hexgate/)).toBeInTheDocument();
+    vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(
+      new Error("denied"),
+    );
+    await user.click(screen.getByRole("button", { name: "Copy bash" }));
+    const status = await screen.findByText("Copy failed: bash");
+    expect(status).toHaveAttribute("role", "status");
   });
 
   it("renders nothing while the store says closed", () => {

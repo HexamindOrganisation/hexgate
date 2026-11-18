@@ -334,16 +334,43 @@ describe("HomePage", () => {
     expect(useUi.getState().quickstartOpen).toBe(false);
   });
 
-  it("ticks the decision step from the 90-day audit totals", async () => {
+  const asked90d = () =>
+    vi
+      .mocked(window.fetch)
+      .mock.calls.map(([u]) => String(u))
+      .some((u) => u.includes("/audit/summary") && u.includes("window=90d"));
+
+  it("ticks the decision step from recent activity without a 90-day scan", async () => {
     stub();
     renderWithProviders(<HomePage />);
-    await screen.findByText(/of 3 done/);
-    const urls = vi.mocked(window.fetch).mock.calls.map(([u]) => String(u));
-    expect(
-      urls.some(
-        (u) => u.includes("/audit/summary") && u.includes("window=90d"),
-      ),
-    ).toBe(true);
+    // Key to do, agent and decision done.
+    expect(await screen.findByText(/2 of 3 done/)).toBeInTheDocument();
+    expect(asked90d()).toBe(false);
+  });
+
+  it("falls back to the 90-day audit totals when the last week is quiet", async () => {
+    stub();
+    const answer = vi.mocked(window.fetch).getMockImplementation()!;
+    vi.mocked(window.fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (!url.includes("/audit/summary")) return answer(input, init);
+      const all = url.includes("window=90d") ? 3 : 0;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            totals: counts(all, 0, 0),
+            by_agent: [],
+            by_role: [],
+            by_tool: [],
+            by_user: [],
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    });
+    renderWithProviders(<HomePage />);
+    expect(await screen.findByText(/2 of 3 done/)).toBeInTheDocument();
+    expect(asked90d()).toBe(true);
   });
 
   it("doesn't pop the quickstart over agents that exist but aren't registered", async () => {

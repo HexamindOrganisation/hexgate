@@ -77,6 +77,14 @@ function CodeBlock({ title, code }: { title: string; code: string }) {
           )}
           {label}
         </button>
+        {/* The button's aria-label hides its text, so say the result here. */}
+        <span role="status" className="sr-only">
+          {status === "copied"
+            ? `Copied ${title}`
+            : status === "failed"
+              ? `Copy failed: ${title}`
+              : ""}
+        </span>
       </div>
       <pre className="overflow-x-auto p-3 pt-2 font-mono text-[11.5px] leading-relaxed scrollbar-thin">
         <code>{code}</code>
@@ -169,8 +177,24 @@ const STEP_DEFS: Record<QuickstartStepId, Omit<Step, "id">> = {
           registration creates a starter policy. Then <b>wrap</b> it with one
           adapter call. Your agent's own file doesn't change.
         </p>
+        <p className="text-muted-foreground">
+          The commands assume the <code>refund_agent.py</code> from chapter 1 of
+          the{" "}
+          <a
+            href={docsUrl(DOC_PATHS.quickstart)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary hover:underline"
+          >
+            full guide
+          </a>
+          ; point them at your own agent's module instead.
+        </p>
         <FrameworkPicker value={framework} onChange={setFramework} />
-        <CodeBlock title="bash" code={REGISTER[framework]} />
+        <CodeBlock
+          title="bash"
+          code={`pip install hexgate\n${REGISTER[framework]}`}
+        />
         <CodeBlock title="guarded_agent.py" code={WRAP[framework]} />
         <p className="text-muted-foreground">
           <code>HexgateContext</code> says who is asking. In your app, fill it
@@ -329,7 +353,7 @@ export function QuickstartDialog() {
         <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] md:grid-rows-1">
           <section
             aria-label="Animation"
-            className="relative order-first border-b border-border bg-muted/40 p-5 md:order-last md:border-b-0 md:border-l md:p-8"
+            className="relative order-first overflow-hidden border-b border-border bg-muted/40 p-5 md:order-last md:border-b-0 md:border-l md:p-8"
           >
             <div
               key={`${step.id}-${replay}`}

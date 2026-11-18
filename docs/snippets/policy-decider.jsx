@@ -1,6 +1,8 @@
 // Interactive companion to the quickstart's policy.yaml. It mirrors that
 // policy's constraints by hand, so keep the RULES below in sync with the YAML
-// in quickstart.mdx (and README.md). It explains; the SDK decides.
+// copied in README.md, docs/introduction.mdx, docs/quickstart.mdx and
+// platform/dashboard/src/components/quickstart/content.ts. It explains; the
+// SDK decides.
 export const PolicyDecider = () => {
   const RULES = {
     support: [

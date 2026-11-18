@@ -224,14 +224,19 @@ export function HomePage() {
     retry: 1,
     refetchInterval: SLOW_MS,
   });
-  // Has this project ever recorded a decision? Totals over the longest audit
-  // window (the summary aggregates; a decisions page would also count and
-  // buffer every matching row), so a set-up project with a quiet week isn't
-  // sent back to "Get started". Only the checklist reads it, and once there's
-  // a decision the answer can't change: polling stops.
+  // Has this project recorded a decision? Only the checklist asks. The 24h
+  // summary and 7d series Home already loads answer it for any active project;
+  // only when both are loaded (or failed) and empty does it look further back,
+  // over the longest audit window (the summary aggregates; a decisions page
+  // would also count and buffer every matching row), so a set-up project with
+  // a quiet week isn't sent back to "Get started". A project idle for more
+  // than 90 days does count as "no decision" again. Polling stops once found.
+  const recentDecision =
+    (summaryQ.data?.totals.all ?? 0) > 0 ||
+    !!weekQ.data?.some((p) => p.allow + p.deny + p.needs_approval > 0);
   const everQ = useQuery({
     queryKey: ["audit", "summary", pid, { window: "90d" }],
-    enabled: on,
+    enabled: on && !summaryQ.isPending && !weekQ.isPending && !recentDecision,
     queryFn: () => api.getAuditSummary({ window: "90d" }, pid!),
     retry: 1,
     refetchInterval: (q) => (q.state.data?.totals.all ? false : SLOW_MS),
@@ -306,17 +311,21 @@ export function HomePage() {
     };
   }, [weekQ.data]);
 
-  // The "Get started" checklist's signals; undefined until known.
-  const hasKey = tokensQ.isSuccess ? tokensQ.data.length > 0 : undefined;
-  const hasAgent = agentsQ.isSuccess
-    ? agents.some((a) => a.manifest)
+  // The "Get started" checklist's signals; undefined until known. Read from
+  // the data, not isSuccess: a failed background poll keeps the last good
+  // data, and the checklist shouldn't flicker away for it.
+  const hasKey = tokensQ.data ? tokensQ.data.length > 0 : undefined;
+  const hasAgent = agentsQ.data
+    ? agentsQ.data.some((a) => a.manifest)
     : undefined;
   // null = couldn't check (audit unavailable): neither done nor to do.
-  const hasDecision = everQ.isSuccess
-    ? everQ.data.totals.all > 0
-    : everQ.isError
-      ? null
-      : undefined;
+  const hasDecision = recentDecision
+    ? true
+    : everQ.data
+      ? everQ.data.totals.all > 0
+      : everQ.isError
+        ? null
+        : undefined;
 
   // A project with no agents is where the quickstart helps most: offer it
   // unprompted once (closing it sets quickstartSeen); the checklist stays.
