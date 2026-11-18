@@ -139,7 +139,8 @@ def run(demo: demos.Demo, ids: list[str], out: str | None, raw: str | None = Non
         if state == "live":
             have = (out_dir / f"{sid}.mp4").exists()
             ui.warn(f"{sid} is a live Claude session, filmed by hand (demo/FILMING.md)"
-                    + ("; keeping the clip there is" if have else "; no clip yet"))
+                    + ("; keeping the clip there is" if have
+                       else "; no clip yet: film it live or code a replay (FILMING.md, \"The live Claude scene\")"))
             continue
         script = _script(demo, sid)
         if not script:

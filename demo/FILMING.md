@@ -42,6 +42,24 @@ OpenAI key in `demo/.env` (the scripted model answers differently), and for
 the live scene, [minmux](#the-live-claude-scene). Chromium for Playwright
 installs itself on the first run.
 
+### Not in the repo: scene 02 and the voice
+
+Two parts of the film are recordings, and recordings are not committed
+(`.run/` is gitignored). On a fresh machine they don't exist yet:
+
+- **Scene 02's raw take** (`.run/film/devops/02-raw.webm`): a real Claude Code
+  session, filmed once by hand. The repo keeps what Claude wrote
+  (`reference/devops/claude-take/`) and the cut (`speed` in `cut.json`), not
+  the video. Without it, `film` warns that 02 has no clip and the join waits
+  for one. Make it one of two ways, both in
+  [The live Claude scene](#the-live-claude-scene): film a real session in a
+  terminal app Claude can drive, or have Claude code a terminal replay in HTML
+  and film that like the other scenes.
+- **The voice clips** (`.run/film/<demo>/vo/`): made with ElevenLabs (see
+  [Voiceover](#voiceover)). Without them the film is joined silent.
+
+Keep `.run/film/<demo>/` when re-filming: both are costly to make again.
+
 ## What is where
 
 | path | what |
@@ -117,8 +135,16 @@ each scene the state it starts from, and the film command sets it up:
 
 ## The live Claude scene
 
-Scene 02 is Claude Code securing the app for real, in a terminal: nobody can
-script what Claude does, so the take is steered as it runs, then cut.
+Scene 02 is Claude Code securing the app, in a terminal. Its take is not in
+the repo; make it one of two ways.
+
+**A. Film a real session** (what the current film shows). Needs a terminal app
+that Claude can drive and record: minmux (an Electron terminal, driven through
+Playwright), or any terminal app that takes typed input from a script and can
+be screen-recorded. Nobody can script what Claude does, so the take is
+steered as it runs, then cut. The steps below are for minmux; with another
+terminal app, keep steps 1, 4 and 5 and swap in its own way of typing and
+recording.
 
 1. `./demo/run reset devops`. Create `~/shipyard/.claude/settings.local.json`
    once, so the take isn't stopped by permission prompts (it is gitignored and
@@ -150,6 +176,19 @@ script what Claude does, so the take is steered as it runs, then cut.
    `reference/devops/claude-take/agent.py` and the saved policy files to
    `reference/devops/claude-take/policy/`, so the later scenes show what
    Claude wrote.
+
+**B. Fake it with a terminal replay.** No terminal app to drive, or no live
+session to spend: Claude codes the scene as an HTML page that looks like the
+terminal (the dark window, the `hexuser` prompt, Claude Code's own layout) and
+plays the session back: the prompt typed, Claude's steps and tool calls
+appearing, the diff of `agent.py`, the policy saved, the final answer. The
+content comes from the committed take: `reference/devops/claude-take/`
+(`agent.py`, `policy/`) and the prompt in `demo.toml`, so it shows what Claude
+really wrote. Then film it like any other scene, with a script
+`film/devops/02-*.js` (`Film` opens the page, zooms on Claude's notes), set
+02's state to `reset` in `demo.toml`'s `[film]`, and drop `speed` from 02 in
+`cut.json` (the replay runs at its own pace; use `rate` and `fast`). Say in the
+film's notes that 02 is a replay, not a live take.
 
 ## cut.json
 

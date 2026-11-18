@@ -32,7 +32,10 @@ scenario first (or propose the change), then compile.
    the states in `[film]` of `demo.toml`: a scene marked `after` needs the
    scene before it re-filmed too (06 shows 05's decisions). The live Claude
    scene is never re-filmed unless asked: it costs a real session; follow
-   FILMING.md's steps for it.
+   FILMING.md's steps for it. On a machine without `.run/film/<demo>/02-raw.webm`
+   (it isn't committed), ask which way to make scene 02: a real session in a
+   terminal app you can drive (minmux), or an HTML terminal replay you code
+   from `reference/<demo>/claude-take/` (FILMING.md, "The live Claude scene").
 4. **Check every take** with `film/tools/sheet.py` (a frame every 2–3 s) and
    read the sheets. Each beat of the scenario must be on screen and readable;
    the zoom must land on content, not on an empty area; nothing may cover what
