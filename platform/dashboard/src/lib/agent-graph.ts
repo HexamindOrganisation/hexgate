@@ -1,83 +1,93 @@
 import type { PolicyGraph, PolicyGraphEdge } from "@/lib/api";
-import { delegates, push } from "@/lib/graph-layout";
+import { push } from "@/lib/graph-layout";
 
-/** The agent's node, and whose outbound edges stand for it: its own
+/** Whether an edge lets its source delegate to its target: a permitted
+ * reach. A denied one delegates nothing. */
+export const delegates = (e: { kind: string; verdict: string }) =>
+  e.kind === "reach" && e.verdict !== "deny";
+
+const STAR = "agent:*";
+
+/** Add `v` to the set at `k`, starting it if need be. */
+const add = (m: Map<string, Set<string>>, k: string, v: string) =>
+  (m.get(k) ?? m.set(k, new Set()).get(k)!).add(v);
+
+/** Resolves agents by name against one graph, indexing it once: each one's
+ * node, and whose outbound edges stand for it. That's its own
  * `agent:<name>` when the policy declares it, else the generic `agent:*` it
  * resolves like, relabelled to the name. Only an agent that appears solely as
  * another's reach target is undeclared; one with no edges at all is locked
- * down to nothing (a named cell replaces `*`). */
-function resolveAgent(graph: PolicyGraph, agentName: string) {
-  const own = graph.nodes.find((n) => n.id === `agent:${agentName}`);
-  const star = graph.nodes.find((n) => n.id === "agent:*");
-  const touching = own
-    ? graph.edges.filter((e) => e.source === own.id || e.target === own.id)
-    : [];
-  const declared =
-    own &&
-    (touching.length === 0 ||
-      touching.some((e) => !(e.target === own.id && e.kind === "reach")));
-  const source = declared || !star ? own : star;
-  if (!source) return null;
-  return { node: { ...(own ?? star!), label: agentName }, sourceId: source.id };
+ * down to nothing (a named cell replaces `*`). The one place this rule lives:
+ * the hub, /agents and its filters all resolve through it. */
+export function agentResolver(graph: PolicyGraph) {
+  const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
+  // The server says which agents the policy declares; only without that
+  // list is it read off the edges.
+  const listed = graph.declared_agents && new Set(graph.declared_agents);
+  const touched = new Set<string>();
+  // Touched by anything but an inbound reach: the policy declares it.
+  const declared = new Set<string>();
+  for (const e of graph.edges) {
+    touched.add(e.source).add(e.target);
+    declared.add(e.source);
+    if (e.kind !== "reach") declared.add(e.target);
+  }
+  const star = nodes.get(STAR);
+  return (agentName: string) => {
+    const own = nodes.get(`agent:${agentName}`);
+    const isOwn =
+      !!own &&
+      (listed
+        ? listed.has(agentName)
+        : declared.has(own.id) || !touched.has(own.id));
+    const source = isOwn || !star ? own : star;
+    if (!source) return null;
+    const node = { ...(own ?? star!), label: agentName };
+    return {
+      node,
+      sourceId: source.id,
+      // Admission into its node or the one standing for it runs it.
+      admitIds: new Set([node.id, source.id]),
+    };
+  };
 }
 
-/** The agent's neighbourhood in the project graph: the agent, every node one
- * edge away (its roles, the tools it calls, the agents it reaches or that
- * reach it), plus what it can delegate to: each agent its permitted reach
- * leads to, hop by hop, with that agent's own edges. A denied reach delegates
- * nothing, so it's shown but not followed. Pure, so the hub can scope the
- * graph with no backend change. Empty when the agent isn't in it. */
+function resolveAgent(graph: PolicyGraph, agentName: string) {
+  return agentResolver(graph)(agentName);
+}
+
+/** One agent's graph: the roles that run it, the agent, and its own
+ * outbound edges (the tools it calls, the sub-agents it reaches). One hop
+ * only: a sub-agent is a node, not its tools, and agents that call this one
+ * aren't drawn; each has a graph of its own. Pure, so the hub can scope the
+ * project graph with no backend change. Empty when the agent isn't in it. */
 export function agentSubgraph(
   graph: PolicyGraph,
   agentName: string,
 ): PolicyGraph {
   const found = resolveAgent(graph, agentName);
   if (!found) return { nodes: [], edges: [], roles: graph.roles };
-  const { node, sourceId } = found;
-  const out = new Map<string, PolicyGraph["edges"]>();
-  for (const e of graph.edges) push(out, e.source, e);
-  // The agent's own edges: what it may use (its stand-in's, re-pointed at it,
-  // when that's `*`), and who reaches or admits it.
-  const own = (out.get(sourceId) ?? []).map((e) =>
-    sourceId === node.id ? e : { ...e, source: node.id },
-  );
-  const edges = new Set([
-    ...own,
-    ...graph.edges
-      .filter(
-        (e) =>
-          e.target === node.id ||
-          (e.target === sourceId && e.kind === "admission"),
-      )
-      .map((e) => (e.target === node.id ? e : { ...e, target: node.id })),
-  ]);
-  const keep = new Set<string>([node.id]);
-  for (const e of edges) {
-    keep.add(e.source);
-    keep.add(e.target);
-  }
-  // Follow permitted reach out of the agent, so a handoff's tools show; a
-  // caller that reaches INTO the agent doesn't drag its own tools in.
-  const seen = new Set([node.id, sourceId]);
-  const queue: string[] = [];
-  for (const e of own) {
-    if (delegates(e) && !seen.has(e.target)) {
-      seen.add(e.target);
-      queue.push(e.target);
-    }
-  }
-  for (let i = 0; i < queue.length; i++) {
-    for (const e of out.get(queue[i]) ?? []) {
-      edges.add(e);
-      keep.add(e.target);
-      if (delegates(e) && !seen.has(e.target)) {
-        seen.add(e.target);
-        queue.push(e.target);
-      }
-    }
-  }
+  const { node, sourceId, admitIds } = found;
+  // Its stand-in's edges (`*`'s) are re-pointed at it, and a reach to itself
+  // is no sub-agent.
+  const repoint = (e: PolicyGraphEdge) => ({
+    ...e,
+    source: e.source === sourceId ? node.id : e.source,
+    target: e.target === sourceId ? node.id : e.target,
+  });
+  const edges = graph.edges
+    .filter(
+      (e) =>
+        // A reach to `*` reaches no one: the engine denies every target.
+        (e.source === sourceId && !(e.kind === "reach" && e.target === STAR)) ||
+        (admitIds.has(e.target) && e.kind === "admission"),
+    )
+    .map(repoint)
+    // A reach to itself (through `*` too) is no sub-agent.
+    .filter((e) => e.source !== e.target);
+  const keep = new Set(edges.flatMap((e) => [e.source, e.target]));
   const nodes = graph.nodes.filter((n) => keep.has(n.id) && n.id !== node.id);
-  return { nodes: [node, ...nodes], edges: [...edges], roles: graph.roles };
+  return { nodes: [node, ...nodes], edges, roles: graph.roles };
 }
 
 /** What the agent itself may use, from its own outbound edges in `sub`: tools,
@@ -113,7 +123,6 @@ export function agentReachMap(
   graph: PolicyGraph,
   names: string[] = [],
 ): Map<string, AgentReach> {
-  const STAR = "agent:*";
   const label = new Map(
     graph.nodes.filter((n) => n.kind === "agent").map((n) => [n.id, n.label]),
   );
@@ -121,28 +130,13 @@ export function agentReachMap(
     ...[...label].filter(([id]) => id !== STAR).map(([, l]) => l),
     ...names,
   ]);
-  // Declared, by resolveAgent's rule: any edge but an inbound reach, or none
-  // at all (locked down to nothing).
-  const touched = new Set<string>();
-  const declared = new Set<string>();
   const out = new Map<string, PolicyGraph["edges"]>();
-  for (const e of graph.edges) {
-    touched.add(e.source).add(e.target);
-    declared.add(e.source);
-    if (e.kind !== "reach") declared.add(e.target);
-    if (delegates(e)) push(out, e.source, e);
-  }
-  const hasStar = label.has(STAR);
+  for (const e of graph.edges) if (delegates(e)) push(out, e.source, e);
+  const resolve = agentResolver(graph);
   const reaches = new Map<string, Set<string>>();
   const calledBy = new Map<string, Set<string>>();
-  const add = (m: Map<string, Set<string>>, k: string, v: string) =>
-    (m.get(k) ?? m.set(k, new Set()).get(k)!).add(v);
   for (const name of all) {
-    const own = `agent:${name}`;
-    const isDeclared =
-      label.has(own) && (declared.has(own) || !touched.has(own));
-    const source =
-      isDeclared || !hasStar ? (label.has(own) ? own : null) : STAR;
+    const source = resolve(name)?.sourceId;
     for (const e of (source && out.get(source)) || []) {
       const to = label.get(e.target);
       if (to === undefined || to === name || e.target === STAR) continue;
@@ -181,4 +175,30 @@ export function agentReachEdges(
     }
   }
   return out;
+}
+
+/** How many tools each agent may call (never through a denied edge), by
+ * name: one index over `graph`, then a lookup per agent. */
+export type ToolCounts = { tools: number; mcpTools: number };
+
+export function toolCounter(graph: PolicyGraph): (agent: string) => ToolCounts {
+  const resolve = agentResolver(graph);
+  const kind = new Map(graph.nodes.map((n) => [n.id, n.kind]));
+  const tools = new Map<string, Set<string>>();
+  const mcp = new Map<string, Set<string>>();
+  for (const e of graph.edges) {
+    const k = kind.get(e.target);
+    if (e.kind !== "call" || e.verdict === "deny") continue;
+    if (k === "tool") add(tools, e.source, e.target);
+    if (k === "mcp") add(mcp, e.source, e.target);
+  }
+  // Counted as agentReachCounts counts them, so a sub-agent's caption here
+  // matches its own hub.
+  return (agent) => {
+    const id = resolve(agent)?.sourceId;
+    return {
+      tools: (id && tools.get(id)?.size) || 0,
+      mcpTools: (id && mcp.get(id)?.size) || 0,
+    };
+  };
 }

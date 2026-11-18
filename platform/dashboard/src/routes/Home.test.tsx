@@ -128,6 +128,56 @@ describe("HomePage", () => {
     expect(screen.getByText(/refund_order/)).toBeInTheDocument();
   });
 
+  const agentsNamed = (names: string[]) =>
+    names.map((name) => ({
+      name,
+      manifest: { tools: [] },
+      version: 1,
+      content_hash: "",
+      updated_at: "",
+    }));
+  const agentRows = () =>
+    screen
+      .getAllByRole("link")
+      .filter((l) => l.getAttribute("href")?.startsWith("/agents/"));
+
+  it("caps the agents at the most denied, then busiest", async () => {
+    const names = Array.from({ length: 10 }, (_, i) => `bot-${i}`);
+    stub({
+      "/v1/projects/p1/agents/manifest": agentsNamed(names),
+      "/v1/projects/p1/audit/summary": {
+        totals: counts(1050, 5, 0),
+        by_agent: [
+          { key: "bot-8", ...counts(1000, 0, 0) },
+          // Fewer calls, but denied ones: it leads.
+          { key: "bot-9", ...counts(50, 5, 0) },
+        ],
+        by_role: [],
+        by_tool: [],
+        by_user: [],
+      },
+    });
+    renderWithProviders(<HomePage />);
+    expect(
+      await screen.findByRole("link", { name: /View all 10/ }),
+    ).toHaveAttribute("href", "/agents");
+    await waitFor(() => expect(agentRows()[0]).toHaveTextContent("bot-9"));
+    expect(agentRows()).toHaveLength(8);
+    expect(agentRows()[1]).toHaveTextContent("bot-8");
+    expect(screen.getByText("top 8 of 10")).toBeInTheDocument();
+    // Quiet agents past the cap are left out.
+    expect(screen.queryByRole("link", { name: /bot-7/ })).toBeNull();
+  });
+
+  it("lists every agent, with no View all, up to the cap", async () => {
+    const names = Array.from({ length: 8 }, (_, i) => `bot-${i}`);
+    stub({ "/v1/projects/p1/agents/manifest": agentsNamed(names) });
+    renderWithProviders(<HomePage />);
+    expect(await screen.findByRole("link", { name: "Manage" })).toBeVisible();
+    await waitFor(() => expect(agentRows()).toHaveLength(8));
+    expect(screen.queryByRole("link", { name: /View all \d/ })).toBeNull();
+  });
+
   it("lists what needs attention: bursts, approvals and stale keys", async () => {
     stub({
       "/v1/projects/p1/audit/anomalies": [

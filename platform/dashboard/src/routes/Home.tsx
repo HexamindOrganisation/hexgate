@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { type ChartBucket, StackedBars } from "@/components/ui/charts";
 import { PageHeader } from "@/components/ui/page-header";
+import { useAgentManifests } from "@/lib/agent-manifests";
 import { useProjectScoped } from "@/lib/active";
 import {
   api,
@@ -31,7 +32,7 @@ import {
   type TokenListItem,
 } from "@/lib/api";
 import { auditUrl } from "@/lib/audit-filters";
-import { agentHubPath } from "@/lib/agent-paths";
+import { AGENT_LIST_CAP, agentHubPath } from "@/lib/agent-paths";
 import { denyRatePct, useAgentActivity24h } from "@/lib/audit-summary";
 import { fmtTokens, formatRelative, pluralise } from "@/lib/format";
 import { isStaleKey, STALE_KEY_DAYS } from "@/lib/keys";
@@ -210,10 +211,8 @@ export function HomePage() {
     queryFn: () => api.getAuditAnomalies({ window: "7d" }, pid!),
     refetchInterval: SLOW_MS,
   });
-  const agentsQ = useQuery({
-    queryKey: ["agent-manifests", pid],
+  const agentsQ = useAgentManifests(pid, {
     enabled: on,
-    queryFn: () => api.listAgentManifests(pid!),
     refetchInterval: SLOW_MS,
   });
   // Any member can read keys, so a failure is a real one: retried once (not
@@ -331,8 +330,21 @@ export function HomePage() {
     if (noAgents && !quickstartSeen) openQuickstart(QUICKSTART_STEP.idea);
   }, [noAgents, quickstartSeen, openQuickstart]);
 
+  // Most denied first, then busiest, capped: the full list is /agents. Stays
+  // in manifest order while activity is unknown (the sort is stable).
+  const shownAgents = useMemo(() => {
+    const score = (name: string) => activityOf(name) ?? { deny: 0, all: 0 };
+    return [...agents]
+      .sort((a, b) => {
+        const x = score(a.name);
+        const y = score(b.name);
+        return y.deny - x.deny || y.all - x.all;
+      })
+      .slice(0, AGENT_LIST_CAP);
+  }, [agents, activityOf]);
+  const hiddenAgents = agents.length - shownAgents.length;
   const maxAgentCalls = Math.max(
-    ...agents.map((a) => activityOf(a.name)?.all ?? 0),
+    ...shownAgents.map((a) => activityOf(a.name)?.all ?? 0),
     1,
   );
   const lastDecision = feedQ.data?.rows[0]?.occurred_at;
@@ -564,8 +576,25 @@ export function HomePage() {
         </Panel>
 
         <Panel
-          title="Agents"
-          aside={<PanelLink to="/agents">Manage</PanelLink>}
+          title={
+            hiddenAgents ? (
+              <>
+                Agents{" "}
+                <span className="ml-1 text-meta font-normal text-muted-foreground">
+                  {summaryQ.data
+                    ? `top ${shownAgents.length} of ${agents.length}`
+                    : `${shownAgents.length} of ${agents.length}`}
+                </span>
+              </>
+            ) : (
+              "Agents"
+            )
+          }
+          aside={
+            <PanelLink to="/agents">
+              {hiddenAgents ? `View all ${agents.length} →` : "Manage"}
+            </PanelLink>
+          }
         >
           {agentsQ.isPending ? (
             <PanelNote>Loading…</PanelNote>
@@ -578,7 +607,7 @@ export function HomePage() {
                   Couldn't load the last 24 hours of activity.
                 </PanelNote>
               )}
-              {agents.map((a) => {
+              {shownAgents.map((a) => {
                 const row = activityOf(a.name);
                 return (
                   <Link
