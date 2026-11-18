@@ -41,6 +41,10 @@ RUN groupadd --gid 10001 hexgate \
 ENV HOME=/home/hexgate
 USER hexgate
 
+# All interfaces: the container is reached through the compose network and a
+# published loopback port.
+ENV HEXGATE_ASSISTANT_BIND_HOST=0.0.0.0
+
 EXPOSE 8090
 
 # Liveness only: /v1/assistant/health checks no dependency.
