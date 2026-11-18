@@ -383,13 +383,17 @@ async def api_put_policy_file(
 ) -> PolicyFileRead:
     """Create or replace one file. 422 if the content isn't a valid compose
     document; 409 if, with this file, the project no longer resolves; 409
-    ``{"code": "stale"}`` if ``base_hash`` is given and the stored file changed."""
+    ``{"code": "stale"}`` if ``base_hash`` is given and the stored file changed
+    or is missing, or if ``if_absent`` is set and the file exists. The stale
+    check runs first."""
     caller, _member = membership
     async with project_lock(project_id):
         prev = await service.get_file(session, project_id, name)
         if body.base_hash is not None and (
             prev is None or body.base_hash != service.text_hash(prev.content)
         ):
+            raise HTTPException(status_code=409, detail={"code": "stale"})
+        if body.if_absent and prev is not None:
             raise HTTPException(status_code=409, detail={"code": "stale"})
         # Validate BEFORE writing (like the module PUT). Structural validity first
         # (422 — malformed compose document), then whether the project still

@@ -10,6 +10,7 @@ test_projects.py.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import shutil
 
 import pytest
@@ -2365,8 +2366,17 @@ def test_when_a_comment_changes_then_text_hash_moves_and_content_hash_does_not(
     )
     assert first.json()["content_hash"] == second.json()["content_hash"]
     assert first.json()["text_hash"] != second.json()["text_hash"]
+    # raw bytes, no normalisation: a trailing-whitespace-only edit moves it too
+    third = _put_file(
+        client, pid, "policy.yaml", "# why\ntools: { a: { mode: allow } }\n  \n"
+    )
+    assert (
+        third.json()["text_hash"]
+        == hashlib.sha256(b"# why\ntools: { a: { mode: allow } }\n  \n").hexdigest()
+    )
+    assert third.json()["text_hash"] != second.json()["text_hash"]
     listed = client.get(f"/v1/projects/{pid}/policy-files").json()
-    assert listed[0]["text_hash"] == second.json()["text_hash"]
+    assert listed[0]["text_hash"] == third.json()["text_hash"]
 
 
 def test_put_file_with_current_base_hash_happy_path(client: TestClient) -> None:
@@ -2417,12 +2427,18 @@ def test_when_base_hash_is_given_for_a_missing_file_then_409_stale(
 
 
 def test_put_file_without_base_hash_happy_path(client: TestClient) -> None:
+    # Unguarded, as before base_hash: two writers who read the same version both
+    # save, and the second silently replaces the first (last writer wins).
     pid = _project(client)
     _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
-    r = _put_file(
+    first = _put_file(client, pid, "policy.yaml", "tools: { b: { mode: allow } }\n")
+    second = _put_file(
         client, pid, "policy.yaml", "tools: { a: { mode: approval_required } }\n"
     )
-    assert r.status_code == 200, r.text
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    stored = client.get(f"/v1/projects/{pid}/policy-files").json()[0]["content"]
+    assert stored == "tools: { a: { mode: approval_required } }\n"
 
 
 def test_when_base_hash_is_stale_and_content_is_invalid_then_409_stale_wins(
@@ -2436,3 +2452,101 @@ def test_when_base_hash_is_stale_and_content_is_invalid_then_409_stale_wins(
     )
     assert r.status_code == 409
     assert r.json()["detail"] == {"code": "stale"}
+
+
+def test_when_base_hash_is_stale_and_content_breaks_resolution_then_409_stale_wins(
+    client: TestClient,
+) -> None:
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    r = client.put(
+        f"/v1/projects/{pid}/policy-files/policy.yaml",
+        json={"content": "import: [ missing.yaml ]\n", "base_hash": "0" * 64},
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"] == {"code": "stale"}
+
+
+def test_when_if_absent_and_file_exists_then_stale(client: TestClient) -> None:
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    r = client.put(
+        f"/v1/projects/{pid}/policy-files/policy.yaml",
+        json={
+            "content": "tools: { a: { mode: approval_required } }\n",
+            "if_absent": True,
+        },
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"] == {"code": "stale"}
+    stored = client.get(f"/v1/projects/{pid}/policy-files").json()[0]["content"]
+    assert stored == "tools: { a: { mode: allow } }\n"
+
+
+def test_when_if_absent_and_file_is_missing_then_it_is_created(
+    client: TestClient,
+) -> None:
+    pid = _project(client)
+    r = client.put(
+        f"/v1/projects/{pid}/policy-files/policy.yaml",
+        json={"content": "tools: { a: { mode: allow } }\n", "if_absent": True},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["content"] == "tools: { a: { mode: allow } }\n"
+
+
+def test_when_two_writers_create_the_same_file_with_if_absent_then_the_second_is_stale(
+    client: TestClient,
+) -> None:
+    # Both saw no caps/refunds.yaml; without the guard the second would replace
+    # the first with a 200.
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    url = f"/v1/projects/{pid}/policy-files/caps/refunds.yaml"
+    first = client.put(
+        url, json={"content": "tools: { b: { mode: allow } }\n", "if_absent": True}
+    )
+    second = client.put(
+        url,
+        json={
+            "content": "tools: { b: { mode: approval_required } }\n",
+            "if_absent": True,
+        },
+    )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 409
+    assert second.json()["detail"] == {"code": "stale"}
+    files = {
+        f["name"]: f["content"]
+        for f in client.get(f"/v1/projects/{pid}/policy-files").json()
+    }
+    assert files["caps/refunds.yaml"] == "tools: { b: { mode: allow } }\n"
+
+
+def test_when_if_absent_and_file_exists_and_content_is_invalid_then_409_stale_wins(
+    client: TestClient,
+) -> None:
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    r = client.put(
+        f"/v1/projects/{pid}/policy-files/policy.yaml",
+        json={"content": "tools: [not, a, mapping\n", "if_absent": True},
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"] == {"code": "stale"}
+
+
+def test_when_if_absent_and_base_hash_are_both_sent_then_422(
+    client: TestClient,
+) -> None:
+    pid = _project(client)
+    r = client.put(
+        f"/v1/projects/{pid}/policy-files/policy.yaml",
+        json={
+            "content": "tools: { a: { mode: allow } }\n",
+            "if_absent": True,
+            "base_hash": "0" * 64,
+        },
+    )
+    assert r.status_code == 422
+    assert client.get(f"/v1/projects/{pid}/policy-files").json() == []
