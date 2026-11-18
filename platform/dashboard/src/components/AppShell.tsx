@@ -1,5 +1,11 @@
 import { useEffect, useState, type MouseEvent } from "react";
-import { useLocation, useNavigate, NavLink, Outlet } from "react-router-dom";
+import {
+  useLocation,
+  useMatch,
+  useNavigate,
+  NavLink,
+  Outlet,
+} from "react-router-dom";
 import {
   ArrowLeft,
   Ban,
@@ -38,9 +44,9 @@ import { CreateOrgDialog } from "@/components/CreateOrgDialog";
 import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { PreviewBanner } from "@/components/PreviewBanner";
 import { VerifyEmailBanner } from "@/components/VerifyEmailBanner";
-import { useQuery } from "@tanstack/react-query";
 
-import { api } from "@/lib/api";
+import { useAgentManifests } from "@/lib/agent-manifests";
+import { AGENT_LIST_CAP } from "@/lib/agent-paths";
 import { useActive, useProjectScoped } from "@/lib/active";
 import { useActiveBanCount, useCanManageBans } from "@/lib/bans";
 import { useLogout, useUser } from "@/lib/auth";
@@ -284,11 +290,9 @@ function NavItem({
 function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
   const { projectId, status } = useProjectScoped();
   const [open, setOpen] = useState(false);
-  const agents = useQuery({
-    queryKey: ["agent-manifests", projectId],
-    queryFn: () => api.listAgentManifests(projectId as string),
-    enabled: !!projectId && open && !collapsed,
-  });
+  // useMatch decodes the name safely; a raw decode throws on a stray "%".
+  const hubMatch = useMatch("/agents/:name/*");
+  const agents = useAgentManifests(projectId, { enabled: open && !collapsed });
 
   // Collapsed rail: no room for an inline list — just the icon link.
   if (collapsed) {
@@ -302,6 +306,12 @@ function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
   };
 
   const rows = agents.data ?? [];
+  // Past the cap, list the first few plus the agent being viewed, and link to
+  // /agents for the rest: the sidebar navigates, it doesn't scroll.
+  const current = hubMatch?.params.name ?? null;
+  const shown = rows.slice(0, AGENT_LIST_CAP);
+  const extra = rows.find((a, i) => i >= AGENT_LIST_CAP && a.name === current);
+  if (extra) shown.push(extra);
   return (
     <div className="group/agents relative flex flex-col gap-0.5">
       {/* No `end`: the row stays active on every hub page, as on the rail. */}
@@ -359,7 +369,7 @@ function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
               Loading…
             </span>
           ) : rows.length ? (
-            rows.map((a) => (
+            shown.map((a) => (
               <NavLink
                 key={a.name}
                 to={`/agents/${encodeURIComponent(a.name)}`}
@@ -379,6 +389,15 @@ function AgentsNavItem({ collapsed }: { collapsed: boolean }) {
             <span className="px-2 py-1 text-[11px] text-muted-foreground">
               No agents yet
             </span>
+          )}
+          {rows.length > AGENT_LIST_CAP && (
+            <NavLink
+              to="/agents"
+              end
+              className="rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+            >
+              View all {rows.length} →
+            </NavLink>
           )}
         </div>
       )}
