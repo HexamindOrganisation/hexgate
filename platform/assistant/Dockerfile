@@ -43,7 +43,7 @@ USER hexgate
 
 EXPOSE 8090
 
-# Liveness only: /v1/assistant/health checks neither the API nor its JWKS.
+# Liveness only: /v1/assistant/health checks no dependency.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8090/v1/assistant/health', timeout=4).status==200 else 1)"]
 

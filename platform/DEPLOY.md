@@ -744,7 +744,7 @@ and `TAG=<version>`, then
 
 Running them anywhere else:
 
-- **`FORWARDED_ALLOW_IPS`** (api, mcp): the peers whose `X-Forwarded-*`
+- **`FORWARDED_ALLOW_IPS`** (api, mcp, assistant): the peers whose `X-Forwarded-*`
   headers are trusted, loopback by default. Set it to your proxy's address,
   never `*` on a port the internet can reach.
 - **Volumes** (api): `/keys` holds the signing keys and must persist; `/data`

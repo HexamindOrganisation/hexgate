@@ -4,15 +4,13 @@ settings are added they come from the process environment only (prefix
 
 from dataclasses import dataclass
 
-# The port the container listens on. Compose maps a loopback host port to it,
-# so it is fixed here and not configurable.
+# The port the server listens on, fixed here and not configurable.
 PORT = 8090
 
 
 @dataclass(frozen=True)
 class Settings:
-    # All interfaces: the container is reached through the compose network and
-    # the loopback port compose publishes, never directly from outside the box.
+    # All interfaces, so a container's published port reaches it.
     bind_host: str = "0.0.0.0"
     port: int = PORT
 
