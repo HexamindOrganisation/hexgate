@@ -34,8 +34,6 @@ Kind = Literal["widened", "tightened"]
 # A block or entry's place in a file: ("agents", "bot", "boundary", "tools", "x").
 BlockPath = tuple[str, ...]
 
-# The name-map entries of a BoundaryBlock; ``admission`` is its one single entry.
-_SECTIONS = ("tools", "reach", "skills")
 # The entries whose gate engages only while a key of their kind is listed.
 _GATED = ("admission", "reach", "skills")
 # Numeric bounds, op -> inclusive.
@@ -126,7 +124,7 @@ def _entries(block) -> dict[BlockPath, Any]:
     ``canonical_name`` (hexgate/security/models.py:521), which trims and maps a
     blank name to ``default``; two raw names on one target become a
     :class:`_Collision`. Tools need no such key: the lowering uses their names
-    as written (hexgate/security/compose/lower.py:93). Skills cannot collide:
+    as written (hexgate/security/compose/lower.py:122-125). Skills cannot collide:
     ``SkillPolicy`` rejects two names that trim to one (models.py:464-470)."""
     from hexgate.security.naming import canonical_name
 

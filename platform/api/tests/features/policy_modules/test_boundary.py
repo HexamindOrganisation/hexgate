@@ -267,6 +267,20 @@ def test_when_colliding_reach_names_split_modes_then_reorder_is_widened() -> Non
     assert _kinds(saved, drafted) == [("policy.yaml", "boundary.reach.billing", W)]
 
 
+def test_when_collided_name_drops_a_constraint_then_widened() -> None:
+    # Each raw name keeps its own lowered key (here as-tool and handoff), so a
+    # change to any of them counts, not only to the last one.
+    def project(spec: str) -> dict[str, str]:
+        return _entry(
+            f'  reach:\n    "billing ": {spec}\n    billing: {{ as: handoff }}\n'
+        )
+
+    saved = project("{ as: tool, constraint: 'ctx.x == 1' }")
+    assert _kinds(saved, project("{ as: tool }")) == [
+        ("policy.yaml", "boundary.reach.billing", W)
+    ]
+
+
 def test_when_collision_is_untouched_then_only_the_other_change_shows() -> None:
     reach = '  reach:\n    "billing ": { as: tool }\n    billing: { as: handoff }\n'
     saved = _entry(f"  tools: {{ refund: {{}} }}\n{reach}")
@@ -495,9 +509,14 @@ def test_when_entry_spec_has_a_field_then_it_is_compared(spec) -> None:
 
 
 def test_when_boundary_has_a_field_then_it_is_compared() -> None:
-    # A ceiling field the comparison does not read would loosen with no report.
-    compared = {*boundary._SECTIONS, "admission"}
-    assert compared == set(BoundaryBlock.model_fields)
+    # A ceiling field the comparison does not read would loosen with no report:
+    # a block with every field filled must yield an entry for each of them.
+    block = BoundaryBlock.model_validate(
+        {"tools": {"t": {}}, "reach": {"r": {}}, "skills": {"s": {}}, "admission": {}}
+    )
+    assert {key[0] for key in boundary._entries(block)} == set(
+        BoundaryBlock.model_fields
+    )
 
 
 @pytest.mark.parametrize("side", ["saved", "drafted"])
