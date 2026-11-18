@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -12,6 +12,8 @@ import {
 import { Link } from "react-router-dom";
 
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
+import { QUICKSTART_STEP } from "@/components/quickstart/content";
+import { GetStarted } from "@/components/quickstart/GetStarted";
 import { burstFilters, rankAnomalies } from "@/components/audit/anomalies";
 import { OUTCOME_SERIES } from "@/components/audit/chart-tokens";
 import { argsPreview } from "@/components/audit/fmt";
@@ -34,6 +36,7 @@ import { AGENT_LIST_CAP, agentHubPath } from "@/lib/agent-paths";
 import { denyRatePct, useAgentActivity24h } from "@/lib/audit-summary";
 import { fmtTokens, formatRelative, pluralise } from "@/lib/format";
 import { isStaleKey, STALE_KEY_DAYS } from "@/lib/keys";
+import { useUi } from "@/lib/ui";
 import { useNow } from "@/lib/use-now";
 import { cn } from "@/lib/utils";
 
@@ -221,6 +224,26 @@ export function HomePage() {
     retry: 1,
     refetchInterval: SLOW_MS,
   });
+  // Has this project recorded a decision? Only the checklist asks. The 24h
+  // summary and 7d series Home already loads answer it for any active project;
+  // only when both are empty (or have failed once: no waiting out their
+  // retries) does it look further back,
+  // over the longest audit window (the summary aggregates; a decisions page
+  // would also count and buffer every matching row), so a set-up project with
+  // a quiet week isn't sent back to "Get started". A project idle for more
+  // than 90 days does count as "no decision" again. Polling stops once found.
+  const recentDecision =
+    (summaryQ.data?.totals.all ?? 0) > 0 ||
+    !!weekQ.data?.some((p) => p.allow + p.deny + p.needs_approval > 0);
+  const settled = (q: { isPending: boolean; failureCount: number }) =>
+    !q.isPending || q.failureCount > 0;
+  const everQ = useQuery({
+    queryKey: ["audit", "summary", pid, { window: "90d" }],
+    enabled: on && settled(summaryQ) && settled(weekQ) && !recentDecision,
+    queryFn: () => api.getAuditSummary({ window: "90d" }, pid!),
+    retry: 1,
+    refetchInterval: (q) => (q.state.data?.totals.all ? false : SLOW_MS),
+  });
   // Usage is best-effort: a member without access just doesn't get it.
   const usageQ = useQuery({
     queryKey: ["usage", "summary", pid, { window: "24h" }],
@@ -291,6 +314,49 @@ export function HomePage() {
     };
   }, [weekQ.data]);
 
+  // The "Get started" checklist's signals; undefined until known. Read from
+  // the data, not isSuccess: a failed background poll keeps the last good
+  // data, and the checklist shouldn't flicker away for it.
+  const hasKey = tokensQ.data ? tokensQ.data.length > 0 : undefined;
+  const hasAgent = agentsQ.data ? agents.some((a) => a.manifest) : undefined;
+  // null = couldn't check (audit unavailable): neither done nor to do.
+  const decisionNow = recentDecision
+    ? true
+    : everQ.data
+      ? everQ.data.totals.all > 0
+      : everQ.isError
+        ? null
+        : undefined;
+  // Keep this project's last known answer while the 90-day check takes over
+  // from the recent data (it starts empty), so the checklist doesn't blink.
+  const [knownDecision, setKnownDecision] = useState<{
+    pid: string | null;
+    value: boolean | null;
+  }>();
+  if (
+    decisionNow !== undefined &&
+    (knownDecision?.pid !== pid || knownDecision.value !== decisionNow)
+  )
+    setKnownDecision({ pid, value: decisionNow });
+  const hasDecision =
+    decisionNow !== undefined
+      ? decisionNow
+      : knownDecision?.pid === pid
+        ? knownDecision.value
+        : undefined;
+
+  // A project with no agents is where the quickstart helps most: offer it
+  // unprompted once (closing it sets quickstartSeen); the checklist stays.
+  const openQuickstart = useUi((s) => s.openQuickstart);
+  const quickstartSeen = useUi((s) => s.quickstartSeen);
+  // Only a truly empty project (the "No agents yet" panel), so it doesn't
+  // pop up over agents that exist but aren't registered; the checklist still
+  // covers those. quickstartSeen is per browser, like any onboarding hint.
+  const noAgents = !!agentsQ.data && agents.length === 0;
+  useEffect(() => {
+    if (noAgents && !quickstartSeen) openQuickstart(QUICKSTART_STEP.idea);
+  }, [noAgents, quickstartSeen, openQuickstart]);
+
   // Most denied first, then busiest, capped: the full list is /agents. Stays
   // in manifest order while activity is unknown (the sort is stable).
   const shownAgents = useMemo(() => {
@@ -322,9 +388,7 @@ export function HomePage() {
         description={
           scope.projectName && (
             <>
-              {agentsQ.isSuccess && (
-                <>{pluralise(agents.length, "agent")} in </>
-              )}
+              {agentsQ.data && <>{pluralise(agents.length, "agent")} in </>}
               <span className="font-mono text-foreground">
                 {scope.projectName}
               </span>
@@ -348,6 +412,12 @@ export function HomePage() {
             </Button>
           </>
         }
+      />
+
+      <GetStarted
+        hasKey={hasKey}
+        hasAgent={hasAgent}
+        hasDecision={hasDecision}
       />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
@@ -512,10 +582,20 @@ export function HomePage() {
           ) : (
             <PanelNote>
               No decisions in the last 24 hours.{" "}
-              {/* A deep link into an empty project: a clean slate. */}
-              <Link to={auditUrl()} className="text-primary hover:underline">
-                Getting started
-              </Link>
+              {hasDecision === false ? (
+                // Never had one: the walkthrough, not an empty audit log.
+                <button
+                  type="button"
+                  onClick={() => openQuickstart(QUICKSTART_STEP.idea)}
+                  className="text-primary hover:underline"
+                >
+                  Getting started
+                </button>
+              ) : (
+                <Link to={auditUrl()} className="text-primary hover:underline">
+                  Open audit
+                </Link>
+              )}
             </PanelNote>
           )}
         </Panel>
@@ -600,7 +680,15 @@ export function HomePage() {
           ) : (
             <PanelNote>
               No agents yet. Register one with{" "}
-              <span className="font-mono">hexgate register</span>.
+              <span className="font-mono">hexgate register</span>, or{" "}
+              <button
+                type="button"
+                onClick={() => openQuickstart(QUICKSTART_STEP.register)}
+                className="text-primary hover:underline"
+              >
+                follow the quickstart
+              </button>
+              .
             </PanelNote>
           )}
         </Panel>
