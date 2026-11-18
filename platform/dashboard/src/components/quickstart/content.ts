@@ -1,7 +1,8 @@
 /**
- * Copy and code for the quickstart dialog. REGISTER and WRAP mirror chapter 4
- * of docs/quickstart.mdx: keep the two in sync. POLICY_YAML is copied by hand
- * in README.md, docs/introduction.mdx, docs/quickstart.mdx and (as RULES)
+ * Copy and code for the quickstart dialog. INSTALL, REGISTER and WRAP mirror
+ * docs/quickstart.mdx (chapters 2 and 4): keep them in sync. POLICY_YAML is copied by hand
+ * in README.md, docs/introduction.mdx (a variant with an extra issue_credit
+ * tool), docs/quickstart.mdx and (as RULES)
  * docs/snippets/policy-decider.jsx: change them together.
  */
 
@@ -60,6 +61,10 @@ export const RUN_COMMAND = "python guarded_agent.py";
 export const RUN_OUTPUT = `[support] I can't issue this refund: $400 is above the
           $50 limit for your role.
 [billing] Done. I refunded 400.0 USD on order O-42.`;
+
+/** Shown before REGISTER in the register step. The SDK depends on all four
+ * frameworks and python-dotenv, so this one line covers every WRAP snippet. */
+export const INSTALL = "pip install hexgate";
 
 export const REGISTER: Record<Framework, string> = {
   langchain: `hexgate register --agent refund_agent:graph \\

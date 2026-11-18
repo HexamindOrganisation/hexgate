@@ -7,7 +7,7 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { QUICKSTART_STEP } from "@/components/quickstart/content";
 import { QuickstartDialog } from "@/components/quickstart/QuickstartDialog";
@@ -27,6 +27,7 @@ function renderDialog() {
 }
 
 describe("QuickstartDialog", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     window.localStorage.clear();
     useUi.setState({

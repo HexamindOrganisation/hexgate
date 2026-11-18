@@ -36,7 +36,7 @@ and *what they're trying to do*. A support rep and a billing lead can use the
 exact same agent and the exact same `refund_order` tool, yet get different
 answers, because a **policy** maps roles to tools to argument limits:
 
-{/* This refund_order policy is copied by hand in README.md, docs/introduction.mdx, docs/quickstart.mdx, docs/snippets/policy-decider.jsx and platform/dashboard/src/components/quickstart/content.ts: keep them in sync */}
+{/* A variant of the refund_order policy in README.md, docs/quickstart.mdx, docs/snippets/policy-decider.jsx and platform/dashboard/src/components/quickstart/content.ts: the same support and billing rules for refund_order, plus an issue_credit tool the table below relies on. Keep the refund_order rules in sync; issue_credit lives only here. */}
 ```yaml policy.yaml
 roles:
   support:                       # front-line: small USD refunds only

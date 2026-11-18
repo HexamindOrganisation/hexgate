@@ -46,7 +46,7 @@ pip install hexgate
 **See it enforce — no API keys.** Save a policy that gives two roles different
 limits on the *same* `refund_order` tool:
 
-<!-- This refund_order policy is copied by hand in README.md, docs/introduction.mdx, docs/quickstart.mdx, docs/snippets/policy-decider.jsx and platform/dashboard/src/components/quickstart/content.ts: keep them in sync -->
+<!-- This refund_order policy is copied by hand in README.md, docs/introduction.mdx (a variant with an extra issue_credit tool), docs/quickstart.mdx, docs/snippets/policy-decider.jsx and platform/dashboard/src/components/quickstart/content.ts: keep them in sync -->
 ```yaml
 # policy.yaml
 version: 1

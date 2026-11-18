@@ -1,4 +1,4 @@
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -226,7 +226,8 @@ export function HomePage() {
   });
   // Has this project recorded a decision? Only the checklist asks. The 24h
   // summary and 7d series Home already loads answer it for any active project;
-  // only when both are loaded (or failed) and empty does it look further back,
+  // only when both are empty (or have failed once: no waiting out their
+  // retries) does it look further back,
   // over the longest audit window (the summary aggregates; a decisions page
   // would also count and buffer every matching row), so a set-up project with
   // a quiet week isn't sent back to "Get started". A project idle for more
@@ -234,9 +235,11 @@ export function HomePage() {
   const recentDecision =
     (summaryQ.data?.totals.all ?? 0) > 0 ||
     !!weekQ.data?.some((p) => p.allow + p.deny + p.needs_approval > 0);
+  const settled = (q: { isPending: boolean; failureCount: number }) =>
+    !q.isPending || q.failureCount > 0;
   const everQ = useQuery({
     queryKey: ["audit", "summary", pid, { window: "90d" }],
-    enabled: on && !summaryQ.isPending && !weekQ.isPending && !recentDecision,
+    enabled: on && settled(summaryQ) && settled(weekQ) && !recentDecision,
     queryFn: () => api.getAuditSummary({ window: "90d" }, pid!),
     retry: 1,
     refetchInterval: (q) => (q.state.data?.totals.all ? false : SLOW_MS),
@@ -315,16 +318,31 @@ export function HomePage() {
   // the data, not isSuccess: a failed background poll keeps the last good
   // data, and the checklist shouldn't flicker away for it.
   const hasKey = tokensQ.data ? tokensQ.data.length > 0 : undefined;
-  const hasAgent = agentsQ.data
-    ? agentsQ.data.some((a) => a.manifest)
-    : undefined;
+  const hasAgent = agentsQ.data ? agents.some((a) => a.manifest) : undefined;
   // null = couldn't check (audit unavailable): neither done nor to do.
-  const hasDecision = recentDecision
+  const decisionNow = recentDecision
     ? true
     : everQ.data
       ? everQ.data.totals.all > 0
       : everQ.isError
         ? null
+        : undefined;
+  // Keep this project's last known answer while the 90-day check takes over
+  // from the recent data (it starts empty), so the checklist doesn't blink.
+  const [knownDecision, setKnownDecision] = useState<{
+    pid: string | null;
+    value: boolean | null;
+  }>();
+  if (
+    decisionNow !== undefined &&
+    (knownDecision?.pid !== pid || knownDecision.value !== decisionNow)
+  )
+    setKnownDecision({ pid, value: decisionNow });
+  const hasDecision =
+    decisionNow !== undefined
+      ? decisionNow
+      : knownDecision?.pid === pid
+        ? knownDecision.value
         : undefined;
 
   // A project with no agents is where the quickstart helps most: offer it
@@ -334,7 +352,7 @@ export function HomePage() {
   // Only a truly empty project (the "No agents yet" panel), so it doesn't
   // pop up over agents that exist but aren't registered; the checklist still
   // covers those. quickstartSeen is per browser, like any onboarding hint.
-  const noAgents = agentsQ.isSuccess && agents.length === 0;
+  const noAgents = !!agentsQ.data && agents.length === 0;
   useEffect(() => {
     if (noAgents && !quickstartSeen) openQuickstart(QUICKSTART_STEP.idea);
   }, [noAgents, quickstartSeen, openQuickstart]);
@@ -370,9 +388,7 @@ export function HomePage() {
         description={
           scope.projectName && (
             <>
-              {agentsQ.isSuccess && (
-                <>{pluralise(agents.length, "agent")} in </>
-              )}
+              {agentsQ.data && <>{pluralise(agents.length, "agent")} in </>}
               <span className="font-mono text-foreground">
                 {scope.projectName}
               </span>

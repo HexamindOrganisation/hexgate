@@ -30,6 +30,7 @@ import {
   QUICKSTART_STEP_IDS,
   type QuickstartStepId,
   FRAMEWORKS,
+  INSTALL,
   POLICY_YAML,
   REGISTER,
   RUN_COMMAND,
@@ -181,7 +182,7 @@ const STEP_DEFS: Record<QuickstartStepId, Omit<Step, "id">> = {
           The commands assume the <code>refund_agent.py</code> from chapter 1 of
           the{" "}
           <a
-            href={docsUrl(DOC_PATHS.quickstart)}
+            href={`${docsUrl(DOC_PATHS.quickstart)}#1-the-agent`}
             target="_blank"
             rel="noopener noreferrer"
             className="text-primary hover:underline"
@@ -191,10 +192,7 @@ const STEP_DEFS: Record<QuickstartStepId, Omit<Step, "id">> = {
           ; point them at your own agent's module instead.
         </p>
         <FrameworkPicker value={framework} onChange={setFramework} />
-        <CodeBlock
-          title="bash"
-          code={`pip install hexgate\n${REGISTER[framework]}`}
-        />
+        <CodeBlock title="bash" code={`${INSTALL}\n${REGISTER[framework]}`} />
         <CodeBlock title="guarded_agent.py" code={WRAP[framework]} />
         <p className="text-muted-foreground">
           <code>HexgateContext</code> says who is asking. In your app, fill it

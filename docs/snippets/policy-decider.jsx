@@ -1,6 +1,7 @@
 // Interactive companion to the quickstart's policy.yaml. It mirrors that
 // policy's constraints by hand, so keep the RULES below in sync with the YAML
-// copied in README.md, docs/introduction.mdx, docs/quickstart.mdx and
+// copied in README.md, docs/introduction.mdx (refund_order rules only; it
+// adds issue_credit), docs/quickstart.mdx and
 // platform/dashboard/src/components/quickstart/content.ts. It explains; the
 // SDK decides.
 export const PolicyDecider = () => {
