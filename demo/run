@@ -1,0 +1,135 @@
+#!/bin/sh
+# hexgate demo kit: install what's missing, then start a demo.
+#
+#   ./demo/run                 menu
+#   ./demo/run devops          start the DevOps demo
+#   ./demo/run reset devops    back to the start of scene 1, between takes
+#   ./demo/run secure devops   do scene 2 without Claude
+#   ./demo/run film devops     film the demo video (FILMING.md)
+#   ./demo/run status | down
+#
+# Installs uv, Python 3.13, Node 22 and Go into demo/.tools/ (no sudo, no change
+# to your shell profile) when they're missing or too old. Docker is the one
+# system-wide install: it asks first. Running it again changes nothing.
+set -eu
+
+DEMO=$(cd "$(dirname "$0")" && pwd)
+TOOLS="$DEMO/.tools"
+mkdir -p "$TOOLS"
+
+say()  { printf '\033[38;5;141m›\033[0m %s\n' "$*"; }
+ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
+die()  { printf '  \033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
+# Yes by default at a terminal; no when there is none (a script, CI, an agent).
+ask()  { printf '  %s [Y/n] ' "$1"; read -r a </dev/tty 2>/dev/null || { echo; return 1; }; case "$a" in [nN]*) return 1;; *) return 0;; esac; }
+
+case "$(uname -s)" in
+  Darwin) OS=darwin ;;
+  Linux)  OS=linux ;;
+  *) die "unsupported system $(uname -s): use macOS or Linux (on Windows, WSL2)" ;;
+esac
+case "$(uname -m)" in
+  arm64|aarch64) ARCH=arm64 ;;
+  x86_64|amd64)  ARCH=amd64 ;;
+  *) die "unsupported CPU $(uname -m)" ;;
+esac
+NODE_ARCH=$([ "$ARCH" = amd64 ] && echo x64 || echo arm64)
+
+sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
+
+# ------------------------------------------------------------ basics
+for t in curl git tar; do command -v "$t" >/dev/null || die "$t is missing; install it and run again"; done
+if ! command -v make >/dev/null; then
+  if [ "$OS" = darwin ]; then
+    say "make is missing: installing Apple's command line tools (a window opens)"
+    xcode-select --install || true
+    die "run ./demo/run again once the command line tools are installed"
+  fi
+  die "make is missing (sudo apt install make)"
+fi
+
+# ------------------------------------------------------------ uv + Python 3.13
+UV=""
+if command -v uv >/dev/null; then UV=$(command -v uv); elif [ -x "$TOOLS/uv/uv" ]; then UV="$TOOLS/uv/uv"; fi
+if [ -z "$UV" ]; then
+  say "installing uv (Python package manager)"
+  curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="$TOOLS/uv" INSTALLER_NO_MODIFY_PATH=1 sh >/dev/null
+  UV="$TOOLS/uv/uv"
+  [ -x "$UV" ] || die "uv did not install"
+fi
+ok "uv $("$UV" --version | cut -d' ' -f2)"
+if ! "$UV" python find 3.13 >/dev/null 2>&1; then
+  say "installing Python 3.13"
+  "$UV" python install 3.13 >/dev/null
+fi
+ok "python 3.13"
+PY() { "$UV" run --no-project --python 3.13 python "$@"; }
+
+# ------------------------------------------------------------ Node 22
+# pnpm comes from corepack when it isn't installed; Node 25+ no longer ships corepack.
+node_ok() { command -v node >/dev/null && [ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -ge 22 ] \
+  && { command -v pnpm >/dev/null || command -v corepack >/dev/null; }; }
+PATH="$TOOLS/node/bin:$PATH"
+if ! node_ok; then
+  say "installing Node 22 (to build the dashboard)"
+  base=https://nodejs.org/dist/latest-v22.x
+  curl -fsSL "$base/SHASUMS256.txt" -o "$TOOLS/node.sums"
+  file=$(grep " node-v22.*-$OS-$NODE_ARCH.tar.gz\$" "$TOOLS/node.sums" | awk '{print $2}' | head -1)
+  [ -n "$file" ] || die "no Node 22 build for $OS-$NODE_ARCH"
+  curl -fL --progress-bar "$base/$file" -o "$TOOLS/node.tgz"
+  [ "$(sha256 "$TOOLS/node.tgz")" = "$(grep " $file\$" "$TOOLS/node.sums" | awk '{print $1}')" ] || die "Node download checksum mismatch"
+  rm -rf "$TOOLS/node" && mkdir -p "$TOOLS/node"
+  tar -xzf "$TOOLS/node.tgz" -C "$TOOLS/node" --strip-components 1
+  rm -f "$TOOLS/node.tgz" "$TOOLS/node.sums"
+  node_ok || die "Node did not install"
+fi
+ok "node $(node --version)"
+
+# ------------------------------------------------------------ Go (the audit collector)
+go_ok() { command -v go >/dev/null && PY -c "import sys,re; v=re.search(r'go(\d+)\.(\d+)', sys.argv[1]); sys.exit(0 if v and (int(v[1]),int(v[2]))>=(1,25) else 1)" "$(go version)"; }
+PATH="$TOOLS/go/bin:$PATH"
+if ! go_ok; then
+  say "installing Go (to build the audit collector)"
+  GO_DL=$(curl -fsSL 'https://go.dev/dl/?mode=json' | PY -c "
+import json,sys
+for rel in json.load(sys.stdin):
+    for f in rel['files']:
+        if rel['stable'] and f['os']=='$OS' and f['arch']=='$ARCH' and f['kind']=='archive':
+            print(f['filename'], f['sha256']); sys.exit()
+")
+  GO_FILE=${GO_DL%% *}; GO_SHA=${GO_DL##* }
+  [ -n "$GO_FILE" ] || die "no Go build for $OS-$ARCH"
+  curl -fL --progress-bar "https://go.dev/dl/$GO_FILE" -o "$TOOLS/go.tgz"
+  [ "$(sha256 "$TOOLS/go.tgz")" = "$GO_SHA" ] || die "Go download checksum mismatch"
+  rm -rf "$TOOLS/go" && tar -xzf "$TOOLS/go.tgz" -C "$TOOLS" && rm -f "$TOOLS/go.tgz"
+  go_ok || die "Go did not install"
+fi
+ok "$(go version | cut -d' ' -f3)"
+
+# ------------------------------------------------------------ Docker
+if ! command -v docker >/dev/null; then
+  say "Docker is missing. The platform's databases (Postgres, ClickHouse, Redpanda) run in it."
+  if ask "install Docker now?"; then
+    if [ "$OS" = darwin ] && command -v brew >/dev/null; then
+      brew install --cask docker
+      open -a Docker
+    elif [ "$OS" = darwin ]; then
+      dmg_arch=$([ "$ARCH" = arm64 ] && echo arm64 || echo amd64)
+      curl -fL --progress-bar "https://desktop.docker.com/mac/main/$dmg_arch/Docker.dmg" -o "$TOOLS/Docker.dmg"
+      open "$TOOLS/Docker.dmg"
+      die "drag Docker to Applications, open it once, then run ./demo/run again"
+    else
+      curl -fsSL https://get.docker.com | sudo sh
+      sudo usermod -aG docker "$USER" || true
+      die "Docker installed. Log out and in again (for the docker group), then run ./demo/run again"
+    fi
+  else
+    die "install Docker from https://docs.docker.com/get-docker/ and run again"
+  fi
+fi
+ok "docker"
+
+# ------------------------------------------------------------ hand off
+export DEMO_CALLER_CWD="$PWD"  # relative paths in arguments are the caller's
+cd "$DEMO"
+PATH="$TOOLS/uv:$PATH" exec "$UV" run --no-project --python 3.13 python -m kit "$@"
