@@ -23,11 +23,12 @@ from hexgate_api.core.db import get_session
 from hexgate_api.core.locks import project_lock
 from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.project import require_project_admin
-from hexgate_api.features.policy_modules import diff, service
+from hexgate_api.features.policy_modules import coverage, diff, service, similar
 from hexgate_api.models import OrganizationMember, PolicyFile, PolicyModule, User
 from hexgate_api.schemas import (
     PolicyCheckRequest,
     PolicyCheckResponse,
+    PolicyCoverageResponse,
     PolicyDiffRequest,
     PolicyDiffResponse,
     PolicyFileRead,
@@ -45,6 +46,7 @@ from hexgate_api.schemas import (
     RiskFactsResponse,
     RoleBindingsRead,
     RoleBindingsWrite,
+    SimilarAgentsResponse,
 )
 
 if TYPE_CHECKING:  # the SDK is imported lazily at run time
@@ -618,6 +620,72 @@ async def api_policy_graph(
     except service.compose_error_types() as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PolicyGraphResponse(**graph)
+
+
+@router.get(
+    "/projects/{project_id}/policy/coverage",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
+async def api_policy_coverage(
+    project_id: str,
+    agent: str | None = None,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> PolicyCoverageResponse:
+    """Per registered agent (or only ``agent``), the manifest tools the policy
+    leaves to a default and the sub-agents no rule names, what decides them instead (for
+    a tool ``default_policy``, the most permissive default any role applies to
+    an uncovered tool; for a sub-agent, a deny when ``reach_gated``, else
+    nothing), and whether the agent has a policy of its own. Judged against
+    the project policy when the project has one, else against each agent's own
+    policy; one that doesn't load marks that agent's entry ``policy_error``.
+    422 if the project policy can't be composed; 404 for an ``agent`` not
+    registered."""
+    try:
+        agents = await coverage.project_coverage(session, project_id, agent)
+    except service.compose_error_types() as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except service.UnknownAgentError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"agent {exc.args[0]!r} is not registered in this project",
+        ) from exc
+    return PolicyCoverageResponse(agents=agents)
+
+
+@router.get(
+    "/projects/{project_id}/policy/similar-agents",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
+async def api_policy_similar_agents(
+    project_id: str,
+    agent: str,
+    limit: int = Query(default=5, ge=1, le=20),
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> SimilarAgentsResponse:
+    """The other registered agents closest to ``agent`` by shared tool names,
+    words in tool names and roles, best first by a 0 to 1 ``score``, each with
+    its per-signal ``signals``, the ``reasons`` it ranked and whether it has a
+    policy to start from. Tool descriptions are not compared. 404 for an
+    ``agent`` that is not registered; 422 when the project's entry file does
+    not resolve."""
+    try:
+        has_manifest, matches = await similar.similar_agents(
+            session, project_id, agent, limit
+        )
+    except service.UnknownAgentError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"agent {exc.args[0]!r} is not registered in this project",
+        ) from exc
+    except service.compose_error_types() as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return SimilarAgentsResponse(
+        agent=agent, has_manifest=has_manifest, matches=matches
+    )
 
 
 @router.get(

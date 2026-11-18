@@ -44,6 +44,8 @@ REGISTRY = {
     ("GET", f"{_P}/policy/check"): _READ,
     ("POST", f"{_P}/policy/check"): _READ,
     ("GET", f"{_P}/policy/graph"): _READ,
+    ("GET", f"{_P}/policy/coverage"): _READ,
+    ("GET", f"{_P}/policy/similar-agents"): _READ,
     ("POST", f"{_P}/policy/diff"): _READ,
     ("GET", f"{_P}/policy/risk-facts"): _READ,
     ("POST", f"{_P}/policy/test"): _READ,
