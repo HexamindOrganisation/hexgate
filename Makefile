@@ -512,11 +512,13 @@ platform-env-pull: ## Pull platform/.env.<stage> and .env.<stage>.assistant from
 
 # Auto-pull only a missing env file; an existing one is left untouched
 # (`make platform-env-pull` to force a refresh). A secret that cannot be
-# pulled stops the target here.
+# pulled stops the target here, and so does an assistant secret in the main
+# file, where the api would load it.
 .PHONY: _require-stage-env
 _require-stage-env:
 	@test -f platform/.env.$(STAGE) || bash platform/scripts/env-secret.sh $(STAGE) main
 	@test -f platform/.env.$(STAGE).assistant || bash platform/scripts/env-secret.sh $(STAGE) assistant
+	@bash platform/scripts/env-split-check.sh platform/.env.$(STAGE)
 
 # The two writers whose sessions hold the locks platform-migrate needs.
 # collector and redpanda are deliberately absent: they stay up so OTLP keeps

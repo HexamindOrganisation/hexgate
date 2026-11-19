@@ -86,7 +86,10 @@ directory.
 (opaque, full env file as payload), never hand-copied, and
 `platform/.env.<stage>.assistant` from `/hexgate/<stage>-assistant`. The second
 holds only the policy assistant's secrets: the api, api-init and enricher load
-all of `.env.<stage>`, so a secret there reaches all three.
+all of `.env.<stage>`, so a secret there reaches all three. Every deploy
+target refuses a `.env.<stage>` holding `HEXGATE_ASSISTANT_POSTGRES_PASSWORD`,
+`_MODEL` or `_OPENROUTER_KEY` (`platform/scripts/env-split-check.sh`);
+`HEXGATE_ASSISTANT_PORT` and `_ENABLED` are not secret and stay there.
 
 **Admin, one-time:** create `/hexgate/<stage>` as an opaque secret in `fr-par`
 from the `platform/.env.sample` template — `HEXGATE_POSTGRES_PASSWORD`,
@@ -629,7 +632,8 @@ with its secrets. Before checking such a commit out, remove both containers:
 `docker compose -p hexgate-<stage> --env-file platform/.env.<stage> --env-file
 platform/.env.<stage>.assistant -f platform/docker-compose.deploy.yml rm -sf
 assistant assistant-db-init`. The `hexgate_assistant` database and login stay
-behind, unused.
+behind, unused, and so do `platform/.env.<stage>.assistant` (the assistant's
+secrets, at rest on the box) and the two `REVOKE CONNECT ... FROM PUBLIC`.
 
 **Rolling back past a migration.** The columns stay behind when the code goes
 away, and old code does not know to filter on them. Nothing here is automatic,

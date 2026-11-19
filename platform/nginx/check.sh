@@ -18,8 +18,12 @@
 #      body cap equal to the collector's own max_request_body_size: if the
 #      proxy allows less, large exports get a 413 from nginx; if more, nginx
 #      buffers bodies the collector then refuses.
-#   5. /v1/assistant/ neither buffers nor cuts a stream at nginx's 60 s
-#      default read timeout.
+#   5. /v1/assistant/ is limited by zone hexgate_assistant_<stage>, and neither buffers nor
+#      cuts a stream at nginx's 60 s default read timeout.
+#   6. The include sets no header at all: headers belong in the box's server
+#      block, and a location that sets any `proxy_set_header` inherits none of
+#      the server's (Host, X-Forwarded-Proto, the WebSocket pair), which then
+#      vanish with no error.
 # Needs `nginx` on PATH; without it the check is skipped with a notice, unless
 # NGINX_CHECK_REQUIRED is set (the CI job sets it, so a broken install step
 # fails instead of passing). Writes nothing outside a temp directory.
@@ -215,4 +219,16 @@ for want in "proxy_buffering off;" "proxy_read_timeout 330s;"; do
         exit 1
     fi
 done
-echo "/v1/assistant/ goes to the assistant, unbuffered, with a 330s read timeout"
+if ! grep -qE '^limit_req zone=hexgate_assistant_prod( |;)' <<<"$assistant_block"; then
+    echo "location ^~ /v1/assistant/ is not limited by zone hexgate_assistant_prod on prod" >&2
+    exit 1
+fi
+echo "/v1/assistant/ goes to the assistant, rate-limited, unbuffered, with a 330s read timeout"
+
+for stage in prod staging; do
+    if directives "$here/hexgate-$stage.conf" | grep -E '^proxy_set_header( |$)'; then
+        echo "hexgate-$stage.conf sets a header; set headers in the box's server block only (DEPLOY.md section 3)" >&2
+        exit 1
+    fi
+done
+echo "the includes set no header"
