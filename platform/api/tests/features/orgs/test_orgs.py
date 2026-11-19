@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -724,7 +725,10 @@ def test_patch_org_409_on_slug_collision(client: TestClient) -> None:
     assert r.status_code == 409
 
 
-def test_patch_org_403_for_plain_member(client: TestClient, session_factory) -> None:
+@pytest.mark.parametrize("body", [{"name": "Renamed"}, {"assistant_mode": "off"}])
+def test_patch_org_403_for_plain_member(
+    client: TestClient, session_factory, body: dict[str, str]
+) -> None:
     """Members (not admin/owner) can't update the org. Pre-create a
     user as plain member of the default org and try."""
     import asyncio
@@ -756,9 +760,69 @@ def test_patch_org_403_for_plain_member(client: TestClient, session_factory) -> 
 
     asyncio.get_event_loop().run_until_complete(_join_default_as_member())
 
-    r = client.patch(f"/v1/orgs/{DEFAULT_ORG_ID}", json={"name": "Renamed"})
+    r = client.patch(f"/v1/orgs/{DEFAULT_ORG_ID}", json=body)
     assert r.status_code == 403
     assert "admin or owner" in r.json()["detail"].lower()
+
+
+def test_when_an_org_is_new_then_its_assistant_mode_is_read_write(
+    client: TestClient,
+) -> None:
+    _signup_and_login(client, "kim@example.com", "correcthorsebattery")
+    listed = client.get("/v1/orgs").json()[0]
+
+    assert listed["assistant_mode"] == "read_write"
+    assert client.get(f"/v1/orgs/{listed['id']}").json()["assistant_mode"] == (
+        "read_write"
+    )
+
+
+@pytest.mark.parametrize("mode", ["off", "read_only", "read_write"])
+def test_patch_org_updates_assistant_mode_for_owner(
+    client: TestClient, mode: str
+) -> None:
+    _signup_and_login(client, "lea@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    # Start from a different mode, so every case writes.
+    other = "read_only" if mode == "off" else "off"
+    assert (
+        client.patch(f"/v1/orgs/{org_id}", json={"assistant_mode": other}).status_code
+        == 200
+    )
+
+    r = client.patch(f"/v1/orgs/{org_id}", json={"assistant_mode": mode})
+
+    assert r.status_code == 200
+    assert r.json()["assistant_mode"] == mode
+    assert client.get(f"/v1/orgs/{org_id}").json()["assistant_mode"] == mode
+
+
+def test_when_patch_names_only_the_assistant_mode_then_name_and_slug_stay(
+    client: TestClient,
+) -> None:
+    _signup_and_login(client, "max@example.com", "correcthorsebattery")
+    before = client.get("/v1/orgs").json()[0]
+
+    after = client.patch(
+        f"/v1/orgs/{before['id']}", json={"assistant_mode": "read_only"}
+    ).json()
+
+    assert (after["name"], after["slug"]) == (before["name"], before["slug"])
+
+
+@pytest.mark.parametrize("mode", ["READ_WRITE", "write", "", None])
+def test_when_assistant_mode_is_unknown_or_null_then_patch_leaves_it(
+    client: TestClient, mode: str | None
+) -> None:
+    """An unknown value is a 422; an explicit null means "unchanged"."""
+    _signup_and_login(client, "noa@example.com", "correcthorsebattery")
+    org_id = client.get("/v1/orgs").json()[0]["id"]
+    client.patch(f"/v1/orgs/{org_id}", json={"assistant_mode": "read_only"})
+
+    r = client.patch(f"/v1/orgs/{org_id}", json={"assistant_mode": mode})
+
+    assert r.status_code == (200 if mode is None else 422)
+    assert client.get(f"/v1/orgs/{org_id}").json()["assistant_mode"] == "read_only"
 
 
 # ---------------------------------------------------------------------------

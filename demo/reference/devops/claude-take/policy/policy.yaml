@@ -1,0 +1,49 @@
+# Shipyard ops copilot: who may do what through the copilot.
+# Roles come from the Shipyard session (users.yaml): viewer, engineer, release.
+# Anything not granted below is denied, and a role this file does not name
+# (the `default` role) gets nothing.
+version: 1
+
+agents:
+  ops_copilot:
+    # Ceilings no role can exceed, whatever it is granted below.
+    boundary:
+      tools:
+        list_services: { mode: allow }
+        get_logs: { mode: allow }
+        restart_service: { mode: allow }
+        deploy_version: { mode: allow }
+        scale_service:
+          mode: allow
+          constraint: args.replicas <= 20        # nobody scales above 20 replicas
+        delete_environment: { mode: deny }       # nobody deletes an environment
+
+    roles:
+      default: {}
+
+      viewer:
+        tools:
+          list_services: { mode: allow }
+          get_logs: { mode: allow }
+
+      engineer:
+        tools:
+          list_services: { mode: allow }
+          get_logs: { mode: allow }
+          restart_service:
+            mode: allow
+            constraint: args.env == "staging"
+          scale_service:
+            mode: allow
+            constraint: args.env == "staging"
+          deploy_version:
+            mode: allow
+            constraint: args.env == "staging"
+
+      release:
+        tools:
+          list_services: { mode: allow }
+          get_logs: { mode: allow }
+          restart_service: { mode: allow }
+          scale_service: { mode: allow }
+          deploy_version: { mode: approval_required }   # every deploy needs a human

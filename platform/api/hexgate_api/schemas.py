@@ -24,6 +24,10 @@ UINT32_MAX = 2**32 - 1
 # M3 Phase 4 — Organization wire shapes
 # ---------------------------------------------------------------------------
 
+# What the dashboard's policy assistant may do in an org
+# (``Organization.assistant_mode``).
+AssistantMode = Literal["off", "read_only", "read_write"]
+
 
 class OrgRead(BaseModel):
     """Shared base — what an org looks like over the wire."""
@@ -32,6 +36,7 @@ class OrgRead(BaseModel):
     slug: str
     name: str
     created_at: datetime
+    assistant_mode: AssistantMode
 
 
 class OrgWithRole(OrgRead):
@@ -64,7 +69,7 @@ class OrgCreate(BaseModel):
 
 
 class OrgUpdate(BaseModel):
-    """``PATCH /v1/orgs/{id}`` body. Both fields optional; omitted
+    """``PATCH /v1/orgs/{id}`` body. Every field optional; omitted
     fields are left unchanged on the row."""
 
     name: Optional[str] = Field(default=None, min_length=1, max_length=64)
@@ -74,6 +79,7 @@ class OrgUpdate(BaseModel):
         max_length=32,
         pattern=r"^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$",
     )
+    assistant_mode: Optional[AssistantMode] = None
 
 
 class MemberRead(BaseModel):
@@ -818,6 +824,51 @@ class PolicyCoverageResponse(BaseModel):
     """Every registered agent's coverage, by agent name."""
 
     agents: list[AgentCoverageOut] = Field(default_factory=list)
+
+
+class SimilarReasonsOut(BaseModel):
+    """What two agents share: tool names, words of tool names, and role names."""
+
+    shared_tools: list[str] = Field(default_factory=list)
+    shared_name_words: list[str] = Field(default_factory=list)
+    shared_roles: list[str] = Field(default_factory=list)
+
+
+class SimilarSignalsOut(BaseModel):
+    """How alike two agents are on each signal, 0 (nothing shared) to 1
+    (identical), rarer features weighing more."""
+
+    tools: float
+    name_words: float
+    roles: float
+
+
+class SimilarAgentOut(BaseModel):
+    """One registered agent that resembles the one asked about. ``score`` is
+    0 to 1, the weighted sum of its ``signals``; when the agent asked about
+    has no roles, none can be shared, so ``roles`` is left out and the other
+    two weights are scaled to sum to 1. ``has_policy`` is False when the
+    project policy does not name it (it enforces the ``"*"`` view) or its own
+    stored policy is empty; ``roles`` are the roles the project policy gives
+    it (none without a project policy). Read its policy with
+    ``/policy/resolve?agent=`` where the project has a project policy, else
+    from its own ``policy_yaml`` (``/agents/{name}``)."""
+
+    agent: str
+    score: float
+    has_policy: bool
+    roles: list[str] = Field(default_factory=list)
+    signals: SimilarSignalsOut
+    reasons: SimilarReasonsOut
+
+
+class SimilarAgentsResponse(BaseModel):
+    """The agents closest to ``agent``, best first. ``has_manifest`` False
+    means ``agent`` has no usable manifest, so only shared roles could match."""
+
+    agent: str
+    has_manifest: bool
+    matches: list[SimilarAgentOut] = Field(default_factory=list)
 
 
 # --- Agent manifest registration ---------------------------------------------

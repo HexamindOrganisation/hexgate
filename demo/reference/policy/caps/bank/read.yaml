@@ -1,0 +1,4 @@
+# Read-only account access.
+tools:
+  get_balance: { mode: allow }
+  list_transactions: { mode: allow }
