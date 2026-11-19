@@ -1,6 +1,6 @@
 name: docker-publish
 
-# Publish the platform images (api, mcp, collector) to GHCR and Docker Hub for
+# Publish the platform images (api, mcp, assistant, collector) to GHCR and Docker Hub for
 # a release tag: one build, so both registries serve the same digest.
 # Called by release.yml once a real release is tagged, or dispatched by hand
 # from main: with an existing tag to (re)publish it, or without one to
@@ -39,8 +39,9 @@ name: docker-publish
 # GHCR needs no secret: the job's GITHUB_TOKEN pushes there.
 #
 # REQUIRED after the first publish: make each GHCR package public. The first
-# push creates hexgate-api, hexgate-mcp and hexgate-collector as private org
-# packages, and `docker compose pull` gets `denied` until then:
+# push creates hexgate-api, hexgate-mcp, hexgate-assistant and
+# hexgate-collector as private org packages, and
+# `docker compose pull` gets `denied` until then:
 #   Organization → Packages → <package> → Package settings → Change visibility
 # ----------------------------------------------------------------------
 
@@ -94,6 +95,9 @@ jobs:
           - image: hexgate-mcp
             context: src
             dockerfile: src/platform/mcp/Dockerfile
+          - image: hexgate-assistant
+            context: src
+            dockerfile: src/platform/assistant/Dockerfile
           - image: hexgate-collector
             context: src/platform/collector
             dockerfile: src/platform/collector/Dockerfile
