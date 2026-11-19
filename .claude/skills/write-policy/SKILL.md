@@ -35,7 +35,11 @@ and prefer them over this file if they disagree:
    - the shape to write in: a single file, a `policies/` dir, or modules.
 
    Never invent a tool or argument name. A typo'd tool is silently default-denied, and a typo'd arg fails closed. If a name is unknown, ask, or state the assumption explicitly. If the agent's manifest JSON is available, pass it to `validate` (step 4), which flags tool, skill and argument names the agent doesn't have.
+
+   **When modifying an existing policy, record what it allows today.** For each role, dry-run the current policy on every tool and agent target in the manifest. Every result the request does not mention becomes a *must-stay* row in the decision table, re-tested in step 5. A request worded for one role or one path ("billing may never hand off to X") leaves every other role and path as it was. With no `admission` and no `agents:` block anywhere, agents are not gated: every `agent.*` call passes at runtime, whatever `policy test` prints for it.
 2. **Restate the intent as a decision table** before writing YAML. List role × tool × condition → ALLOW / DENY / APPROVAL_REQUIRED, plus what happens to anything unlisted. Surface every ambiguity here, e.g. "refunds up to 500 — inclusive? which currency?".
+
+   **An open choice is not a reason to stop.** When the request leaves something open (what a role may do, a limit, a scope), write the least-privilege reading now: read-only or nothing, and risky tools (money movement, delete, export, external send) denied. Validate and test it like any other policy, and list each such choice under **Assumptions** in the report, with the question that would widen it. Never invent a grant the request didn't ask for. Stop and ask without writing only when even the least-privilege reading cannot be expressed (e.g. the tool names are unknown).
 3. **Write the YAML.** Start deny-by-default and grant the minimum. Put each constraint at the narrowest scope that works (see *Where constraints live*).
 4. **Validate** until clean:
    ```bash
@@ -43,7 +47,7 @@ and prefer them over this file if they disagree:
    ```
    If `uv` fails building `biscuit-python` on Python 3.14, add `--python 3.13`.
    For a module tree, use `uv run hexgate policy check --dir <root> [--manifest m.json]` and `uv run hexgate policy resolve --dir <root>`.
-5. **Prove it.** Turn every row of the decision table into a `policy test` run, including the negative cases and the boundary values (`== limit`, `limit + 1`, missing arg, wrong type):
+5. **Prove it.** Turn every row of the decision table into a `policy test` run, including the must-stay rows, the negative cases and the boundary values (`== limit`, `limit + 1`, missing arg, wrong type). For every deny, especially one you added yourself, also test one legitimate value that looks like it (`a..b.md` next to a `..` guard, `environment.py` next to a `.env` deny); if it is wrongly denied, narrow the constraint rather than reporting the over-block as an accepted risk:
    ```bash
    uv run hexgate policy test <file> --role billing --tool refund_order \
        --args '{"amount": 500, "currency": "USD"}' [--attributes '{"department": "finance"}'] \
@@ -87,6 +91,8 @@ Always define a `default` role and keep it least-privilege, because unknown or a
 - `roles.yaml` maps each role to its list of capabilities.
 
 The composition rule is: fences intersect, grants union, and denies win. Three things are rejected in modules: policy-level `constraints:`, `default_policy.constraints`, and `file_scope`.
+
+**Never widen a boundary on a team's request.** A boundary belongs to whoever owns it (usually security). If a request needs more than a boundary allows, make only the changes that fit under it, leave the boundary unchanged, and tell the requester which boundary blocks it and who must change it. Widen a boundary only when the requester says they own it or explicitly asks for a boundary change. Add `ceiling + 1 → DENY` as a must-stay row. To add a hard deny, prefer the existing boundary file; a new boundary file needs `default_policy: { mode: allow }`, or it becomes a deny-all ceiling.
 
 ## Constraint cheat sheet
 
@@ -151,8 +157,8 @@ Always include a host clause. For subdomains, use `endswith(args.host, ".example
 - **`args.*` at policy level.** Tools and `agent.run` without that argument fail closed, which can lock the agent out at admission. Keep `args.*` on the tool, or scope it to the tool that has the argument: `tool != "refund_order" or args.amount <= 500`. Exempting only agent keys (`startswith(tool, "agent.") or …`) still fails every other tool without an `amount`.
 - **Run caps in `default_policy.constraints`.** They miss every tool listed under `tools:`. Put run caps in top-level `constraints:`.
 - **`mode: deny` plus constraints.** Deny wins regardless. Constraints only narrow a grant; they never grant.
-- **Admission is closed-world.** Once any role declares `admission`, every role without it is refused. `agents:` is closed-world too: an unlisted target is denied.
-- **`file_scope`.** It is rejected by the WASM/Rego build, which is what production uses. Prefer constraints: `startswith(args.file_path, "src/")`, or `every(args.paths, startswith(., "src/"))`.
+- **Admission and reach are opt-in, then global.** Until some role declares `admission` or `agents:`, that gate is off and everything passes. The first block, in any role, turns it on for every role: from then on a role without `admission` is refused and an unlisted `agents:` target is denied. So when you add the first block, re-grant every path that was reachable before, in every role and with the matching `via`, unless the request removes it.
+- **`file_scope`.** It is rejected by the WASM/Rego build, which is what production uses. Prefer constraints: `startswith(args.file_path, "src/")`, or `every(args.paths, startswith(., "src/"))`. A path prefix needs a traversal guard anchored on path segments: `not matches(args.file_path, "(^|/)\\.\\.(/|$)")`, never `not contains(args.file_path, "..")`, which also denies `src/a..b.md`.
 - **Strict types.** `true` is not `1`. A number compared against a string fails closed. A missing field fails closed.
 - **Rate limits.** Per-window caps exist as `agent_usage.*` and `user_usage.*`, but they are soft. Whenever the requester asks for "at most N" across runs, say so. Nothing in a policy enforces that exactly: `run.*` resets every run (`run.tool_calls < 3` at 10 runs/hour admits 30), so offer it only as a per-run bound. For a hard cross-run limit, offer `approval_required` (a person decides each call) or a limiter in the downstream service.
 - **Negated usage caps.** Under `on_unavailable: deny`, `not (agent_usage.x >= N)` passes on a missing value, and so does a boundary `deny` on `agent_usage.x >= N`, which runs under `not`; write `agent_usage.x < N` in a grant. `validate` flags both as `negated-usage-cap`. The same holds for `user_usage.*`.
