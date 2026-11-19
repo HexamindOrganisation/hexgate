@@ -570,14 +570,29 @@ class PolicyCheckResponse(BaseModel):
 class PolicyFileRead(BaseModel):
     name: str  # e.g. "policy.yaml", "caps/refunds.yaml"
     content: str
-    content_hash: str
+    content_hash: str  # hash of the parsed YAML: formatting and comments don't move it
+    text_hash: str  # sha256 of the stored text: any edit moves it
     updated_at: datetime
 
 
 class PolicyFileWrite(BaseModel):
-    """Body for upserting a policy file. The name comes from the URL."""
+    """Body for upserting a policy file. The name comes from the URL.
+
+    ``base_hash`` is the ``text_hash`` the caller read. When given and different
+    from the stored file's, or the file is missing, the write is refused as
+    stale. ``if_absent`` guards a create: when set and the file exists, the
+    write is refused as stale. With neither, nothing is checked. The two
+    together are refused (422)."""
 
     content: str
+    base_hash: str | None = None
+    if_absent: bool = False
+
+    @model_validator(mode="after")
+    def _check_precondition(self) -> "PolicyFileWrite":
+        if self.if_absent and self.base_hash is not None:
+            raise ValueError("send base_hash or if_absent, not both")
+        return self
 
 
 class PolicyFileDraft(BaseModel):
