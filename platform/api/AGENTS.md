@@ -6,7 +6,7 @@ After you make changes, run: `make fmt-check && make platform-api-check`  # fmt-
 - `main.py` — `create_app()` factory + router wiring only.
 - `constants.py` — shared seed identity (`DEFAULT_*`) + role names (`ROLE_*`) + the OAuth scope registry and route `openapi_extra` keys (`OAUTH_*`).
 - `core/` — infra: `db`, `keystore` (holds the process-wide signing singleton: the root key and, separately, the OAuth key), `oauth_tokens` (OAuth access-token mint/verify), `biscuits`, `clickhouse`, `relay`, `mailer`, `spa`, `ids`.
-- `deps/` — FastAPI dependency gates: `identity`, `tokens`, `org`, `project`, `ws`, `clickhouse`.
+- `deps/` — FastAPI dependency gates: `identity`, `tokens`, `org`, `project`, `origin`, `ws`, `clickhouse`.
 - `seeds/defaults.py` — first-boot triple-default seeding (agent seed data lives in `features/agents/seed_data.py`).
 - `features/<x>/` — one vertical slice per context (`tokens`, `projects`, `members`, `orgs`, `invitations`, `agents`, `audit`, `chat`, `auth`), each a `router.py` + `service.py` (agents also `compiler.py`). Domain exceptions live in their `service.py`; exceptions shared across features live with the shared machinery that raises them (e.g. `SchemaOutOfDate` in `core/clickhouse.py`, `EventOutOfWindow` in `query_scope.py`).
 - `jobs/<x>/` — standalone long-running processes (`enricher`: Redpanda → ClickHouse span-enricher, run via `python -m hexgate_api.jobs.enricher`). Share core/ + features/ services, never the FastAPI app.
