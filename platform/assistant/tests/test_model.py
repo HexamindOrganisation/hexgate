@@ -6,7 +6,11 @@ from pydantic_ai import Agent
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.models.test import TestModel
 
-from hexgate_assistant.model import MODEL_REQUEST_ATTEMPTS, build_model
+from hexgate_assistant.model import (
+    MODEL_REQUEST_ATTEMPTS,
+    PROVIDERS_BY_VENDOR,
+    build_model,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -50,8 +54,8 @@ class OpenRouter:
         )
 
 
-async def ask(openrouter: OpenRouter) -> str:
-    model = build_model(MODEL, "sk-or-test", transport=openrouter.transport())
+async def ask(openrouter: OpenRouter, name: str = MODEL) -> str:
+    model = build_model(name, "sk-or-test", transport=openrouter.transport())
     return (await Agent(model).run("hi")).output
 
 
@@ -89,7 +93,7 @@ async def test_when_every_try_is_429_then_first_try_and_3_retries_then_the_error
         await ask(openrouter)
 
     assert error.value.status_code == 429
-    assert len(openrouter.requests) == 1 + 3
+    assert len(openrouter.requests) == MODEL_REQUEST_ATTEMPTS
 
 
 @pytest.mark.parametrize("status", [400, 401])
@@ -118,3 +122,21 @@ def test_when_an_openrouter_model_has_no_key_then_build_model_refuses():
 def test_when_an_openrouter_model_has_no_vendor_then_build_model_refuses(slug: str):
     with pytest.raises(ValueError, match="vendor/model"):
         build_model(f"openrouter:{slug}", "sk-or-test")
+
+
+@pytest.mark.parametrize("vendor", sorted(PROVIDERS_BY_VENDOR))
+async def test_when_a_vendor_is_mapped_then_the_request_goes_only_to_its_providers(
+    vendor: str,
+):
+    openrouter = OpenRouter(200)
+
+    await ask(openrouter, f"openrouter:{vendor}/some-model")
+
+    body = json.loads(openrouter.requests[0].content)
+    assert body["provider"]["only"] == PROVIDERS_BY_VENDOR[vendor]
+
+
+@pytest.mark.parametrize("vendor", ["google", "x-ai", "mistralai", "meta-llama"])
+def test_when_a_vendor_is_not_mapped_then_build_model_refuses(vendor: str):
+    with pytest.raises(ValueError, match=f"'{vendor}'.*model.py"):
+        build_model(f"openrouter:{vendor}/some-model", "sk-or-test")

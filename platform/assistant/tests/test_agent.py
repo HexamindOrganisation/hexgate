@@ -1,6 +1,9 @@
+import asyncio
+
+import httpx2
 import pytest
 from pydantic_ai import ModelMessage, ModelResponse, TextPart, ToolCallPart
-from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic_ai.exceptions import ModelRequestTimeout, UsageLimitExceeded
 from pydantic_ai.messages import ModelRequest, RetryPromptPart, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
@@ -8,10 +11,12 @@ from hexgate_assistant import agent as agent_module
 from hexgate_assistant.agent import (
     ALLOWLIST,
     INSTRUCTIONS,
+    MODEL_SETTINGS,
     TURN_LIMITS,
     TurnDeps,
     build_agent,
 )
+from hexgate_assistant.model import build_model
 from tests.fake_mcp import FakeMCP, serve, snapshot_tools
 
 pytestmark = pytest.mark.anyio
@@ -29,6 +34,7 @@ async def server():
 def mcp(server: FakeMCP) -> FakeMCP:
     server.calls.clear()
     server.delay = 0.0
+    server.refusal = None
     return server
 
 
@@ -165,6 +171,53 @@ async def test_when_the_model_calls_an_unknown_tool_again_and_again_then_the_tur
     assert len(refusals) == 3
     assert all("Unknown tool name: 'policy_apply'" in r for r in refusals)
     assert mcp.calls == []
+
+
+def refusals_then_done(count: int, refusals: list[str]) -> FunctionModel:
+    """A model that calls a tool until it has seen ``count`` refusals."""
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        last = messages[-1]
+        assert isinstance(last, ModelRequest)
+        refusals.extend(
+            p.model_response_str() for p in last.parts if isinstance(p, ToolReturnPart)
+        )
+        if len(refusals) < count:
+            return ModelResponse(parts=[LIST_FILES])
+        return ModelResponse(parts=[TextPart("done")])
+
+    return FunctionModel(respond)
+
+
+async def test_when_mcp_refuses_calls_in_a_row_then_the_turn_goes_on(mcp: FakeMCP):
+    mcp.refusal = "role 'auditor' not defined"
+    refusals: list[str] = []
+
+    output = await run(refusals_then_done(3, refusals), mcp)
+
+    assert output == "done"
+    assert len(mcp.calls) == 3
+    assert all("role 'auditor' not defined" in r for r in refusals)
+
+
+async def test_when_a_model_request_runs_past_its_deadline_then_it_ends(
+    mcp: FakeMCP, monkeypatch: pytest.MonkeyPatch
+):
+    assert MODEL_SETTINGS.get("request_timeout") == 120
+    monkeypatch.setitem(MODEL_SETTINGS, "request_timeout", 0.2)
+
+    async def stall(request: httpx2.Request) -> httpx2.Response:
+        await asyncio.sleep(5)
+        raise AssertionError("the deadline did not cut the request")
+
+    model = build_model(
+        "openrouter:anthropic/claude-x",
+        "sk-or-test",
+        transport=httpx2.MockTransport(stall),
+    )
+
+    with pytest.raises(ModelRequestTimeout):
+        await build_agent(model, mcp.url).run("hi", deps=TurnDeps("tok-a"))
 
 
 def test_when_turn_deps_are_printed_then_the_token_is_not():

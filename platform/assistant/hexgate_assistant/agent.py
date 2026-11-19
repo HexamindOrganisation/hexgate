@@ -38,14 +38,14 @@ TURN_LIMITS = UsageLimits(
     tool_calls_limit=40,
     input_tokens_limit=300_000,
 )
-TOOL_RETRIES = TURN_LIMITS.tool_calls_limit
 
-# Per model request: 4 000 output tokens, and 120 s for each attempt (each
-# transport retry gets its own; on a streamed answer, the wait per chunk).
-MODEL_SETTINGS = ModelSettings(max_tokens=4000, timeout=120)
+# Per model request: 4 000 output tokens, and 120 s in all, every transport
+# retry and the whole streamed answer included (`request_timeout`). The SDK's
+# per-attempt `timeout` is kept at the same value, so it never ends first.
+MODEL_SETTINGS = ModelSettings(max_tokens=4000, timeout=120, request_timeout=120)
 
-# One MCP call. A call that runs over, like a call the server refuses, comes
-# back to the model as a failed tool call it may retry or work around.
+# One MCP call. A call that runs over comes back to the model as the tool's
+# result; a call the server refuses comes back as a retry (see `retries`).
 MCP_CALL_SECONDS = 30
 
 INSTRUCTIONS = (Path(__file__).parent / "prompt.md").read_text(encoding="utf-8")
@@ -68,28 +68,29 @@ def build_agent(model: Model, mcp_url: str) -> Agent[TurnDeps, str]:
         deps_type=TurnDeps,
         toolsets=[build_toolset(mcp_url)],
         model_settings=MODEL_SETTINGS,
-        # A call the model gets wrong (an unknown tool, bad arguments) uses
-        # a retry, and the default budget of one would end the turn on the
-        # second; the turn's limits bound it instead.
-        retries={"tools": TOOL_RETRIES},
+        # A refused call (the server's refusal, an unknown tool, bad
+        # arguments) uses a retry of that tool, and the default budget of one
+        # would end the turn on the second in a row. Refused calls do not
+        # count as tool calls; the turn's request limit bounds them.
+        retries={"tools": TURN_LIMITS.tool_calls_limit},
     )
 
 
 def build_toolset(mcp_url: str) -> AbstractToolset[TurnDeps]:
     """The MCP server's tools, cut to ``ALLOWLIST``.
 
-    The headers are a function of the run, so each turn opens its own MCP
-    session with its own user's token; no session is shared between users.
+    The bearer token is a function of the run, so each turn opens its own
+    MCP session with its own user's token; no session is shared between users.
     """
     # `read_timeout` bounds each MCP request; the agent's `tool_timeout`
     # would not, it only covers the agent's own function tools.
-    return MCPToolset(mcp_url, headers=_bearer, read_timeout=MCP_CALL_SECONDS).filtered(
+    return MCPToolset(mcp_url, auth=_token, read_timeout=MCP_CALL_SECONDS).filtered(
         _allowed
     )
 
 
-def _bearer(ctx: RunContext[TurnDeps]) -> dict[str, str]:
-    return {"Authorization": f"Bearer {ctx.deps.token}"}
+def _token(ctx: RunContext[TurnDeps]) -> str:
+    return ctx.deps.token
 
 
 def _allowed(_: RunContext[TurnDeps], tool: ToolDefinition) -> bool:

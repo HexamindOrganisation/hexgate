@@ -26,8 +26,18 @@ OPENROUTER_PREFIX = "openrouter:"
 
 # The first try and 3 retries, on 429, 5xx and overloaded (529).
 MODEL_REQUEST_ATTEMPTS = 4
-# A longer Retry-After is cut to this: the whole turn has 5 minutes.
+# A longer Retry-After is cut to this. The request's deadline (agent.py)
+# bounds its attempts and waits together; nothing here bounds the turn.
 MAX_RETRY_WAIT_SECONDS = 30
+
+# OpenRouter provider slugs per model vendor (the part of the model slug
+# before the "/"). The two names are not always the same, so each vendor is
+# listed by hand once its slugs are checked against OpenRouter's provider
+# list. A vendor missing here is refused at start-up, never routed by guess.
+PROVIDERS_BY_VENDOR: dict[str, list[str]] = {
+    "anthropic": ["anthropic"],
+    "openai": ["openai"],
+}
 
 
 def build_model(
@@ -57,17 +67,18 @@ def build_model(
 
 
 def provider_routing(slug: str) -> OpenRouterProviderConfig:
-    """Route ``vendor/model`` to ``vendor`` alone, with no data kept by it.
-
-    The vendor prefix is taken as OpenRouter's provider slug. Where the two
-    differ, OpenRouter finds no endpoint and every request fails: loud, never
-    routed elsewhere.
-    """
+    """Route ``vendor/model`` to the vendor's own providers alone, with no
+    fallback and no data kept by them."""
     vendor, sep, _ = slug.partition("/")
     if not sep or not vendor:
         raise ValueError(f"OpenRouter model {slug!r} is not of the form vendor/model")
+    if vendor not in PROVIDERS_BY_VENDOR:
+        raise ValueError(
+            f"OpenRouter vendor {vendor!r} has no provider slugs: add it to "
+            "PROVIDERS_BY_VENDOR in hexgate_assistant/model.py"
+        )
     return OpenRouterProviderConfig(
-        only=[vendor],
+        only=list(PROVIDERS_BY_VENDOR[vendor]),
         allow_fallbacks=False,
         data_collection="deny",
         zdr=True,

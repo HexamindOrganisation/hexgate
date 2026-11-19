@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
 from fastmcp.tools import Tool
 from fastmcp.tools.base import ToolResult
@@ -44,6 +45,8 @@ class FakeMCP:
     calls: list[Call] = field(default_factory=list)
     # Seconds every tool call sleeps before it answers.
     delay: float = 0.0
+    # Every tool call is refused with this message, as the server refuses one.
+    refusal: str | None = None
 
 
 class _RecordingTool(Tool):
@@ -54,6 +57,8 @@ class _RecordingTool(Tool):
         headers = get_http_headers(include={"authorization"})
         state.calls.append(Call(self.name, arguments, headers.get("authorization")))
         await asyncio.sleep(state.delay)
+        if state.refusal is not None:
+            raise ToolError(state.refusal)
         return ToolResult(
             content=[TextContent(type="text", text=f"{self.name} result")]
         )
