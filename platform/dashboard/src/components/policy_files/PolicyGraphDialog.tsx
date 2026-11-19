@@ -16,21 +16,26 @@ import {
   ViewportPortal,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useNavigate } from "react-router-dom";
-import { AlertTriangle, Maximize2, Network, Play, X } from "lucide-react";
+import { Network, Play, X } from "lucide-react";
 
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { usePolicyGraph } from "@/lib/policy_files";
-import { agentSubgraph } from "@/lib/agent-graph";
+import { SearchField } from "@/components/ui/search-field";
+import { matchesQuery, normalizeQuery } from "@/lib/search";
+import type { ToolCounts } from "@/lib/agent-graph";
 import {
-  ApiError,
-  type PolicyGraph,
-  type PolicyGraphEdge,
-  type PolicyTestOutcome,
+  compactAgentGraph,
+  GRAPH_ERROR_TEXT,
+  graphErrorOf,
+  type Verdict,
+} from "@/lib/agent-graph-view";
+import type {
+  PolicyGraph,
+  PolicyGraphEdge,
+  PolicyTestOutcome,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { VerdictIcon } from "@/components/ui/verdict-icon";
-import { HEX_H, HEX_W, delegates, layeredLayout } from "@/lib/graph-layout";
+import { HEX_H, HEX_W, layeredLayout } from "@/lib/graph-layout";
 import { pluralise } from "@/lib/format";
 import { verdictLabel } from "@/lib/policy";
 
@@ -102,11 +107,19 @@ const DIM = {
   tag: "var(--gr-dim-tag)",
 };
 
-type NodeData = { label: string; kind: string };
+type NodeData = {
+  label: string;
+  kind: string;
+  /** A second line under the label (a sub-agent's "6 tools"). */
+  sub?: string;
+};
 type EdgeData = Pick<
   PolicyGraphEdge,
-  "kind" | "via" | "verdict" | "constraints" | "roles"
+  "kind" | "via" | "constraints" | "roles"
 > & {
+  verdict: PolicyGraphEdge["verdict"];
+  /** The target's shape decides where the arrow stops. */
+  targetKind: string;
   /** Points the edge passes through (layout coordinates), so it routes
    * around nodes it doesn't touch. */
   bends?: { x: number; y: number }[];
@@ -137,8 +150,45 @@ const FocusCtx = createContext<FocusValue>({
   col: {},
 });
 
-/** A hexagon node (SVG outline + centered label), styled by kind. */
-function HexNode({ id, data }: NodeProps<Node<NodeData>>) {
+// Shape geometry in the node box (centre 68,59), shared with arrowGap.
+const AGENT_R = 56;
+const ROLE_HALF_W = 66;
+
+/** Each kind's outline in the node box, and a smaller inset one for hover:
+ * agents are circles, roles rectangles, tools and MCP servers hexagons. */
+function Shape({
+  kind,
+  inset,
+  ...props
+}: { kind: string; inset?: boolean } & React.SVGProps<SVGElement>) {
+  const p = props as React.SVGProps<never>;
+  if (kind === "agent")
+    return <circle cx={68} cy={59} r={inset ? AGENT_R - 10 : AGENT_R} {...p} />;
+  if (kind === "role")
+    return inset ? (
+      <rect x={10} y={31} width={116} height={56} rx={6} {...p} />
+    ) : (
+      <rect
+        x={68 - ROLE_HALF_W}
+        y={23}
+        width={ROLE_HALF_W * 2}
+        height={72}
+        rx={10}
+        {...p}
+      />
+    );
+  return inset ? (
+    <polygon
+      points="41.5,17.7 94.5,17.7 121,59 94.5,100.3 41.5,100.3 15,59"
+      {...p}
+    />
+  ) : (
+    <polygon points="34,6 102,6 136,59 102,112 34,112 0,59" {...p} />
+  );
+}
+
+/** A node (SVG outline in its kind's shape + centered label). */
+function GraphNode({ id, data }: NodeProps<Node<NodeData>>) {
   const k = KIND[data.kind] ?? KIND.tool;
   const focus = useContext(FocusCtx);
   const hovered = focus.hoverNode === id;
@@ -187,18 +237,19 @@ function HexNode({ id, data }: NodeProps<Node<NodeData>>) {
       >
         {/* fill/stroke go through `style`, not presentation attributes — CSS
             var() resolves in inline style but not in SVG attributes. */}
-        <polygon
-          points="34,6 102,6 136,59 102,112 34,112 0,59"
+        <Shape
+          kind={data.kind}
           strokeWidth={hovered ? 2.6 : 1.5}
           style={{ fill, stroke, transition: "fill 140ms, stroke 140ms" }}
         />
         {hovered && (
-          <polygon
-            points="41.5,17.7 94.5,17.7 121,59 94.5,100.3 41.5,100.3 15,59"
+          <Shape
+            kind={data.kind}
+            inset
             fill="none"
             strokeWidth="1"
             opacity="0.7"
-            style={{ stroke: k.stroke }}
+            style={{ stroke }}
           />
         )}
       </svg>
@@ -210,7 +261,10 @@ function HexNode({ id, data }: NodeProps<Node<NodeData>>) {
           {k.label}
         </span>
         <span
-          className="max-w-[104px] truncate font-mono text-[11px] font-medium"
+          className={cn(
+            "truncate font-mono text-[11px] font-medium",
+            data.kind === "agent" ? "max-w-[88px]" : "max-w-[104px]",
+          )}
           style={{
             color: text,
             fontWeight: hovered ? 700 : undefined,
@@ -220,15 +274,32 @@ function HexNode({ id, data }: NodeProps<Node<NodeData>>) {
         >
           {data.label}
         </span>
+        {data.sub && (
+          <span
+            className="font-sans text-[10px]"
+            style={{ color: tag, transition: "color 140ms" }}
+          >
+            {data.sub}
+          </span>
+        )}
       </div>
       <Handle type="source" position={Position.Right} style={centerHandle} />
     </div>
   );
 }
 
-// End the visible path just off the target hex's side tip (the path arrives
-// level), so the arrowhead sits on the border, not under the node.
+// End the visible path just off the target's border (the path arrives level),
+// so the arrowhead sits on the outline, not under the node.
 const ARROW_GAP = HEX_W / 2 + 4;
+/** How far left of the target's centre the arrow stops, by its shape. Off the
+ * centre line (a fanned edge) a hex's slanted side and a circle sit further
+ * in. */
+function arrowGap(kind: string | undefined, dy: number): number {
+  const round = (r: number) => Math.sqrt(Math.max(0, r * r - dy * dy));
+  if (kind === "agent") return round(AGENT_R) + 4;
+  if (kind === "role") return ROLE_HALF_W + 4;
+  return ARROW_GAP - (Math.abs(dy) * 34) / 53;
+}
 
 type EdgeGeometry = { path: string; labelX: number; labelY: number };
 
@@ -242,12 +313,15 @@ const midpoint = (p: Point, q: Point) => ({
  * enters its nodes level and runs level through each lane. The label sits on
  * the middle bend, or midway along the middle segment, so it's on the edge
  * and inside a reserved lane, never over a hex. */
-function bentPath(points: Point[], endDy = 0): EdgeGeometry {
+function bentPath(
+  points: Point[],
+  endDy = 0,
+  targetKind?: string,
+): EdgeGeometry {
   const last = points[points.length - 1];
   const before = points[points.length - 2];
-  // Arrive at the hex's side facing the edge; off the tip (a fanned edge)
-  // the slanted border sits further in, by its slope (34 across, 53 down).
-  const gap = ARROW_GAP - (Math.abs(endDy) * 34) / 53;
+  // Arrive at the side of the target facing the edge.
+  const gap = arrowGap(targetKind, endDy);
   const end = {
     x: last.x + (before.x > last.x ? gap : -gap),
     y: last.y + endDy,
@@ -296,6 +370,7 @@ function PolicyEdge({
       { x: targetX, y: targetY },
     ],
     data?.endDy,
+    data?.targetKind,
   );
   const color = VERDICT[data?.verdict ?? "allow"] ?? "#8a93a3";
   const dashed = data?.verdict === "deny" || data?.via === "handoff";
@@ -400,7 +475,7 @@ function ColumnLabels({
   );
 }
 
-const nodeTypes = { hex: HexNode };
+const nodeTypes = { shape: GraphNode };
 const edgeTypes = { policy: PolicyEdge };
 
 const nodeLabel = (id: string) => id.slice(id.indexOf(":") + 1);
@@ -477,11 +552,15 @@ function NodePanel({
   id,
   labelOf,
   onClose,
+  subTools,
 }: {
   graph: PolicyGraph;
   id: string;
   labelOf: (id: string) => string;
   onClose: () => void;
+  /** Set for a sub-agent: its tool count. This graph holds none of its own
+   * edges, so its tools are counted, not listed. */
+  subTools?: string;
 }) {
   const node = graph.nodes.find((n) => n.id === id);
   if (!node) return null;
@@ -490,15 +569,17 @@ function NodePanel({
   const calls = from.filter((e) => e.kind === "call");
   const open = calls.filter((e) => e.verdict !== "deny");
   const summary =
-    node.kind === "agent"
-      ? `Calls ${open.length} of ${pluralise(calls.length, "tool")} — ${
-          open.filter((e) => e.constraints.length > 0).length
-        } with constraints, ${
-          open.filter((e) => e.verdict === "approval_required").length
-        } behind approval.`
-      : node.kind === "role"
-        ? `Admitted by ${from.filter((e) => e.verdict !== "deny").length} of ${pluralise(from.length, "agent")}.`
-        : `Callable by ${to.filter((e) => e.verdict !== "deny").length} of ${pluralise(to.length, "agent")}.`;
+    subTools !== undefined
+      ? `A sub-agent this agent reaches. It may call ${subTools}; its own graph shows them.`
+      : node.kind === "agent"
+        ? `Calls ${open.length} of ${pluralise(calls.length, "tool")} — ${
+            open.filter((e) => e.constraints.length > 0).length
+          } with constraints, ${
+            open.filter((e) => e.verdict === "approval_required").length
+          } behind approval.`
+        : node.kind === "role"
+          ? `Admitted by ${from.filter((e) => e.verdict !== "deny").length} of ${pluralise(from.length, "agent")}.`
+          : `Callable by ${to.filter((e) => e.verdict !== "deny").length} of ${pluralise(to.length, "agent")}.`;
   return (
     <aside
       aria-label={`${node.kind} ${node.label}`}
@@ -521,18 +602,12 @@ function NodePanel({
         </button>
       </div>
       <p className="mt-1 font-sans text-xs text-muted-foreground">{summary}</p>
-      {node.kind === "agent" && (
+      {node.kind === "agent" && subTools === undefined && (
         <>
           <EdgeList
             labelOf={labelOf}
             title="Admitted roles"
             edges={to.filter((e) => e.kind === "admission")}
-            end="source"
-          />
-          <EdgeList
-            labelOf={labelOf}
-            title="Reached by"
-            edges={to.filter((e) => e.kind === "reach")}
             end="source"
           />
           <EdgeList
@@ -559,87 +634,218 @@ function NodePanel({
   );
 }
 
-type BypassWarning = {
-  toolId: string;
-  tool: string;
-  strict: string;
-  loose: string;
-  strictC: string[];
-  looseC: string[];
+const GROUP_WORD: Record<Verdict, string> = {
+  allow: "allowed",
+  approval_required: "need approval",
+  deny: "denied",
 };
 
-/** Flag a constraint-bypass: a tool T is callable by two agents A and B with
- * *different* constraints, and A can (transitively) reach B — so A can delegate
- * to B to call T beyond its own limit. Computed from the graph's call/reach
- * edges + their constraints. */
-function bypassWarnings(
-  graph: PolicyGraph,
-  labelOf: (id: string) => string,
-): BypassWarning[] {
-  const reachOut = new Map<string, string[]>();
-  graph.edges.forEach((e) => {
-    // A denied reach can't be used to delegate, so it never enables a bypass.
-    if (delegates(e)) {
-      const a = reachOut.get(e.source) ?? [];
-      a.push(e.target);
-      reachOut.set(e.source, a);
-    }
-  });
-  const closure = (start: string) => {
-    const seen = new Set<string>();
-    const q = [...(reachOut.get(start) ?? [])];
-    while (q.length) {
-      const u = q.shift() as string;
-      if (seen.has(u)) continue;
-      seen.add(u);
-      for (const v of reachOut.get(u) ?? []) q.push(v);
-    }
-    return seen;
-  };
-  const callers = new Map<string, { agent: string; constraints: string[] }[]>();
-  graph.edges.forEach((e) => {
-    if (e.kind === "call" && e.verdict !== "deny") {
-      const arr = callers.get(e.target) ?? [];
-      arr.push({ agent: e.source, constraints: e.constraints });
-      callers.set(e.target, arr);
-    }
-  });
-  const out: BypassWarning[] = [];
-  const seen = new Set<string>();
-  callers.forEach((cs, toolId) => {
-    for (const a of cs) {
-      const reach = closure(a.agent);
-      for (const b of cs) {
-        if (a.agent === b.agent || !reach.has(b.agent)) continue;
-        // Only a real bypass when `a` carries a limit `b` lacks — then delegating
-        // to `b` lets `a` escape it. If `b` is at least as restricted (or `a` is
-        // unconstrained) there is nothing to gain, so don't warn.
-        const escapes = a.constraints.some((c) => !b.constraints.includes(c));
-        if (a.constraints.length === 0 || !escapes) continue;
-        const key = `${toolId}|${a.agent}|${b.agent}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push({
-          toolId,
-          tool: labelOf(toolId),
-          strict: labelOf(a.agent),
-          loose: labelOf(b.agent),
-          strictC: a.constraints,
-          looseC: b.constraints,
-        });
-      }
-    }
-  });
-  return out;
+const GROUP_TITLE: Record<Verdict, string> = {
+  allow: "Allowed",
+  approval_required: "Approval",
+  deny: "Denied",
+};
+
+/** The tools behind a verdict group, with a filter; tabs switch group. */
+function GroupList({
+  verdict,
+  groups,
+  labelOf,
+  onPick,
+  onClose,
+}: {
+  verdict: Verdict;
+  groups: Map<Verdict, PolicyGraphEdge[]>;
+  labelOf: (id: string) => string;
+  onPick: (v: Verdict) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const edges = groups.get(verdict) ?? [];
+  const q = normalizeQuery(query);
+  const rows = q
+    ? edges.filter((e) => matchesQuery(labelOf(e.target), q))
+    : edges;
+  return (
+    <aside
+      aria-label={`${GROUP_TITLE[verdict]} tools`}
+      className="flex max-h-[55vh] w-72 flex-col rounded-lg border border-border bg-card/95 font-mono text-[11px] text-foreground shadow-xl backdrop-blur"
+    >
+      <div className="flex items-center gap-1 p-2">
+        {(["allow", "approval_required", "deny"] as const)
+          .filter((v) => groups.has(v))
+          .map((v) => (
+            <button
+              key={v}
+              type="button"
+              aria-pressed={v === verdict}
+              onClick={() => onPick(v)}
+              className={cn(
+                "h-7 flex-1 rounded border px-1.5 font-sans text-[11px] font-medium",
+                v === verdict
+                  ? "border-current"
+                  : "border-border text-muted-foreground hover:text-foreground",
+              )}
+              style={v === verdict ? { color: VERDICT[v] } : undefined}
+            >
+              {GROUP_TITLE[v]} {groups.get(v)!.length}
+            </button>
+          ))}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close tool list"
+          className="px-1 text-muted-foreground hover:text-foreground"
+        >
+          <X size={13} />
+        </button>
+      </div>
+      <SearchField
+        value={query}
+        onChange={setQuery}
+        placeholder={`filter ${edges.length} tools`}
+        label="Filter tools"
+        className="mx-2 mb-2 h-8"
+      />
+      <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        {rows.map((e) => (
+          <li
+            key={e.target}
+            className="flex items-center gap-2 rounded px-1.5 py-1.5"
+          >
+            <span className="truncate">{labelOf(e.target)}</span>
+            <span className="ml-auto max-w-[55%] truncate text-[10px] text-muted-foreground">
+              {e.constraints.join(" ∧ ") ||
+                (e.roles.length ? e.roles.join(", ") : "")}
+            </span>
+          </li>
+        ))}
+        {rows.length === 0 && (
+          <li className="px-1.5 py-1.5 text-muted-foreground">no match</li>
+        )}
+      </ul>
+    </aside>
+  );
 }
+
+/** Every sub-agent the agent reaches, from the policy: the ones the canvas
+ * leaves out included. Each with a page opens it. */
+function SubAgentList({
+  reaches,
+  labelOf,
+  canOpen,
+  onOpen,
+  onClose,
+}: {
+  reaches: PolicyGraphEdge[];
+  labelOf: (id: string) => string;
+  canOpen: (name: string) => boolean;
+  onOpen: (name: string) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const q = normalizeQuery(query);
+  const rows = reaches.filter((e) => matchesQuery(labelOf(e.target), q));
+  return (
+    <aside
+      aria-label="Sub-agents"
+      className="flex max-h-[55vh] w-72 flex-col rounded-lg border border-border bg-card/95 font-mono text-[11px] text-foreground shadow-xl backdrop-blur"
+    >
+      <div className="flex items-center gap-2 p-2">
+        <span className="font-sans text-xs font-medium">
+          {pluralise(new Set(reaches.map((e) => e.target)).size, "sub-agent")}
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close sub-agent list"
+          className="ml-auto px-1 text-muted-foreground hover:text-foreground"
+        >
+          <X size={13} />
+        </button>
+      </div>
+      <SearchField
+        value={query}
+        onChange={setQuery}
+        placeholder={`filter ${reaches.length} reaches`}
+        label="Filter sub-agents"
+        className="mx-2 mb-2 h-8"
+      />
+      <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+        {rows.map((e) => {
+          const name = labelOf(e.target);
+          return (
+            <li
+              key={`${e.target}:${e.via}`}
+              className="flex items-center gap-2 rounded px-1.5 py-1.5"
+            >
+              {canOpen(name) ? (
+                <button
+                  type="button"
+                  onClick={() => onOpen(name)}
+                  className="truncate text-left text-primary hover:underline"
+                >
+                  {name}
+                </button>
+              ) : (
+                <span className="truncate">{name}</span>
+              )}
+              <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[10px] text-muted-foreground">
+                {e.via}
+                <VerdictIcon
+                  verdict={e.verdict}
+                  className="size-3"
+                  style={{ color: VERDICT[e.verdict] }}
+                />
+              </span>
+            </li>
+          );
+        })}
+        {rows.length === 0 && (
+          <li className="px-1.5 py-1.5 text-muted-foreground">no match</li>
+        )}
+      </ul>
+    </aside>
+  );
+}
+
+/** "4 tools, 2 MCP tools", as the agent's own hub says it. */
+function toolsCaption(c: ToolCounts): string {
+  return (
+    [
+      c.tools && pluralise(c.tools, "tool"),
+      c.mcpTools && pluralise(c.mcpTools, "MCP tool"),
+    ]
+      .filter(Boolean)
+      .join(", ") || "no tools"
+  );
+}
+
+/** What PolicyFlow needs to draw one agent's graph (from agentSubgraph, the
+ * agent first): big agents group their tools by verdict, and the extra nodes
+ * act on click. */
+export type AgentGraphOptions = {
+  /** Tools a sub-agent may call, for its caption. */
+  toolCount: (agent: string) => ToolCounts;
+  /** A sub-agent was clicked: open its own graph. */
+  onOpenAgent: (agent: string) => void;
+  /** Whether a sub-agent has a page to open (`*` and agents the project
+   * doesn't list don't): those are pinned instead. */
+  hasPage?: (agent: string) => boolean;
+  /** "+N more roles" was clicked. */
+  onMoreRoles?: () => void;
+};
 
 export function PolicyFlow({
   graph,
   embedded = false,
+  agent,
 }: {
   graph: PolicyGraph;
   /** Inside a scrolling page: the wheel scrolls the page, not the canvas. */
   embedded?: boolean;
+  /** Draw `graph` as one agent's graph. */
+  agent?: AgentGraphOptions;
 }) {
   const [selected, setSelected] = useState<PolicyGraphEdge | null>(null);
   // A hovered node/edge is a temporary preview; a *pinned* node (clicked) shows
@@ -647,29 +853,81 @@ export function PolicyFlow({
   const [hover, setHover] = useState<{ node?: string; edge?: number } | null>(
     null,
   );
-  const [pinned, setPinned] = useState<string | null>(null);
+  const [pinnedId, setPinned] = useState<string | null>(null);
   const [animate, setAnimate] = useState(false);
-  const lay = useMemo(() => layeredLayout(graph), [graph]);
-  const labelOf = useMemo(() => labelLookup(graph), [graph]);
-  const warnings = useMemo(
-    () => bypassWarnings(graph, labelOf),
-    [graph, labelOf],
+  // The tool verdict whose names are listed beside the graph, and whether
+  // the list of every sub-agent is open.
+  const [group, setGroup] = useState<Verdict | null>(null);
+  const [agentsOpen, setAgentsOpen] = useState(false);
+  const isAgent = !!agent;
+  const view = useMemo(
+    () =>
+      isAgent
+        ? compactAgentGraph(graph)
+        : {
+            graph,
+            tools: new Map<Verdict, PolicyGraphEdge[]>(),
+            hiddenRoles: 0,
+            hiddenAgents: 0,
+            reaches: [],
+          },
+    [graph, isAgent],
   );
+  const shown = view.graph;
+  // A new drawn graph (refetch, role) re-indexes its edges: a hover keyed by
+  // the old index would light up another edge.
+  const [hoverFor, setHoverFor] = useState(shown);
+  if (hoverFor !== shown) {
+    setHoverFor(shown);
+    setHover(null);
+  }
+  const self = agent ? graph.nodes[0]?.id : undefined;
+  const pinned =
+    pinnedId && shown.nodes.some((n) => n.id === pinnedId) ? pinnedId : null;
+  const openGroup = group && view.tools.has(group) ? group : null;
+  // An edge card whose edge a refetch dropped closes for good. By key, not
+  // identity: every recompute rebuilds the edge objects.
+  const edgeKey = (e: PolicyGraphEdge) =>
+    `${e.source}>${e.target}:${e.kind}:${e.via ?? ""}`;
+  if (selected && !shown.edges.some((e) => edgeKey(e) === edgeKey(selected)))
+    setSelected(null);
+  const lay = useMemo(() => layeredLayout(shown), [shown]);
+  const labelOf = useMemo(() => labelLookup(graph), [graph]);
+  const kindOf = useMemo(
+    () => new Map(shown.nodes.map((n) => [n.id, n.kind])),
+    [shown],
+  );
+  const toolCount = agent?.toolCount;
+  const hasPage = agent?.hasPage;
+  const onOpenAgent = agent?.onOpenAgent;
+
+  /** A sub-agent with a page opens it; anything else is pinned (or
+   * unpinned) to trace its paths. */
+  const clickNode = (id: string) => {
+    const node = shown.nodes.find((n) => n.id === id);
+    const opens =
+      !!node &&
+      node.kind === "agent" &&
+      id !== self &&
+      (hasPage?.(node.label) ?? true);
+    if (onOpenAgent && node && opens) onOpenAgent(node.label);
+    else setPinned((p) => (p === id ? null : id));
+  };
 
   // Directed adjacency (out + in) for transitive reachability.
   const adj = useMemo(() => {
     const out = new Map<string, string[]>();
     const inc = new Map<string, string[]>();
-    graph.nodes.forEach((n) => {
+    shown.nodes.forEach((n) => {
       out.set(n.id, []);
       inc.set(n.id, []);
     });
-    graph.edges.forEach((e) => {
+    shown.edges.forEach((e) => {
       out.get(e.source)?.push(e.target);
       inc.get(e.target)?.push(e.source);
     });
     return { out, inc };
-  }, [graph]);
+  }, [shown]);
 
   // Provided via context so it never rebuilds the nodes/edges arrays (which
   // would flash the graph).
@@ -697,7 +955,7 @@ export function PolicyFlow({
       const bwd = bfs(adj.inc);
       const activeNodes = new Set<string>([...fwd, ...bwd]);
       const activeEdges = new Set<number>();
-      graph.edges.forEach((e, i) => {
+      shown.edges.forEach((e, i) => {
         if (fwd.has(e.source) || bwd.has(e.target)) activeEdges.add(i);
       });
       return { activeNodes, activeEdges, hoverNode: pinned, hoverEdge: null };
@@ -708,7 +966,7 @@ export function PolicyFlow({
       const activeEdges = new Set<number>();
       if (hover.node) {
         activeNodes.add(hover.node);
-        graph.edges.forEach((e, i) => {
+        shown.edges.forEach((e, i) => {
           if (e.source === hover.node || e.target === hover.node) {
             activeEdges.add(i);
             activeNodes.add(e.source);
@@ -716,7 +974,7 @@ export function PolicyFlow({
           }
         });
       } else if (hover.edge != null) {
-        const e = graph.edges[hover.edge];
+        const e = shown.edges[hover.edge];
         if (e) {
           activeEdges.add(hover.edge);
           activeNodes.add(e.source);
@@ -736,28 +994,36 @@ export function PolicyFlow({
       hoverNode: null,
       hoverEdge: null,
     };
-  }, [pinned, hover, graph, adj]);
+  }, [pinned, hover, shown, adj]);
 
   // Stable across hover (depend only on graph and its layout), so React Flow
   // doesn't regenerate markers or thrash edge mouse events.
   const nodes: Node<NodeData>[] = useMemo(
     () =>
-      graph.nodes.map((n) => ({
+      shown.nodes.map((n) => ({
         id: n.id,
-        type: "hex",
+        type: "shape",
         position: {
           x: (lay.pos[n.id]?.x ?? 0) - HEX_W / 2,
           y: (lay.pos[n.id]?.y ?? 0) - HEX_H / 2,
         },
-        data: { label: n.label, kind: n.kind },
+        data: {
+          label: n.label,
+          kind: n.kind,
+          // A sub-agent's caption: how many tools it may call.
+          sub:
+            toolCount && n.kind === "agent" && n.id !== self
+              ? toolsCaption(toolCount(n.label))
+              : undefined,
+        },
         draggable: false,
       })),
-    [graph, lay],
+    [shown, lay, toolCount, self],
   );
 
   const edges: Edge<EdgeData>[] = useMemo(
     () =>
-      graph.edges.map((e, i) => ({
+      shown.edges.map((e, i) => ({
         id: `e${i}`,
         source: e.source,
         target: e.target,
@@ -774,11 +1040,12 @@ export function PolicyFlow({
           verdict: e.verdict,
           constraints: e.constraints,
           roles: e.roles,
+          targetKind: kindOf.get(e.target) ?? "tool",
           bends: lay.bends[i],
           endDy: lay.endDy[i],
         },
       })),
-    [graph, lay],
+    [shown, lay, kindOf],
   );
 
   const ctxValue = useMemo<FocusValue>(
@@ -788,377 +1055,345 @@ export function PolicyFlow({
     [focus, animate, lay],
   );
 
+  const tally = (v: Verdict) => view.tools.get(v)?.length ?? 0;
+  const toolTotal = [...view.tools.values()].reduce(
+    (n, es) => n + es.length,
+    0,
+  );
+  const summary =
+    !!agent && (toolTotal > 0 || view.hiddenRoles > 0 || view.hiddenAgents > 0);
   return (
     <FocusCtx.Provider value={ctxValue}>
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        onEdgeClick={(_, edge) => {
-          const idx = Number(edge.id.slice(1));
-          setSelected(graph.edges[idx] ?? null);
-        }}
-        onNodeClick={(_, node) =>
-          setPinned((p) => (p === node.id ? null : node.id))
-        }
-        onPaneClick={() => {
-          setSelected(null);
-          setPinned(null);
-        }}
-        onNodeMouseEnter={(_, node) => setHover({ node: node.id })}
-        onNodeMouseLeave={() => setHover(null)}
-        onEdgeMouseEnter={(_, edge) =>
-          setHover({ edge: Number(edge.id.slice(1)) })
-        }
-        onEdgeMouseLeave={() => setHover(null)}
-        fitView
-        // Room above the top row for the column headings, which sit in the
-        // viewport rather than among the fitted nodes.
-        fitViewOptions={{
-          padding: { top: "96px", right: 0.2, bottom: 0.2, left: 0.2 },
-        }}
-        proOptions={{ hideAttribution: true }}
-        minZoom={0.3}
-        maxZoom={1.8}
-        // Map-like feel: drag empty space OR two-finger trackpad scroll to pan
-        // (drag only when embedded in a page, where the wheel scrolls it);
-        // pinch (or the +/- controls) to zoom. Default scroll-to-zoom reads as
-        // "can't pan" on a Mac trackpad.
-        panOnDrag
-        panOnScroll={!embedded}
-        preventScrolling={!embedded}
-        zoomOnScroll={false}
-        zoomOnPinch
-        style={{
-          background: "hsl(var(--editor))",
-          width: "100%",
-          height: "100%",
-        }}
-      >
-        <Background color="var(--gr-dots)" gap={22} />
-        <ColumnLabels columns={lay.columns} />
-        <Controls
-          showInteractive={false}
-          style={{
-            background: "hsl(var(--card))",
-            border: "1px solid hsl(var(--border))",
-            borderRadius: 8,
-          }}
-        />
-        <Panel position="top-right" className="flex flex-col items-end gap-2">
-          <button
-            onClick={() => setAnimate((a) => !a)}
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-mono text-[11px] backdrop-blur transition-colors",
-              animate
-                ? "border-primary/60 bg-primary/20 text-foreground"
-                : "border-border bg-card/90 text-muted-foreground hover:text-foreground",
-            )}
-            title={
-              pinned
-                ? "Animate invocation flow along the focused paths"
-                : "Animate invocation flow along every path"
-            }
-          >
-            <Play size={12} />
-            {animate ? "Animating…" : "Animate flow"}
-          </button>
-          {pinned && (
-            <NodePanel
-              graph={graph}
-              id={pinned}
-              labelOf={labelOf}
-              onClose={() => setPinned(null)}
-            />
-          )}
-          {/* Stacked under the node panel so the two never overlap. */}
-          {selected && (
-            // Capped and scrolling like the node panel, so the two together
-            // stay clear of the canvas bottom and the bypass warnings.
-            <div className="max-h-[25vh] w-64 overflow-y-auto rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur">
-              <div className="mb-2 flex items-center justify-between">
-                <VerdictTag verdict={selected.verdict} />
-                <button
-                  onClick={() => setSelected(null)}
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  <X size={13} />
-                </button>
-              </div>
-              <div className="mb-1 text-foreground">
-                {labelOf(selected.source)}
-                <span className="text-muted-foreground/50">
-                  {" "}
-                  {selected.kind === "reach"
-                    ? `→ ${selected.via} →`
-                    : selected.kind === "admission"
-                      ? "→ admits →"
-                      : "→ calls →"}{" "}
+      <div className="flex h-full flex-col">
+        {summary && (
+          // What the canvas leaves out, as real counts and links, never as
+          // nodes: tools by verdict past a few, and the extra roles and agents.
+          <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2 text-[11px]">
+            {toolTotal > 0 && (
+              <>
+                <span className="text-muted-foreground">
+                  {pluralise(toolTotal, "tool")}:
                 </span>
-                {labelOf(selected.target)}
-              </div>
-              {selected.roles.length > 0 && (
-                <div className="mb-2 text-[10px] text-muted-foreground">
-                  role{selected.roles.length > 1 ? "s" : ""}:{" "}
-                  {selected.roles.join(", ")}
-                </div>
-              )}
-              {selected.constraints.length > 0 ? (
-                <div className="space-y-1">
-                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    constraints
-                  </div>
-                  {selected.constraints.map((c, i) => (
-                    <div
-                      key={i}
-                      className="rounded bg-muted px-2 py-1 text-[10.5px] text-foreground"
+                {(["allow", "approval_required", "deny"] as const)
+                  .filter((v) => tally(v) > 0)
+                  .map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      aria-pressed={openGroup === v}
+                      onClick={() => setGroup((g) => (g === v ? null : v))}
+                      className={cn(
+                        "inline-flex h-7 items-center gap-1.5 rounded-md border px-2 font-medium transition-colors",
+                        openGroup === v
+                          ? "border-current"
+                          : "border-border hover:bg-accent",
+                      )}
+                      style={{ color: VERDICT[v] }}
                     >
-                      {c}
-                    </div>
+                      <VerdictIcon verdict={v} className="size-3" />
+                      {tally(v)} {GROUP_WORD[v]}
+                    </button>
                   ))}
-                </div>
-              ) : (
-                <div className="text-[10px] text-muted-foreground">
-                  no constraints
+              </>
+            )}
+            {view.hiddenRoles > 0 && agent?.onMoreRoles && (
+              <button
+                type="button"
+                onClick={agent.onMoreRoles}
+                className="inline-flex h-7 items-center rounded-md border border-dashed border-border px-2 font-medium text-muted-foreground hover:text-foreground"
+              >
+                +{pluralise(view.hiddenRoles, "more role")}
+              </button>
+            )}
+            {view.hiddenAgents > 0 && (
+              <button
+                type="button"
+                aria-pressed={agentsOpen}
+                onClick={() => setAgentsOpen((o) => !o)}
+                className="inline-flex h-7 items-center rounded-md border border-dashed border-border px-2 font-medium text-muted-foreground hover:text-foreground"
+              >
+                +{pluralise(view.hiddenAgents, "more sub-agent")}
+              </button>
+            )}
+          </div>
+        )}
+        <div className="relative min-h-0 flex-1">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            onEdgeClick={(_, edge) => {
+              setSelected(shown.edges[Number(edge.id.slice(1))] ?? null);
+            }}
+            onNodeClick={(_, node) => clickNode(node.id)}
+            onPaneClick={() => {
+              setSelected(null);
+              setPinned(null);
+            }}
+            onNodeMouseEnter={(_, node) => setHover({ node: node.id })}
+            onNodeMouseLeave={() => setHover(null)}
+            onEdgeMouseEnter={(_, edge) =>
+              setHover({ edge: Number(edge.id.slice(1)) })
+            }
+            onEdgeMouseLeave={() => setHover(null)}
+            fitView
+            // Room above the top row for the column headings, which sit in the
+            // viewport rather than among the fitted nodes.
+            fitViewOptions={{
+              padding: { top: "96px", right: 0.2, bottom: 0.2, left: 0.2 },
+            }}
+            proOptions={{ hideAttribution: true }}
+            minZoom={0.3}
+            maxZoom={1.8}
+            // Map-like feel: drag empty space OR two-finger trackpad scroll to pan
+            // (drag only when embedded in a page, where the wheel scrolls it);
+            // pinch (or the +/- controls) to zoom. Default scroll-to-zoom reads as
+            // "can't pan" on a Mac trackpad.
+            panOnDrag
+            panOnScroll={!embedded}
+            preventScrolling={!embedded}
+            zoomOnScroll={false}
+            zoomOnPinch
+            style={{
+              background: "hsl(var(--editor))",
+              width: "100%",
+              height: "100%",
+            }}
+          >
+            <Background color="var(--gr-dots)" gap={22} />
+            <ColumnLabels columns={lay.columns} />
+            <Controls
+              showInteractive={false}
+              style={{
+                background: "hsl(var(--card))",
+                border: "1px solid hsl(var(--border))",
+                borderRadius: 8,
+              }}
+            />
+            <Panel
+              position="top-right"
+              className="flex flex-col items-end gap-2"
+            >
+              <button
+                onClick={() => setAnimate((a) => !a)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-mono text-[11px] backdrop-blur transition-colors",
+                  animate
+                    ? "border-primary/60 bg-primary/20 text-foreground"
+                    : "border-border bg-card/90 text-muted-foreground hover:text-foreground",
+                )}
+                title={
+                  pinned
+                    ? "Animate invocation flow along the focused paths"
+                    : "Animate invocation flow along every path"
+                }
+              >
+                <Play size={12} />
+                {animate ? "Animating…" : "Animate flow"}
+              </button>
+              {agentsOpen && view.hiddenAgents > 0 && (
+                <SubAgentList
+                  reaches={view.reaches}
+                  labelOf={labelOf}
+                  canOpen={(n) => !!onOpenAgent && (hasPage?.(n) ?? true)}
+                  onOpen={(n) => onOpenAgent?.(n)}
+                  onClose={() => setAgentsOpen(false)}
+                />
+              )}
+              {openGroup && (
+                <GroupList
+                  verdict={openGroup}
+                  groups={view.tools}
+                  labelOf={labelOf}
+                  onPick={setGroup}
+                  onClose={() => setGroup(null)}
+                />
+              )}
+              {pinned && (
+                <NodePanel
+                  graph={graph}
+                  id={pinned}
+                  labelOf={labelOf}
+                  onClose={() => setPinned(null)}
+                  subTools={
+                    toolCount &&
+                    pinned !== self &&
+                    kindOf.get(pinned) === "agent"
+                      ? toolsCaption(toolCount(labelOf(pinned)))
+                      : undefined
+                  }
+                />
+              )}
+              {/* Stacked under the node panel so the two never overlap. */}
+              {selected && (
+                // Capped and scrolling like the node panel, so the two together
+                // stay clear of the canvas bottom.
+                <div className="max-h-[25vh] w-64 overflow-y-auto rounded-lg border border-border bg-card/95 p-3 font-mono text-[11px] text-foreground shadow-xl backdrop-blur">
+                  <div className="mb-2 flex items-center justify-between">
+                    <VerdictTag verdict={selected.verdict} />
+                    <button
+                      onClick={() => setSelected(null)}
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                  <div className="mb-1 text-foreground">
+                    {labelOf(selected.source)}
+                    <span className="text-muted-foreground/50">
+                      {" "}
+                      {selected.kind === "reach"
+                        ? `→ ${selected.via} →`
+                        : selected.kind === "admission"
+                          ? "→ admits →"
+                          : "→ calls →"}{" "}
+                    </span>
+                    {labelOf(selected.target)}
+                  </div>
+                  {selected.roles.length > 0 && (
+                    <div className="mb-2 text-[10px] text-muted-foreground">
+                      role{selected.roles.length > 1 ? "s" : ""}:{" "}
+                      {selected.roles.join(", ")}
+                    </div>
+                  )}
+                  {selected.constraints.length > 0 ? (
+                    <div className="space-y-1">
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        constraints
+                      </div>
+                      {selected.constraints.map((c, i) => (
+                        <div
+                          key={i}
+                          className="rounded bg-muted px-2 py-1 text-[10.5px] text-foreground"
+                        >
+                          {c}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-muted-foreground">
+                      no constraints
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
-          )}
-        </Panel>
-        <Panel position="top-left">
-          <div className="flex flex-wrap gap-3 rounded-lg border border-border bg-card/90 px-3 py-2 font-mono text-[10px] text-muted-foreground backdrop-blur">
-            {(["allow", "approval_required", "deny"] as const).map((v) => (
-              <span key={v} className="inline-flex items-center gap-1.5">
-                <i
-                  className="inline-block h-2 w-4 rounded"
-                  style={{ background: VERDICT[v] }}
-                />
-                <VerdictIcon
-                  verdict={v}
-                  className="size-2.5"
-                  style={{ color: VERDICT[v] }}
-                />
-                {verdictLabel(v)}
-              </span>
-            ))}
-            <span className="text-muted-foreground/40">·</span>
-            <span>
-              {pinned
-                ? "focused — click empty space to reset"
-                : "click a node to trace its paths"}
-            </span>
-          </div>
-        </Panel>
-        {warnings.length > 0 && (
-          <Panel position="bottom-center">
-            <div className="max-w-[560px] rounded-lg border border-deny/50 bg-deny/10 px-3 py-2 font-mono text-[10.5px] text-deny shadow-xl backdrop-blur">
-              <div className="mb-1.5 flex items-center gap-1.5 font-semibold text-deny">
-                <AlertTriangle size={12} />
-                review carefully · {warnings.length} constraint-bypass path
-                {warnings.length > 1 ? "s" : ""}
-              </div>
-              <div className="space-y-1">
-                {warnings.slice(0, 3).map((w, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setPinned(w.toolId)}
-                    className="block w-full text-left leading-relaxed hover:text-deny"
-                  >
-                    <b className="text-deny">{w.strict}</b> can delegate to{" "}
-                    <b className="text-deny">{w.loose}</b> to call{" "}
-                    <b className="text-deny">{w.tool}</b> beyond its own limit
-                    <span className="text-muted-foreground">
-                      {" "}
-                      — {w.strict}: {w.strictC.join(" ∧ ") || "no limit"} ·{" "}
-                      {w.loose}: {w.looseC.join(" ∧ ") || "no limit"}
-                    </span>
-                  </button>
+            </Panel>
+            <Panel position="top-left">
+              <div className="flex flex-wrap gap-3 rounded-lg border border-border bg-card/90 px-3 py-2 font-mono text-[10px] text-muted-foreground backdrop-blur">
+                {(["allow", "approval_required", "deny"] as const).map((v) => (
+                  <span key={v} className="inline-flex items-center gap-1.5">
+                    <i
+                      className="inline-block h-2 w-4 rounded"
+                      style={{ background: VERDICT[v] }}
+                    />
+                    <VerdictIcon
+                      verdict={v}
+                      className="size-2.5"
+                      style={{ color: VERDICT[v] }}
+                    />
+                    {verdictLabel(v)}
+                  </span>
                 ))}
+                <span className="text-muted-foreground/40">·</span>
+                <span>
+                  {pinned
+                    ? "focused — click empty space to reset"
+                    : "click a node to trace its paths"}
+                </span>
               </div>
-            </div>
-          </Panel>
-        )}
-      </ReactFlow>
+            </Panel>
+          </ReactFlow>
+        </div>
+      </div>
     </FocusCtx.Provider>
-  );
-}
-
-const GRAPH_ACTION_BTN =
-  "inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent";
-
-/** The graph itself — a header (title, role filter, and an optional
- * `headerRight` action) over the ReactFlow canvas. Reused by the inline dialog
- * and the full-page `/graph` route; `agent` narrows it to that agent's
- * neighbourhood (the agent hub). */
-export function PolicyGraphView({
-  projectId,
-  roleNames = [],
-  enabled = true,
-  headerRight,
-  agent,
-}: {
-  projectId: string;
-  agent?: string;
-  /** Load-time fallback for the role filter; once the graph resolves, its own
-   * `roles` (every role across all agents) take over. */
-  roleNames?: string[];
-  enabled?: boolean;
-  headerRight?: React.ReactNode;
-}) {
-  const [role, setRole] = useState<string>("");
-  const graph = usePolicyGraph(projectId, role || undefined, enabled);
-  // In agent mode the role filter only offers roles that touch this agent, read
-  // off the unfiltered graph (the role-filtered one would shrink the list).
-  const base = usePolicyGraph(projectId, undefined, enabled && !!agent);
-  const roleOptions = useMemo(() => {
-    if (!agent) return graph.data?.roles ?? roleNames;
-    if (!base.data) return roleNames;
-    // Its role nodes (admission), plus every role its own edges carry: a
-    // policy without `admission:` has no role nodes but per-role edges.
-    const sub = agentSubgraph(base.data, agent);
-    const self = sub.nodes.find((n) => n.kind === "agent" && n.label === agent);
-    const roles = new Set(
-      sub.nodes.filter((n) => n.kind === "role").map((n) => n.label),
-    );
-    for (const e of sub.edges)
-      if (e.source === self?.id || e.target === self?.id)
-        e.roles.forEach((r) => roles.add(r));
-    return [...roles].sort();
-  }, [agent, base.data, graph.data, roleNames]);
-  const errorText = graph.isError ? graphErrorText(graph.error) : null;
-  // An agent with no edges is a lone node — nothing to draw.
-  const minNodes = agent ? 2 : 1;
-  const shown = useMemo(
-    () => (agent && graph.data ? agentSubgraph(graph.data, agent) : graph.data),
-    [agent, graph.data],
-  );
-
-  return (
-    <div
-      className="flex h-full flex-col"
-      style={{ background: "hsl(var(--editor))" }}
-    >
-      <div className="flex flex-row items-center justify-between gap-3 border-b border-border px-4 py-3">
-        <div className="flex items-center gap-2 text-sm text-foreground">
-          <Network size={16} className="text-primary" />
-          {agent ? (
-            <span>
-              <span className="font-mono">{agent}</span> · policy graph
-            </span>
-          ) : (
-            "Policy graph"
-          )}
-        </div>
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
-            role
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-              className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground"
-            >
-              <option value="">all roles</option>
-              {roleOptions.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-          </label>
-          {headerRight}
-        </div>
-      </div>
-      <div className="relative flex-1">
-        {graph.isLoading && (
-          <div className="grid h-full place-items-center font-mono text-xs text-muted-foreground">
-            resolving graph…
-          </div>
-        )}
-        {/* A failed refetch over a cached graph keeps the graph, with a
-            banner; only with nothing cached does the error take the box. */}
-        {errorText && !graph.data && (
-          <div className="grid h-full place-items-center px-8 text-center font-mono text-xs text-deny">
-            {errorText}
-          </div>
-        )}
-        {errorText && graph.data && (
-          <div className="absolute inset-x-0 top-0 z-10 border-b border-border bg-card/90 px-4 py-1.5 font-mono text-[11px] text-muted-foreground">
-            {errorText} showing the last graph loaded.
-          </div>
-        )}
-        {shown && shown.nodes.length >= minNodes && (
-          <PolicyFlow graph={shown} />
-        )}
-        {shown && shown.nodes.length < minNodes && (
-          <div className="grid h-full place-items-center font-mono text-xs text-muted-foreground">
-            {agent
-              ? `no roles, tools or reach for ${agent}${role ? ` as ${role}` : ""}.`
-              : "no agents bound yet — add a role binding to see the graph."}
-          </div>
-        )}
-      </div>
-    </div>
   );
 }
 
 /** Why the graph failed, by status (as the agent hub reads it). */
 function graphErrorText(error: unknown): string {
-  const status = error instanceof ApiError ? error.status : null;
-  if (status === 422)
-    return "the modules don't compose — fix the lints, then reopen the graph.";
-  if (status === 404) return "you don't have access to this project's policy.";
-  return "couldn't load the graph — try again.";
+  return GRAPH_ERROR_TEXT[graphErrorOf(error)];
 }
 
+/** One agent's graph, full size: the hub's Expand. The hub owns the data and
+ * the role filter, so the dialog and the Overview always agree. */
 export function PolicyGraphDialog({
   open,
   onOpenChange,
-  projectId,
-  roleNames,
   agent,
+  graph,
+  loading,
+  error,
+  options,
+  roleControl,
+  flowKey,
+  role,
+  children,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  projectId: string;
-  roleNames: string[];
-  /** Narrow the graph to this agent's neighbourhood. */
-  agent?: string;
+  agent: string;
+  /** agentSubgraph of the role-filtered graph; null while there's none. */
+  graph: PolicyGraph | null;
+  loading: boolean;
+  error: unknown;
+  options: AgentGraphOptions;
+  /** The role picker button. */
+  roleControl?: React.ReactNode;
+  /** Remounts (and refits) the canvas for a new agent or role. */
+  flowKey?: string;
+  /** The role the graph is for, if one is picked. */
+  role?: string | null;
+  /** Layers of this dialog, e.g. the role picker opened from it. */
+  children?: React.ReactNode;
 }) {
-  const navigate = useNavigate();
+  const errorText = error ? graphErrorText(error) : null;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="flex h-[82vh] max-w-[min(96vw,1120px)] flex-col gap-0 overflow-hidden p-0"
         style={{ background: "hsl(var(--editor))" }}
       >
-        <DialogTitle className="sr-only">
-          {agent ? `${agent} policy graph` : "Policy graph"}
-        </DialogTitle>
-        <PolicyGraphView
-          projectId={projectId}
-          roleNames={roleNames}
-          enabled={open}
-          agent={agent}
-          headerRight={
-            <button
-              type="button"
-              onClick={() => {
-                onOpenChange(false);
-                navigate("/graph");
-              }}
-              title={
-                agent
-                  ? "Open the whole project's graph"
-                  : "Open the full graph view"
-              }
-              className={cn(GRAPH_ACTION_BTN, "mr-6")}
-            >
-              <Maximize2 size={12} />
-              {agent ? "Project graph" : "Full view"}
-            </button>
-          }
-        />
+        <DialogTitle className="sr-only">{`${agent} policy graph`}</DialogTitle>
+        <div className="flex flex-row items-center justify-between gap-3 border-b border-border px-4 py-3 pr-12">
+          <div className="flex items-center gap-2 text-sm text-foreground">
+            <Network size={16} className="text-primary" />
+            <span>
+              <span className="font-mono">{agent}</span> · policy graph
+            </span>
+          </div>
+          {roleControl}
+        </div>
+        <div className="relative flex-1">
+          {loading && !graph && (
+            <div className="grid h-full place-items-center font-mono text-xs text-muted-foreground">
+              resolving graph…
+            </div>
+          )}
+          {/* A failed refetch over a cached graph keeps the graph, with a
+              banner; only with nothing cached does the error take the box. */}
+          {errorText && !graph && (
+            <div className="grid h-full place-items-center px-8 text-center font-mono text-xs text-deny">
+              {errorText}
+            </div>
+          )}
+          {errorText && graph && (
+            <div className="absolute inset-x-0 top-0 z-10 border-b border-border bg-card/90 px-4 py-1.5 font-mono text-[11px] text-muted-foreground">
+              {errorText} showing the last graph loaded.
+            </div>
+          )}
+          {graph && graph.nodes.length > 1 && (
+            <PolicyFlow key={flowKey} graph={graph} agent={options} />
+          )}
+          {graph && graph.nodes.length <= 1 && (
+            <div className="grid h-full place-items-center font-mono text-xs text-muted-foreground">
+              {role
+                ? `as ${role}, ${agent} may use no tools or sub-agents.`
+                : `no roles, tools or sub-agents for ${agent}.`}
+            </div>
+          )}
+        </div>
+        {children}
       </DialogContent>
     </Dialog>
   );
