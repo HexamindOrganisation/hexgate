@@ -1,6 +1,6 @@
-/** The shapes the chat components render. Declared here, not imported from a
- * store, so any chat surface can feed them; a store's own types satisfy them
- * structurally. */
+/** The shapes the chat components render, and the single declaration of them.
+ * They import from no store, so any chat surface can feed them; the
+ * Playground store (lib/playground.ts) extends these rather than redeclaring. */
 
 export interface ChatToolCall {
   id: string;
