@@ -2,6 +2,7 @@ import { act, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useActive } from "@/lib/active";
+import { useUi } from "@/lib/ui";
 import { HomePage } from "@/routes/Home";
 import { renderWithProviders } from "@/test/render";
 
@@ -107,6 +108,7 @@ function stall(path: string) {
 describe("HomePage", () => {
   beforeEach(() => {
     act(() => useActive.setState({ activeOrgId: "o1", activeProjectId: "p1" }));
+    useUi.setState({ quickstartOpen: false, quickstartSeen: false });
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -124,6 +126,56 @@ describe("HomePage", () => {
     );
     expect(screen.getByText("743.0K")).toBeInTheDocument();
     expect(screen.getByText(/refund_order/)).toBeInTheDocument();
+  });
+
+  const agentsNamed = (names: string[]) =>
+    names.map((name) => ({
+      name,
+      manifest: { tools: [] },
+      version: 1,
+      content_hash: "",
+      updated_at: "",
+    }));
+  const agentRows = () =>
+    screen
+      .getAllByRole("link")
+      .filter((l) => l.getAttribute("href")?.startsWith("/agents/"));
+
+  it("caps the agents at the most denied, then busiest", async () => {
+    const names = Array.from({ length: 10 }, (_, i) => `bot-${i}`);
+    stub({
+      "/v1/projects/p1/agents/manifest": agentsNamed(names),
+      "/v1/projects/p1/audit/summary": {
+        totals: counts(1050, 5, 0),
+        by_agent: [
+          { key: "bot-8", ...counts(1000, 0, 0) },
+          // Fewer calls, but denied ones: it leads.
+          { key: "bot-9", ...counts(50, 5, 0) },
+        ],
+        by_role: [],
+        by_tool: [],
+        by_user: [],
+      },
+    });
+    renderWithProviders(<HomePage />);
+    expect(
+      await screen.findByRole("link", { name: /View all 10/ }),
+    ).toHaveAttribute("href", "/agents");
+    await waitFor(() => expect(agentRows()[0]).toHaveTextContent("bot-9"));
+    expect(agentRows()).toHaveLength(8);
+    expect(agentRows()[1]).toHaveTextContent("bot-8");
+    expect(screen.getByText("top 8 of 10")).toBeInTheDocument();
+    // Quiet agents past the cap are left out.
+    expect(screen.queryByRole("link", { name: /bot-7/ })).toBeNull();
+  });
+
+  it("lists every agent, with no View all, up to the cap", async () => {
+    const names = Array.from({ length: 8 }, (_, i) => `bot-${i}`);
+    stub({ "/v1/projects/p1/agents/manifest": agentsNamed(names) });
+    renderWithProviders(<HomePage />);
+    expect(await screen.findByRole("link", { name: "Manage" })).toBeVisible();
+    await waitFor(() => expect(agentRows()).toHaveLength(8));
+    expect(screen.queryByRole("link", { name: /View all \d/ })).toBeNull();
   });
 
   it("lists what needs attention: bursts, approvals and stale keys", async () => {
@@ -231,6 +283,144 @@ describe("HomePage", () => {
     renderWithProviders(<HomePage />);
     expect(
       await screen.findByText("Nothing needs a look right now."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the setup checklist while the project has no API key", async () => {
+    stub();
+    renderWithProviders(<HomePage />);
+    expect(await screen.findByText(/2 of 3 done/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /mint a key/i })).toHaveAttribute(
+      "href",
+      "/tokens?mint=1",
+    );
+  });
+
+  it("hides the checklist once a key, an agent and a decision exist", async () => {
+    stub({
+      "/v1/projects/p1/tokens": [
+        {
+          id: "k1",
+          name: "prod",
+          masked: "fty_live_…abcd",
+          scopes: [],
+          created_at: new Date(NOW).toISOString(),
+          last_used_at: new Date(NOW).toISOString(),
+          created_by_user_id: null,
+          created_by_email: null,
+          owner_user_id: null,
+          owner_email: null,
+        },
+      ],
+    });
+    renderWithProviders(<HomePage />);
+    expect(await screen.findByText(/refund_order/)).toBeInTheDocument();
+    // "Checking…" clears only once the keys (and every other signal) land.
+    await waitFor(() => expect(screen.queryByText("Checking…")).toBeNull());
+    expect(screen.queryByText(/of 3 done/)).toBeNull();
+  });
+
+  it("offers the quickstart once when the project has no agents", async () => {
+    stub({ "/v1/projects/p1/agents/manifest": [] });
+    renderWithProviders(<HomePage />);
+    await waitFor(() => expect(useUi.getState().quickstartOpen).toBe(true));
+  });
+
+  it("doesn't reopen the quickstart once it has been seen", async () => {
+    useUi.setState({ quickstartSeen: true });
+    stub({ "/v1/projects/p1/agents/manifest": [] });
+    renderWithProviders(<HomePage />);
+    expect(await screen.findByText(/No agents yet/)).toBeInTheDocument();
+    expect(useUi.getState().quickstartOpen).toBe(false);
+  });
+
+  const asked90d = () =>
+    vi
+      .mocked(window.fetch)
+      .mock.calls.map(([u]) => String(u))
+      .some((u) => u.includes("/audit/summary") && u.includes("window=90d"));
+
+  it("ticks the decision step from recent activity without a 90-day scan", async () => {
+    stub();
+    renderWithProviders(<HomePage />);
+    // Key to do, agent and decision done.
+    expect(await screen.findByText(/2 of 3 done/)).toBeInTheDocument();
+    expect(asked90d()).toBe(false);
+  });
+
+  it("falls back to the 90-day audit totals when the last week is quiet", async () => {
+    stub();
+    const answer = vi.mocked(window.fetch).getMockImplementation()!;
+    vi.mocked(window.fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (!url.includes("/audit/summary")) return answer(input, init);
+      const all = url.includes("window=90d") ? 3 : 0;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            totals: counts(all, 0, 0),
+            by_agent: [],
+            by_role: [],
+            by_tool: [],
+            by_user: [],
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    });
+    renderWithProviders(<HomePage />);
+    expect(await screen.findByText(/2 of 3 done/)).toBeInTheDocument();
+    expect(asked90d()).toBe(true);
+  });
+
+  it("doesn't pop the quickstart over agents that exist but aren't registered", async () => {
+    stub({
+      "/v1/projects/p1/agents/manifest": [
+        {
+          name: "draft",
+          manifest: null,
+          version: null,
+          content_hash: "",
+          updated_at: "",
+        },
+      ],
+    });
+    renderWithProviders(<HomePage />);
+    // The checklist still asks for a registered agent…
+    expect(await screen.findByText(/1 of 3 done/)).toBeInTheDocument();
+    // …but only a truly empty project gets the walkthrough unprompted.
+    expect(useUi.getState().quickstartOpen).toBe(false);
+  });
+
+  it("shows no tick for the decision step when audit is unavailable", async () => {
+    // No route for the summary: the 24h panel and the 90-day check both 404.
+    stub({ "/v1/projects/p1/audit/summary": undefined });
+    renderWithProviders(<HomePage />);
+    // Key (to do) and agent (done) still count; the decision step doesn't.
+    expect(
+      await screen.findByText(/1 of 2 done/, {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
+  });
+
+  it("points a project that never had a decision at the quickstart", async () => {
+    stub({
+      "/v1/projects/p1/audit/summary": {
+        totals: counts(0, 0, 0),
+        by_agent: [],
+        by_role: [],
+        by_tool: [],
+        by_user: [],
+      },
+      "/v1/projects/p1/audit/decisions": {
+        rows: [],
+        total: 0,
+        limit: 7,
+        offset: 0,
+      },
+    });
+    renderWithProviders(<HomePage />);
+    expect(
+      await screen.findByRole("button", { name: "Getting started" }),
     ).toBeInTheDocument();
   });
 });

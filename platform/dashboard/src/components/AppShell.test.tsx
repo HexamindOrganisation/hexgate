@@ -138,6 +138,38 @@ describe("AppShell", () => {
     expect(screen.getByRole("link", { name: "beta_bot" })).toBeInTheDocument();
   });
 
+  it("caps a long agent list and keeps the agent being viewed", async () => {
+    stubFetch({
+      "/v1/users/me": USER,
+      "/v1/orgs": [ORG_A, ORG_B],
+      "/v1/orgs/org-a/projects": [PROJ_A1, PROJ_A2],
+      "/v1/orgs/org-b/projects": [],
+      [`/v1/projects/${PROJ_A1.id}/agents/manifest`]: Array.from(
+        { length: 12 },
+        (_, i) => ({ name: `bot_${i}` }),
+      ),
+    });
+    renderWithProviders(<AppShell />, { initialRoute: "/agents/bot_10" });
+    await userEvent.click(
+      await screen.findByRole("button", { name: /show agent list/i }),
+    );
+    expect(
+      await screen.findByRole("link", { name: "bot_7" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "bot_8" })).toBeNull();
+    // Past the cap, but it's the page being viewed.
+    expect(screen.getByRole("link", { name: "bot_10" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View all 12 →" })).toHaveAttribute(
+      "href",
+      "/agents",
+    );
+  });
+
+  it("doesn't crash on a hub URL with a stray percent sign", async () => {
+    renderWithProviders(<AppShell />, { initialRoute: "/agents/50%off" });
+    expect(await screen.findByRole("link", { name: "Agents" })).toBeVisible();
+  });
+
   it("says the agent list failed rather than that there are none", async () => {
     // stubWorkspace has no manifest route: it 404s.
     renderWithProviders(<AppShell />);
