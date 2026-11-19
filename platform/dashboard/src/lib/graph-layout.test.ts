@@ -88,7 +88,7 @@ describe("layeredLayout", () => {
     expect(layeredLayout(g).col).toMatchObject({ a: 1, b: 2, c: 3 });
   });
 
-  it("doesn't count a denied reach as a hop", () => {
+  it("counts a denied reach as a hop, so sub-agents share a column", () => {
     const denied = { ...edge("a", "b", "reach"), verdict: "deny" as const };
     const g = graph(
       [
@@ -97,7 +97,7 @@ describe("layeredLayout", () => {
       ],
       [denied],
     );
-    expect(layeredLayout(g).col).toEqual({ a: 1, b: 1 });
+    expect(layeredLayout(g).col).toEqual({ a: 1, b: 2 });
   });
 
   it("bends an edge through each column it crosses", () => {

@@ -1,0 +1,22 @@
+# Shipyard ops copilot: what each Shipyard role may have the copilot do.
+boundary:
+  tools:
+    list_services: { mode: allow }
+    get_logs: { mode: allow }
+    restart_service: { mode: allow }
+    deploy_version: { mode: allow }
+    scale_service: { mode: allow, constraint: "args.replicas <= 20" }
+    delete_environment: { mode: deny }     # nobody, ever
+  admission: { mode: allow }
+agents:
+  ops_copilot:
+    roles:
+      # Anyone signed in with a role this file doesn't name: read-only.
+      default:
+        import: [ caps/shipyard/ingress.yaml, caps/shipyard/read.yaml ]
+      viewer:
+        import: [ caps/shipyard/ingress.yaml, caps/shipyard/read.yaml ]
+      engineer:
+        import: [ caps/shipyard/ingress.yaml, caps/shipyard/read.yaml, caps/shipyard/staging.yaml ]
+      release:
+        import: [ caps/shipyard/ingress.yaml, caps/shipyard/read.yaml, caps/shipyard/release.yaml ]

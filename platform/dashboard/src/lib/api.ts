@@ -372,6 +372,9 @@ export interface PolicyGraph {
   /** Every role across all agents (the role picker's options) — independent of
    * any role filter applied to the edges. */
   roles: string[];
+  /** Agents the policy declares (its own cell); any other agent runs as
+   * `*`. Absent only in fixtures. */
+  declared_agents?: string[];
 }
 
 /** An unsaved edit of one file, applied over the stored files before preview/test. */

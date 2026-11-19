@@ -1,0 +1,3 @@
+tools:
+  list_services: { mode: allow }
+  get_logs: { mode: allow }
