@@ -84,6 +84,10 @@ COLUMNS_NEEDING_A_MIGRATION: set[tuple[str, str]] = {
     # The oauth tables shipped in #327; the code link and replay mark came with refresh -- 0005.
     ("oauth_refresh_token", "authorization_code_id"),
     ("oauth_authorization_code", "replayed_at"),
+    # The policy assistant's org setting and the apply route's stamp on the
+    # files it wrote; both tables predate them -- 0006.
+    ("organization", "assistant_mode"),
+    ("policy_file", "updated_via_change_id"),
 }
 
 _ADD_COLUMN = re.compile(

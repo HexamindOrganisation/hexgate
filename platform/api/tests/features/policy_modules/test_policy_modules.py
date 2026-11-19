@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import select
 
 from tests.features.policy_modules.conftest import _project, _put_file, _put_module
-from hexgate_api.constants import DEFAULT_USER_ID
+from hexgate_api.constants import DEFAULT_PROJECT_ID, DEFAULT_USER_ID
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.features.policy_modules import service as svc
 from hexgate_api.models import PolicyModule, RoleBinding
@@ -1905,6 +1905,46 @@ async def test_recompile_does_not_touch_the_agents_authored_trail(
 
     assert after.updated_at == authored_at
     assert after.updated_by_user_id == authored_by
+
+
+async def test_when_a_stamped_file_is_plain_saved_then_its_change_id_is_cleared(
+    session_factory,
+) -> None:
+    """The column names the change that wrote the file's current text.
+
+    A plain save after an applied change is a human's edit, so it must not
+    keep crediting that change.
+    """
+    from hexgate_api.core.ids import new_id
+    from hexgate_api.features.policy_modules import service as pm
+    from hexgate_api.models import PolicyFile
+
+    async with session_factory() as s:
+        s.add(
+            PolicyFile(
+                id=new_id(PolicyFile),
+                project_id=DEFAULT_PROJECT_ID,
+                name="caps/stamped.yaml",
+                content="a: 1\n",
+                content_hash="d" * 64,
+                updated_via_change_id="chg_0123456789ab",
+            )
+        )
+        await s.commit()
+
+        await pm.upsert_file(
+            s,
+            project_id=DEFAULT_PROJECT_ID,
+            name="caps/stamped.yaml",
+            content="a: 2\n",
+            actor_user_id=ACTOR,
+        )
+
+    async with session_factory() as s:
+        saved = await pm.get_file(s, DEFAULT_PROJECT_ID, "caps/stamped.yaml")
+
+    assert saved is not None and saved.content == "a: 2\n"
+    assert saved.updated_via_change_id is None
 
 
 async def test_seeded_compose_demo_resolves(session_factory) -> None:
