@@ -114,6 +114,12 @@ async def get_change(
     return change
 
 
+def text_hash(content: str) -> str:
+    """sha256 of a file's stored text, byte for byte. Unlike ``_content_hash`` it
+    moves on a comment-only or formatting-only edit, so it detects any change."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
 def _content_hash(content: str) -> str:
     """sha256 of the module's canonical JSON — the SAME scheme the SDK loader
     uses (``hexgate.security.module_loader``), so a module authored on the

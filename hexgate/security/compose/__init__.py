@@ -10,6 +10,7 @@ fold → rego → wasm → signing path is reused unchanged. See
 from __future__ import annotations
 
 from hexgate.security.compose.grammar import Entry
+from hexgate.security.compose.lower import boundary_policy
 from hexgate.security.compose.parse import parse_entry
 from hexgate.security.compose.resolve import (
     file_loader,
@@ -20,6 +21,7 @@ from hexgate.security.compose.resolve import (
 
 __all__ = [
     "Entry",
+    "boundary_policy",
     "file_loader",
     "parse_entry",
     "resolve_entry",

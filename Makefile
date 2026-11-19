@@ -74,25 +74,25 @@ coverage-html: ## Coverage with a browsable HTML report under htmlcov/
 
 .PHONY: lint
 lint: ## Static check via ruff
-	$(UV) ruff check hexgate tests evals platform/scripts platform/mcp
+	$(UV) ruff check hexgate tests evals platform/scripts platform/mcp platform/assistant
 
 .PHONY: lint-fix
 lint-fix: ## Apply ruff autofixes
-	$(UV) ruff check --fix hexgate tests evals platform/scripts platform/mcp
+	$(UV) ruff check --fix hexgate tests evals platform/scripts platform/mcp platform/assistant
 
 .PHONY: fmt
-fmt: ## Format with ruff (SDK + evals + platform/api + platform/scripts + platform/mcp)
-	$(UV) ruff format hexgate tests evals platform/api platform/scripts platform/mcp
+fmt: ## Format with ruff (SDK + evals + platform/api + platform/scripts + platform/mcp + platform/assistant)
+	$(UV) ruff format hexgate tests evals platform/api platform/scripts platform/mcp platform/assistant
 
 .PHONY: fmt-check
 fmt-check: ## Check formatting without writing changes
-	$(UV) ruff format --check hexgate tests evals platform/api platform/scripts platform/mcp
+	$(UV) ruff format --check hexgate tests evals platform/api platform/scripts platform/mcp platform/assistant
 
 .PHONY: check
 check: lint fmt-check test ## Python CI parity: lint + fmt-check + test (no coverage overhead)
 
 .PHONY: check-all
-check-all: lint fmt-check coverage platform-api-check dashboard-lint dashboard-typecheck dashboard-fmt-check collector-check mcp-check nginx-check ## Full stack: lint + fmt + tests with coverage on all four surfaces, plus the MCP server's lint + tests and the box's nginx includes
+check-all: lint fmt-check coverage platform-api-check dashboard-lint dashboard-typecheck dashboard-fmt-check collector-check mcp-check assistant-check nginx-check ## Full stack: lint + fmt + tests with coverage on all four surfaces, plus the MCP server's and the assistant's lint + tests and the box's nginx includes
 	# Dashboard tests via the coverage script (vitest --coverage); same
 	# entry point CI uses so a green `check-all` proves the surfaces
 	# Codecov sees are the same surfaces a contributor saw locally.
@@ -122,6 +122,22 @@ mcp-check: ## Lint + format check + test on the MCP server
 	cd platform/mcp && uv run ruff check .
 	cd platform/mcp && uv run ruff format --check .
 	$(MAKE) mcp-test
+
+# -------- Assistant (platform/assistant, its own uv project) --------
+
+.PHONY: assistant-run
+assistant-run: ## Run the assistant on :8090
+	cd platform/assistant && uv run python -m hexgate_assistant
+
+.PHONY: assistant-test
+assistant-test: ## Run the assistant test suite
+	cd platform/assistant && uv run pytest tests/
+
+.PHONY: assistant-check
+assistant-check: ## Lint + format check + test on the assistant
+	cd platform/assistant && uv run ruff check .
+	cd platform/assistant && uv run ruff format --check .
+	$(MAKE) assistant-test
 
 # -------- Policy / M2 demo helpers --------
 
