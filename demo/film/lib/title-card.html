@@ -1,0 +1,108 @@
+<!doctype html>
+<!--
+  A Hexgate title card, 1440x900, animated by window.__render(t) (seconds), so
+  every frame is reproducible. cards.js fills window.CARD before load:
+    { part: "01", eyebrow: "THE PROBLEM", tone: "red" | "green" | "blue",
+      lines: ["The unsafe", "copilot"], lead: "… **straight to prod**." }
+  The look is the Hexgate one (demo/film/STYLE.md): near-black, a navy glow at
+  the top, a faint grid, Inter and JetBrains Mono, the blue gradient on the
+  headline's last line, the tone on the eyebrow dot and the underline.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=block" rel="stylesheet">
+<style>
+  :root {
+    --bg: #08090d; --ink: #f4f5f9; --body: #a9adb8; --mono: #7994c3; --dim: #6b7080;
+    --blue: #4a87ea; --blue-l1: #7aa6f2; --blue-l2: #a8cbfd;
+    --red: #ff6b6b; --green: #4ade80;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1440px; height: 900px; overflow: hidden; background: var(--bg); }
+  body { font-family: Inter, system-ui, sans-serif; color: var(--ink); font-variant-ligatures: none;
+         -webkit-font-smoothing: antialiased; }
+  .glow { position: absolute; left: 50%; top: -230px; width: 1400px; height: 800px; transform: translateX(-50%);
+          background: radial-gradient(closest-side, #1b2a52 0%, #121a33 45%, transparent 100%); }
+  .grid { position: absolute; inset: 0;
+          background-image: linear-gradient(#ffffff08 1px, transparent 1px), linear-gradient(90deg, #ffffff08 1px, transparent 1px);
+          background-size: 64px 64px; background-position: center;
+          mask-image: radial-gradient(ellipse 60% 55% at 50% 45%, #000 30%, transparent 100%); }
+  .brand { position: absolute; left: 92px; top: 64px; display: flex; align-items: center; gap: 16px; }
+  .brand .word { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; }
+  .brand .word b { color: var(--blue-l1); font-weight: 700; }
+  .brand .by { padding-left: 14px; border-left: 1px solid #262b38; color: var(--dim); font-size: 17px; }
+  .cam { position: absolute; inset: 0; transform-origin: 50% 45%; }
+  .col { position: absolute; left: 0; right: 0; top: 262px; display: flex; flex-direction: column; align-items: center; }
+  .eyebrow { display: flex; align-items: center; gap: 22px; font: 600 20px "JetBrains Mono", monospace;
+             letter-spacing: 7px; color: var(--mono); }
+  .eyebrow i { width: 11px; height: 11px; border-radius: 50%; background: var(--tone); box-shadow: 0 0 14px var(--tone); }
+  .big { margin-top: 26px; text-align: center; font-size: 100px; font-weight: 700; letter-spacing: -3.5px; line-height: 1.12; }
+  .big span { display: block; }
+  .grad { background: linear-gradient(90deg, var(--blue-l1), var(--blue-l2)); -webkit-background-clip: text;
+          background-clip: text; color: transparent; position: relative; display: inline-block !important; padding-bottom: 6px; }
+  .bar { position: absolute; left: -6px; right: -6px; bottom: -4px; height: 5px; border-radius: 3px;
+         background: var(--tone); box-shadow: 0 0 18px var(--tone); transform-origin: 0 50%; }
+  .lead { margin-top: 44px; font-size: 32px; color: var(--body); letter-spacing: -0.2px; }
+  .lead b { color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="glow"></div>
+<div class="grid"></div>
+<div class="brand">
+  <svg width="36" height="36" viewBox="0 0 40 40" fill="none" stroke="#7aa6f2" stroke-width="3.6" stroke-linejoin="round">
+    <path d="M20 3 L35 11.5 V28.5 L20 37 L5 28.5 V11.5 Z"/><path d="M20 13 L26 16.5 V23.5 L20 27 L14 23.5 V16.5 Z" stroke-width="3"/>
+  </svg>
+  <span class="word">Hex<b>gate</b></span><span class="by">by Hexamind</span>
+</div>
+<div class="cam" id="cam">
+  <div class="col">
+    <div class="eyebrow" id="eyebrow"><i></i><span id="eyebrow-text"></span></div>
+    <div class="big" id="big"></div>
+    <div class="lead" id="lead"></div>
+  </div>
+</div>
+<script>
+  const card = window.CARD;
+  const tones = { red: 'var(--red)', green: 'var(--green)', blue: 'var(--blue)' };
+  document.documentElement.style.setProperty('--tone', tones[card.tone] || tones.blue);
+  document.getElementById('eyebrow-text').textContent = `PART ${card.part} · ${card.eyebrow}`;
+  const big = document.getElementById('big');
+  card.lines.forEach((text, i) => {
+    const s = document.createElement('span');
+    if (i === card.lines.length - 1) {
+      s.innerHTML = '<span class="grad"></span>';
+      s.firstChild.textContent = text;
+      const bar = document.createElement('i');
+      bar.className = 'bar';
+      bar.id = 'bar';
+      s.firstChild.appendChild(bar);
+    } else s.textContent = text;
+    s.dataset.rise = '';
+    big.appendChild(s);
+  });
+  // **bold** in the lead line
+  document.getElementById('lead').innerHTML = card.lead
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+
+  const ease = (x) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
+  // Elements rise in one by one: fade plus a short upward slide.
+  const rises = [document.getElementById('eyebrow'), ...big.children, document.getElementById('lead')];
+  const starts = [0.05, 0.2, 0.42, 0.68];
+  window.__render = (t) => {
+    rises.forEach((el, i) => {
+      const k = ease((t - (starts[i] ?? starts[starts.length - 1] + 0.2 * (i - starts.length + 1))) / 0.5);
+      el.style.opacity = k;
+      el.style.transform = `translateY(${(1 - k) * 26}px)`;
+    });
+    const bar = document.getElementById('bar');
+    if (bar) bar.style.transform = `scaleX(${ease((t - 0.95) / 0.45)})`;
+    // a slow camera push over the whole card
+    document.getElementById('cam').style.transform = `scale(${1 + 0.035 * Math.min(1, t / 4)})`;
+  };
+  window.__render(0);
+</script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+# Tellers may move up to 1,000 EUR per transfer.
+tools:
+  transfer_funds: { mode: allow, constraint: "args.amount_eur <= 1000" }

@@ -1,0 +1,12 @@
+{
+  "name": "hexgate-demo-film",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Films the demo videos: Playwright drives the apps with a visible cursor and in-page zoom.",
+  "scripts": {
+    "browsers": "playwright-core install chromium"
+  },
+  "dependencies": {
+    "playwright-core": "1.63.0"
+  }
+}

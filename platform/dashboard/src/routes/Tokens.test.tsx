@@ -1,9 +1,12 @@
 /**
  * TokensPage — the key list's "stale" badge: a key unused for 30+ days, a
- * never-used one counted from its creation.
+ * never-used one counted from its creation — and the `?mint=1` deep link that
+ * opens the "Mint API key" dialog straight away.
  */
 
 import { act, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useActive } from "@/lib/active";
@@ -95,5 +98,62 @@ describe("TokensPage — key badges", () => {
     ).toBeInTheDocument();
     expect(within(await rowOf("fresh")).queryByText("stale")).toBeNull();
     expect(within(await rowOf("busy")).queryByText("stale")).toBeNull();
+  });
+});
+
+describe("TokensPage — mint deep link", () => {
+  beforeEach(() => {
+    act(() => {
+      useActive.setState({ activeOrgId: "org-1", activeProjectId: PROJECT });
+    });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("opens the mint dialog, prefilled, from ?mint=1&name=", async () => {
+    stubFetch([]);
+    renderWithProviders(<TokensPage />, {
+      initialRoute: "/tokens?mint=1&name=refund-agent-dev",
+    });
+    expect(
+      await screen.findByRole("dialog", { name: "Mint API key" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Name")).toHaveValue("refund-agent-dev");
+  });
+
+  it("keeps the dialog closed without the param", async () => {
+    stubFetch([]);
+    renderWithProviders(<TokensPage />, { initialRoute: "/tokens" });
+    expect(
+      await screen.findByRole("button", { name: /mint new api key/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("opens from the link when /tokens is already showing", async () => {
+    stubFetch([]);
+    function GoMint() {
+      const navigate = useNavigate();
+      return (
+        <button type="button" onClick={() => navigate("/tokens?mint=1&name=x")}>
+          go mint
+        </button>
+      );
+    }
+    const user = userEvent.setup();
+    renderWithProviders(
+      <>
+        <TokensPage />
+        <GoMint />
+      </>,
+      { initialRoute: "/tokens" },
+    );
+    await screen.findByRole("button", { name: /mint new api key/i });
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "go mint" }));
+    expect(
+      await screen.findByRole("dialog", { name: "Mint API key" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Name")).toHaveValue("x");
   });
 });
