@@ -870,6 +870,7 @@ def _apply_file_edit(
     row.content_hash = content_hash
     row.updated_at = utcnow()
     row.updated_by_user_id = actor_user_id
+    row.updated_via_change_id = None
 
 
 async def delete_file(session: AsyncSession, *, project_id: str, name: str) -> bool:

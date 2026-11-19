@@ -1,5 +1,7 @@
 """Organization CRUD — list/create/read/update, cookie-authed (listing also takes an OAuth token)."""
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -14,8 +16,19 @@ from hexgate_api.schemas import OrgCreate, OrgRead, OrgUpdate, OrgWithRole
 router = APIRouter()
 
 
+def _org_fields(org: Organization) -> dict[str, Any]:
+    """The ``OrgRead`` fields of a row, shared with ``OrgWithRole``."""
+    return {
+        "id": org.id,
+        "slug": org.slug,
+        "name": org.name,
+        "created_at": org.created_at,
+        "assistant_mode": org.assistant_mode,
+    }
+
+
 def _org_read(org: Organization) -> OrgRead:
-    return OrgRead(id=org.id, slug=org.slug, name=org.name, created_at=org.created_at)
+    return OrgRead(**_org_fields(org))
 
 
 @router.get(
@@ -61,12 +74,7 @@ async def api_list_orgs(
         await ensure_personal_default_org(session, user)
         await session.commit()
         rows = await list_orgs_for_user(session, user.id)
-    return [
-        OrgWithRole(
-            id=o.id, slug=o.slug, name=o.name, created_at=o.created_at, role=role
-        )
-        for o, role in rows
-    ]
+    return [OrgWithRole(**_org_fields(o), role=role) for o, role in rows]
 
 
 @router.post("/orgs", status_code=201, tags=["orgs"])
@@ -137,7 +145,7 @@ async def api_update_org(
     membership: tuple[User, OrganizationMember] = Depends(require_org_admin),
     session: AsyncSession = Depends(get_session),
 ) -> OrgRead:
-    """Update name and/or slug. ``admin`` or ``owner`` role required.
+    """Update the name, slug or assistant mode. ``admin`` or ``owner`` role required.
 
     Slug changes break existing /orgs/{old-slug}/... bookmarks; we let
     callers do it because the row's ``id`` is the stable handle every
@@ -168,6 +176,10 @@ async def api_update_org(
 
     if body.name is not None and body.name != org.name:
         org.name = body.name
+        changed = True
+
+    if body.assistant_mode is not None and body.assistant_mode != org.assistant_mode:
+        org.assistant_mode = body.assistant_mode
         changed = True
 
     if not changed:

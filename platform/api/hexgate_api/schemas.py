@@ -24,6 +24,10 @@ UINT32_MAX = 2**32 - 1
 # M3 Phase 4 — Organization wire shapes
 # ---------------------------------------------------------------------------
 
+# What the dashboard's policy assistant may do in an org
+# (``Organization.assistant_mode``).
+AssistantMode = Literal["off", "read_only", "read_write"]
+
 
 class OrgRead(BaseModel):
     """Shared base — what an org looks like over the wire."""
@@ -32,6 +36,7 @@ class OrgRead(BaseModel):
     slug: str
     name: str
     created_at: datetime
+    assistant_mode: AssistantMode
 
 
 class OrgWithRole(OrgRead):
@@ -64,7 +69,7 @@ class OrgCreate(BaseModel):
 
 
 class OrgUpdate(BaseModel):
-    """``PATCH /v1/orgs/{id}`` body. Both fields optional; omitted
+    """``PATCH /v1/orgs/{id}`` body. Every field optional; omitted
     fields are left unchanged on the row."""
 
     name: Optional[str] = Field(default=None, min_length=1, max_length=64)
@@ -74,6 +79,7 @@ class OrgUpdate(BaseModel):
         max_length=32,
         pattern=r"^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$",
     )
+    assistant_mode: Optional[AssistantMode] = None
 
 
 class MemberRead(BaseModel):

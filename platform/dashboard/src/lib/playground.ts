@@ -1,4 +1,9 @@
 import { useEffect, useSyncExternalStore } from "react";
+import type {
+  ChatMessageData,
+  ChatToolCall,
+  ChatTurn,
+} from "@/components/chat/types";
 
 export type ToolCallState = "started" | "completed" | "failed";
 export type BlockType = "text" | "reasoning" | "tool_call";
@@ -103,32 +108,14 @@ export type ControlEvent = AgentOnlineEvent | SessionResetEvent;
 
 // ——— UI model ———
 
-export interface ToolCall {
-  id: string;
-  name: string;
-  args: Record<string, unknown>;
-  state: ToolCallState;
-  outputSummary?: string | null;
-  /** The policy stopped it (denied, or held for approval); null when serve
-   * says it ran; absent from an older serve. */
-  verdict?: "denied" | "held" | null;
-  startedAt: number;
-  endedAt?: number;
-}
+export type ToolCall = ChatToolCall;
 
-export interface AssistantTurn {
+export interface AssistantTurn extends ChatTurn {
   id: string;
-  streaming: boolean;
   text: string;
-  reasoning: string;
-  tools: ToolCall[];
-  error?: string;
 }
 
-export interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
+export interface ChatMessage extends ChatMessageData {
   turn?: AssistantTurn;
 }
 

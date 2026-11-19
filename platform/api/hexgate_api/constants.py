@@ -39,6 +39,11 @@ ROLE_ADMIN = "admin"
 ROLE_MEMBER = "member"
 ALL_ROLES = {ROLE_OWNER, ROLE_ADMIN, ROLE_MEMBER}
 
+# An org's policy-assistant setting (``Organization.assistant_mode``) before
+# anyone changes it. A string, like the roles; ``schemas.AssistantMode`` lists
+# the values ``PATCH /v1/orgs/{org_id}`` accepts.
+ASSISTANT_MODE_DEFAULT = "read_write"
+
 # OAuth 2.1 scopes an MCP client may request (the authorization server's
 # scope registry). An unknown scope at /authorize is ``invalid_scope``, never
 # silently dropped.
