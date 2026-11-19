@@ -1,10 +1,11 @@
 import { act, screen, waitFor } from "@testing-library/react";
+import type { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useActive } from "@/lib/active";
 import { useUi } from "@/lib/ui";
 import { HomePage } from "@/routes/Home";
-import { renderWithProviders } from "@/test/render";
+import { makeQueryClient, renderWithProviders } from "@/test/render";
 
 const ORG = {
   id: "o1",
@@ -103,6 +104,15 @@ function stall(path: string) {
       ? new Promise(() => {})
       : answer(input, init),
   );
+}
+
+/** Wait until Home has the org list and the active org's project list, so an
+ * assertion that the quickstart stayed closed isn't made before they land. */
+async function listsLoaded(client: QueryClient) {
+  await waitFor(() => {
+    expect(client.getQueryData(["orgs"])).toBeDefined();
+    expect(client.getQueryData(["projects", "o1"])).toBeDefined();
+  });
 }
 
 describe("HomePage", () => {
@@ -339,17 +349,26 @@ describe("HomePage", () => {
     // shell's bootstrap picks one): the page shows "no project" for a moment.
     act(() => useActive.setState({ activeProjectId: null }));
     stub();
-    renderWithProviders(<HomePage />);
+    const client = makeQueryClient();
+    renderWithProviders(<HomePage />, { client });
     expect(await screen.findByText("No project selected")).toBeInTheDocument();
-    // Once the project list has loaded (with one project), still no auto-open.
-    await waitFor(() =>
-      expect(
-        vi
-          .mocked(window.fetch)
-          .mock.calls.some(([u]) => String(u).includes("/v1/orgs/o1/projects")),
-      ).toBe(true),
-    );
-    await act(async () => {});
+    // Once both lists are loaded (one org, one project), still no auto-open.
+    await listsLoaded(client);
+    expect(useUi.getState().quickstartOpen).toBe(false);
+  });
+
+  it("doesn't offer it over an invited user's empty personal org", async () => {
+    // Sign-up gives everyone a personal org; an invited user's real projects
+    // are in the team org, so an empty first org isn't a first run.
+    act(() => useActive.setState({ activeProjectId: null }));
+    stub({
+      "/v1/orgs": [ORG, { ...ORG, id: "o2", slug: "team", name: "Team" }],
+      "/v1/orgs/o1/projects": [],
+    });
+    const client = makeQueryClient();
+    renderWithProviders(<HomePage />, { client });
+    expect(await screen.findByText("No project selected")).toBeInTheDocument();
+    await listsLoaded(client);
     expect(useUi.getState().quickstartOpen).toBe(false);
   });
 

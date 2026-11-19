@@ -17,6 +17,7 @@ import {
   WRAP,
 } from "@/components/quickstart/content";
 import { highlight, type CodeLang } from "@/components/quickstart/highlight";
+import { DARK_INK } from "@/components/PolicyEditor/palette";
 
 function renderCode(code: string, lang: CodeLang) {
   const { container } = render(<code>{highlight(code, lang)}</code>);
@@ -75,4 +76,39 @@ describe("highlight", () => {
     ]);
     expect(tokens(env, "qs-tok-comment")).toHaveLength(1);
   });
+
+  it("reads shell continuations from the backslash, and commands after && or ;", () => {
+    const el = renderCode(
+      "hexgate register \\\n--tools x:T\ncd app && pip install hexgate; ls",
+      "bash",
+    );
+    expect(tokens(el, "qs-tok-function")).toEqual([
+      "hexgate",
+      "cd",
+      "pip",
+      "ls",
+    ]);
+    expect(tokens(el, "qs-tok-keyword")).toEqual(["--tools"]);
+  });
+
+  it("doesn't start a comment at a # inside quotes", () => {
+    const sh = renderCode('git commit -m "fix #1" # amend later', "bash");
+    expect(tokens(sh, "qs-tok-comment")).toEqual(["# amend later"]);
+
+    const env = renderCode('NOTE="a #b"\n# a comment', "env");
+    expect(tokens(env, "qs-tok-key")).toEqual(["NOTE"]);
+    expect(tokens(env, "qs-tok-comment")).toEqual(["# a comment"]);
+    expect(env.textContent).toBe('NOTE="a #b"\n# a comment');
+  });
+
+  it("colors tokens with the policy editor's inks", () => {
+    const el = renderCode(POLICY_YAML, "yaml");
+    const key = el.querySelector<HTMLElement>(".qs-tok-key")!;
+    expect(key.style.color).toBe(hexToRgb(DARK_INK.keyword));
+  });
 });
+
+function hexToRgb(hex: string) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgb(${n >> 16}, ${(n >> 8) & 255}, ${n & 255})`;
+}

@@ -4,13 +4,14 @@
  * while closing the dialog (marking the quickstart seen).
  */
 
-import { screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { QUICKSTART_STEP } from "@/components/quickstart/content";
 import { QuickstartDialog } from "@/components/quickstart/QuickstartDialog";
+import { useActive } from "@/lib/active";
 import { useUi } from "@/lib/ui";
 import { renderWithProviders } from "@/test/render";
 
@@ -42,6 +43,27 @@ describe("QuickstartDialog", () => {
       quickstartSeen: false,
       quickstartStep: 0,
     });
+    act(() => useActive.setState({ activeOrgId: null, activeProjectId: null }));
+  });
+
+  it("asks a user without a project to create one, from step 2 on", async () => {
+    const user = userEvent.setup();
+    act(() => useActive.setState({ activeOrgId: "o1", activeProjectId: null }));
+    vi.spyOn(window, "fetch").mockResolvedValue(
+      new Response("[]", { headers: { "Content-Type": "application/json" } }),
+    );
+    renderDialog();
+    // Step 1 is the idea, no project needed.
+    expect(screen.queryByText("Create a project first.")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /next/i }));
+    expect(
+      await screen.findByText("Create a project first."),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Create a project" }));
+    expect(
+      await screen.findByRole("heading", { name: "Create project" }),
+    ).toBeInTheDocument();
   });
 
   it("tells assistive tech when a copy fails", async () => {

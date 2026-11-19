@@ -14,8 +14,11 @@ import {
   BookOpen,
   Check,
   Copy,
+  FolderPlus,
   RotateCcw,
 } from "lucide-react";
+
+import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -47,7 +50,9 @@ import {
   RegisterScene,
   RunScene,
 } from "@/components/quickstart/scenes";
+import { useActive } from "@/lib/active";
 import { DOC_PATHS, docsUrl, mintKeyPath } from "@/lib/docs";
+import { useProjects } from "@/lib/projects";
 import { useUi } from "@/lib/ui";
 import { useCopy } from "@/lib/use-copy";
 import { cn } from "@/lib/utils";
@@ -307,6 +312,12 @@ export function QuickstartDialog() {
   const step = STEPS[index];
   const last = index === STEPS.length - 1;
   const ctx: StepCtx = { framework, setFramework };
+  // Every step after the first happens inside a project. A new account has
+  // none yet, so those steps start by offering to create one.
+  const activeOrgId = useActive((s) => s.activeOrgId);
+  const projectsQ = useProjects(activeOrgId);
+  const needsProject = step.id !== "idea" && projectsQ.data?.length === 0;
+  const [createOpen, setCreateOpen] = useState(false);
 
   const go = (i: number) => {
     setIndex(Math.max(0, Math.min(STEPS.length - 1, i)));
@@ -397,6 +408,22 @@ export function QuickstartDialog() {
               {step.title}
             </h3>
             <div className="flex flex-col gap-3 text-sm leading-relaxed [&_code]:font-mono [&_code]:text-[0.9em] [&_p>code]:rounded [&_p>code]:bg-muted [&_p>code]:px-1">
+              {needsProject && (
+                <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2.5">
+                  <p className="min-w-0 flex-1">
+                    <b>Create a project first.</b> Keys, agents and policies
+                    live in a project, and this organization has none yet.
+                  </p>
+                  <Button
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={() => setCreateOpen(true)}
+                  >
+                    <FolderPlus className="size-3.5" />
+                    Create a project
+                  </Button>
+                </div>
+              )}
               {step.body(ctx)}
             </div>
             {step.action ? (
@@ -471,6 +498,7 @@ export function QuickstartDialog() {
             </Button>
           )}
         </footer>
+        <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} />
       </DialogContent>
     </Dialog>
   );
