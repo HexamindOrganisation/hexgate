@@ -1,12 +1,9 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Streamdown } from "streamdown";
 import {
-  ArrowUp,
   Bot,
   Check,
   ChevronDown,
-  ChevronUp,
   Hexagon,
   RadioReceiver,
   ShieldAlert,
@@ -21,7 +18,6 @@ import {
   callerName,
   usePlayground,
   type ApprovalRequestEvent,
-  type ChatMessage,
   type ToolCall,
 } from "@/lib/playground";
 import { BAR_BTN } from "@/components/playground/bar-btn";
@@ -43,10 +39,17 @@ import {
   usePlaygroundAccent,
   usePlaygroundPrefs,
 } from "@/lib/playground_prefs";
-import { auditUrl } from "@/lib/audit-filters";
-import { argsPreview } from "@/components/audit/fmt";
 import { pluralise } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { Composer } from "@/components/chat/Composer";
+import { GooFilter } from "@/components/chat/ThinkingGoo";
+import { MessageView } from "@/components/chat/MessageView";
+import {
+  callKey,
+  newTabWhen,
+  verdictOf,
+  type Verdict,
+} from "@/components/chat/verdict";
 
 export function PlaygroundPage() {
   const scope = useProjectScoped();
@@ -530,336 +533,6 @@ function EmptyState({ online }: { online: boolean }) {
       </div>
     </div>
   );
-}
-
-// ── Composer ────────────────────────────────────────────────────────────────
-
-/** Holds its own text, so a keystroke re-renders the box, not the transcript. */
-function Composer({
-  onSubmit,
-  agentName,
-  identity,
-}: {
-  onSubmit: (text: string) => void;
-  agentName: string | null;
-  identity: React.ReactNode;
-}) {
-  const [value, setValue] = useState("");
-  const send = () => {
-    const text = value.trim();
-    if (!text) return;
-    onSubmit(text);
-    setValue("");
-  };
-  return (
-    <div className="rounded-2xl border border-border bg-card p-3 shadow-sm transition-colors focus-within:border-primary/60">
-      <textarea
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          // Enter confirming an IME candidate isn't a send (Safari reports
-          // it as keyCode 229 rather than isComposing).
-          const composing =
-            e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229;
-          if (e.key === "Enter" && !e.shiftKey && !composing) {
-            e.preventDefault();
-            send();
-          }
-        }}
-        rows={1}
-        placeholder={`Message ${agentName ?? "the agent"}…`}
-        aria-label="Message the agent"
-        className="block min-h-12 max-h-48 w-full resize-none bg-transparent px-1 text-sm focus:outline-none [field-sizing:content]"
-      />
-      <div className="mt-2 flex items-center justify-between gap-2">
-        {identity}
-        <button
-          type="button"
-          onClick={send}
-          disabled={!value.trim()}
-          aria-label="Send"
-          className="grid size-9 place-items-center rounded-full bg-action text-action-foreground transition-all hover:bg-action/85 disabled:scale-90 disabled:bg-muted disabled:text-muted-foreground"
-        >
-          <ArrowUp className="size-4" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── Transcript ──────────────────────────────────────────────────────────────
-
-/** One message. Memoised: a streamed token re-renders only the turn it
- * lands in, since untouched messages keep their identity. */
-const MessageView = memo(function MessageView({
-  message,
-  agentName,
-  present,
-  awaiting,
-}: {
-  message: ChatMessage;
-  agentName: string | null;
-  present: boolean;
-  awaiting: ReadonlySet<string>;
-}) {
-  if (message.role === "user") {
-    return (
-      <div className="pg-enter flex justify-end">
-        <div
-          className={cn(
-            "max-w-[85%] rounded-2xl px-4 py-2.5 text-sm",
-            present ? "bg-primary/15" : "bg-muted",
-          )}
-        >
-          <div className="whitespace-pre-wrap">{message.content}</div>
-        </div>
-      </div>
-    );
-  }
-
-  const turn = message.turn;
-  const steps = turn && (turn.reasoning || turn.tools.length) ? turn : null;
-  return (
-    <div className="pg-enter flex items-start gap-3">
-      <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg bg-action text-action-foreground">
-        <Hexagon className="size-3.5" />
-      </span>
-      <div className="min-w-0 flex-1 space-y-3 pt-0.5">
-        {/* Intermediate steps: the agent's reasoning + each tool call, shown as
-            a compact timeline before the final answer. */}
-        {steps && (
-          <div className="space-y-2">
-            {steps.reasoning !== "" && (
-              <div className="border-l-2 border-border pl-3 text-xs italic text-muted-foreground">
-                {steps.reasoning}
-              </div>
-            )}
-            {steps.tools.map((t) => (
-              <DecisionCard
-                key={t.id}
-                call={t}
-                agentName={agentName}
-                // Only the turn that's running can be at the prompt.
-                awaiting={
-                  !!steps.streaming &&
-                  t.state === "started" &&
-                  awaiting.has(callKey(t.name, t.args))
-                }
-              />
-            ))}
-          </div>
-        )}
-        {message.content && (
-          <div className="prose prose-sm prose-invert max-w-none text-sm">
-            <Streamdown parseIncompleteMarkdown>{message.content}</Streamdown>
-            {turn?.streaming && <span className="pg-caret" aria-hidden />}
-          </div>
-        )}
-        {turn?.streaming && !message.content && <ThinkingGoo />}
-        {turn?.error && (
-          <div className="text-xs text-deny">error: {turn.error}</div>
-        )}
-      </div>
-    </div>
-  );
-});
-
-/** The hexkit "goo" loader: a shimmering label over three dots that fuse into a
- * liquid blob via the #pg-goo SVG filter. Shown while the turn is still
- * thinking and no tokens have streamed yet. */
-function ThinkingGoo() {
-  // One announcement: the visible label carries the status; the goo is decorative.
-  return (
-    <div className="flex flex-col gap-1.5" role="status">
-      <span className="pg-shimmer text-xs font-medium">Thinking…</span>
-      <div className="pg-goo" aria-hidden>
-        <span className="d1" />
-        <span className="d2" />
-        <span className="d3" />
-      </div>
-    </div>
-  );
-}
-
-/** The once-per-page SVG filter that gels the three dots into a metaball. */
-function GooFilter() {
-  return (
-    <svg
-      width="0"
-      height="0"
-      aria-hidden
-      focusable="false"
-      className="absolute"
-    >
-      <defs>
-        <filter id="pg-goo" x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="b" />
-          <feColorMatrix
-            in="b"
-            mode="matrix"
-            values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -9"
-          />
-        </filter>
-      </defs>
-    </svg>
-  );
-}
-
-/** What a call's card reports. A policy that stops a call doesn't always
- * fail it (the OpenAI and Google ADK adapters return the verdict as the
- * tool's result), so `hexgate serve` marks it on the event; an older serve
- * that doesn't is read from the message's opening instead. */
-type Verdict =
-  | "allowed"
-  | "denied"
-  | "held"
-  | "failed"
-  | "running"
-  | "awaiting";
-
-// "[<marker>] <body>", as the SDK's verdict reader matches it (tool, reach
-// or skill); the wording says held from denied.
-const STOPPED_TEXT =
-  /^\[[a-z0-9_-]+\] (?:Tool|reach to agent|skill) '[^']*' (requires human approval|is denied by the agent policy|is not permitted by this agent's policy)/;
-
-function verdictOf(call: ToolCall, awaiting: boolean): Verdict {
-  if (call.state === "started") return awaiting ? "awaiting" : "running";
-  if (call.verdict) return call.verdict;
-  // null: serve said the tool ran. Only an older serve, with no field, is
-  // read from the text.
-  if (call.verdict === null)
-    return call.state === "failed" ? "failed" : "allowed";
-  const phrase = STOPPED_TEXT.exec(call.outputSummary?.trim() ?? "")?.[1];
-  if (phrase) return phrase === "requires human approval" ? "held" : "denied";
-  return call.state === "failed" ? "failed" : "allowed";
-}
-
-/** The key a held call and its approval prompt share: tool and arguments. */
-const callKey = (name: string, args: unknown) =>
-  `${name}\u0000${JSON.stringify(args)}`;
-
-const DECISION: Record<
-  Verdict,
-  { label: string; dot: string; text: string; border: string }
-> = {
-  allowed: {
-    label: "Allowed",
-    dot: "bg-muted-foreground",
-    text: "text-foreground",
-    border: "border-border",
-  },
-  denied: {
-    label: "Denied",
-    dot: "bg-deny",
-    text: "text-deny",
-    border: "border-deny/50",
-  },
-  held: {
-    label: "Not approved",
-    dot: "bg-approval",
-    text: "text-approval",
-    border: "border-approval/50",
-  },
-  awaiting: {
-    label: "Awaiting approval",
-    dot: "bg-approval",
-    text: "text-approval",
-    border: "border-approval/50",
-  },
-  failed: {
-    label: "Failed",
-    dot: "bg-deny",
-    text: "text-deny",
-    border: "border-deny/50",
-  },
-  running: {
-    label: "Running",
-    dot: "bg-approval",
-    text: "text-approval",
-    border: "border-approval/50",
-  },
-};
-
-/** One tool call inline in the turn, collapsible; a denied, held or failed
- * call opens by default so the reason is in view. */
-const DecisionCard = memo(function DecisionCard({
-  call,
-  agentName,
-  awaiting,
-}: {
-  call: ToolCall;
-  agentName: string | null;
-  awaiting: boolean;
-}) {
-  const present = usePresentMode();
-  const [open, setOpen] = useState<boolean | null>(null);
-  const verdict = verdictOf(call, awaiting);
-  const shown =
-    open ??
-    (verdict === "denied" || verdict === "held" || verdict === "failed");
-  const d = DECISION[verdict];
-  return (
-    <div className={cn("rounded-xl border bg-card", d.border)}>
-      <button
-        type="button"
-        onClick={() => setOpen(!shown)}
-        aria-expanded={shown}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
-      >
-        <span className={cn("size-2 shrink-0 rounded-sm", d.dot)} />
-        <span className={cn("text-xs font-medium", d.text)}>{d.label}</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-xs">
-          {call.name}
-          <span className="text-muted-foreground">
-            {argsPreview(call.args) || "()"}
-          </span>
-        </span>
-        {shown ? (
-          <ChevronUp className="size-3.5 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-        )}
-      </button>
-      {shown && (
-        <div className="space-y-2 px-3 pb-3 text-xs">
-          <p className="text-muted-foreground">
-            {call.outputSummary ??
-              (verdict === "awaiting"
-                ? "Waiting for approval: decide in the prompt above."
-                : call.state === "started"
-                  ? "Waiting for the tool to finish."
-                  : "No summary returned.")}
-            {call.endedAt != null && (
-              <span className="ml-1 font-mono">
-                · {Math.round(call.endedAt - call.startedAt)} ms
-              </span>
-            )}
-          </p>
-          {Object.keys(call.args).length > 0 && (
-            <pre className="whitespace-pre-wrap break-words rounded-md bg-muted px-2.5 py-2 font-mono text-[11px] text-muted-foreground">
-              {JSON.stringify(call.args, null, 2)}
-            </pre>
-          )}
-          {/* No audit row exists until the call ends. */}
-          {agentName && call.state !== "started" && (
-            <Link
-              to={auditUrl({ agent: agentName, tool: call.name, range: "24h" })}
-              {...newTabWhen(present)}
-              className="inline-block font-medium text-primary hover:underline"
-            >
-              Open in audit
-            </Link>
-          )}
-        </div>
-      )}
-    </div>
-  );
-});
-
-/** Link props that open a new tab in full screen: a demo tab mustn't
- * navigate away. */
-function newTabWhen(present: boolean) {
-  return present ? { target: "_blank", rel: "noopener" } : {};
 }
 
 // ── Approval prompts ────────────────────────────────────────────────────────
