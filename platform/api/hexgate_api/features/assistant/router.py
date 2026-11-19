@@ -46,7 +46,8 @@ async def api_assistant_token(
     if not user.is_verified:
         raise HTTPException(status_code=403, detail={"code": "not_verified"})
     access = await assistant_access(session, project_id, user.id)
-    if access.mode == "off":
+    # Fail closed: a mode this code does not know refuses, as "off" does.
+    if access.mode not in ("read_only", "read_write"):
         raise HTTPException(status_code=403, detail={"code": "assistant_off"})
     token, expires_at = mint_assistant_token(
         user_id=user.id, project_id=project_id, can_write=access.can_write

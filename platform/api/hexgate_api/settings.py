@@ -54,8 +54,9 @@ class Settings(BaseSettings):
     oauth_allow_insecure_client_ids: bool = False
 
     # The dashboard's policy assistant. Off by default: the token route then
-    # answers 404 and the config route reports enabled: false, so a stage
-    # runs the assistant's container dark until this is set. assistant_resource_url is
+    # answers 404 (after its session, membership and Origin checks) and the
+    # config route reports enabled: false, so a stage runs the assistant's
+    # container dark until this is set. assistant_resource_url is
     # the first audience of the token the API mints for it, which the
     # assistant pins; in deploy both services read it from one compose value.
     assistant_enabled: bool = False

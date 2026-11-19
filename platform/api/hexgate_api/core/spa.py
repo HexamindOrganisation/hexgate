@@ -45,7 +45,7 @@ _API_PATH_HEADS = frozenset(
 # PKCE challenge, which no Referer to another site may leak. Not no-referrer:
 # under it a browser sends ``Origin: null`` on same-origin POSTs, and the
 # dashboard-origin check (deps/origin.py) on the consent and assistant-token
-# POSTs refuses that (test_consent.py).
+# POSTs refuses that (test_consent.py, tests/features/assistant/test_router.py).
 _PAGE_HEADERS = {
     "X-Frame-Options": "DENY",
     "Content-Security-Policy": "frame-ancestors 'none'",

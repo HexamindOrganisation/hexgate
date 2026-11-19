@@ -223,6 +223,21 @@ async def test_when_mode_is_off_then_403_assistant_off(
     assert resp.json()["detail"] == {"code": "assistant_off"}
 
 
+async def test_when_stored_mode_is_unknown_then_403_assistant_off(
+    client: TestClient, factory
+) -> None:
+    """Fail closed: a mode this code does not know is refused, never minted."""
+    await _set_mode(factory, "read_write_v2")
+    resp = _token(client)
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == {"code": "assistant_off"}
+
+
+def test_when_no_session_and_no_origin_then_401(client: TestClient) -> None:
+    """Who is calling is decided before the Origin: 401, not the Origin's 403."""
+    assert client.post(f"{P}/token").status_code == 401
+
+
 def test_when_user_is_unverified_then_403_not_verified(client: TestClient) -> None:
     resp = _token(client, UNVERIFIED_ID)
     assert resp.status_code == 403
@@ -244,8 +259,10 @@ def test_when_assistant_disabled_then_token_is_404(
         "https://evil.example",
         "https://dashboard.hexgate.test.evil.example",
         "null",
+        "https://dashboard.hexgate.test:8443",
+        "http://dashboard.hexgate.test",
     ],
-    ids=["missing", "other", "suffix", "null"],
+    ids=["missing", "other", "suffix", "null", "other-port", "other-scheme"],
 )
 def test_when_origin_is_not_the_dashboard_then_403(
     client: TestClient, origin: str | None

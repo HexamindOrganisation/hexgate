@@ -12,18 +12,20 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from hexgate_api.constants import ASSISTANT_CLIENT_ID, ROLE_ADMIN, ROLE_OWNER
 from hexgate_api.core.oauth_tokens import ACCESS_TOKEN_TTL_SECONDS, mint_access_token
 from hexgate_api.models import Organization, OrganizationMember, Project
+from hexgate_api.schemas import AssistantMode
 from hexgate_api.settings import get_settings
 
 # Every assistant token reads what the assistant's tools read. Never
 # policy:write, which reaches the file PUT that runs no checks, and never
-# projects:read, which lists the user's other projects.
+# projects:read, which none of the assistant's tools need.
 READ_SCOPES = ("policy:read", "audit:read", "agents:read")
 APPLY_SCOPE = "policy:apply"
 
 
 @dataclass(frozen=True)
 class AssistantAccess:
-    mode: str
+    # The stored column, unvalidated: the token route refuses any other value.
+    mode: AssistantMode
     # Admin or owner, in an org whose mode is read_write.
     can_write: bool
 
