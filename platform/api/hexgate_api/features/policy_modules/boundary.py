@@ -24,9 +24,10 @@ import dataclasses
 from collections.abc import Iterator, Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from hexgate_api.features.policy_modules.risk_facts import _MIRROR
+from hexgate_api.features.policy_modules.service import ENTRY_FILE, InvalidModuleError
 
 WIDENED = "widened"
 TIGHTENED = "tightened"
@@ -57,9 +58,20 @@ def boundary_changes(
     """Every boundary change from ``saved`` to ``drafted`` (``{name: text}``).
 
     A file whose text is the same on both sides is not parsed. A changed file
-    is parsed on both sides, and either side that does not parse raises the
-    SDK's ``LinkError``.
+    is parsed on both sides, and either side that does not parse, or holds a
+    block the lowering rejects, raises the SDK's ``LinkError``.
+
+    Raises :class:`InvalidModuleError` when the draft adds the first
+    ``policy.yaml``, as ``diff_project`` does: such a project enforces from the
+    module store or each agent's own policy, which no block here describes, so
+    there is no saved side to compare.
     """
+    if ENTRY_FILE in drafted and ENTRY_FILE not in saved:
+        raise InvalidModuleError(
+            f"this project has no {ENTRY_FILE!r}, so it does not enforce from policy "
+            f"files and there is nothing to compare; saving a first {ENTRY_FILE!r} "
+            "would switch every agent onto the file store"
+        )
     changes: list[BoundaryChange] = []
     for name in sorted(saved.keys() | drafted.keys()):
         old, new = saved.get(name), drafted.get(name)
@@ -71,13 +83,31 @@ def boundary_changes(
 def _blocks(text: str | None, name: str) -> dict[BlockPath, Any]:
     """``{path: BoundaryBlock}`` for one file; empty when the file is absent.
     Paths are tuples, so an agent named ``a.roles.b`` never shares a key with
-    role ``b`` of agent ``a``."""
+    role ``b`` of agent ``a``. Each block is lowered once, so names the
+    lowering rejects raise here instead of being compared as distinct keys."""
     from hexgate.security.compose import parse_entry
 
     if text is None:
         return {}
     scopes = _scopes(parse_entry(text, source=name))
-    return {(*p, "boundary"): s.boundary for p, s in scopes if s.boundary is not None}
+    blocks = {(*p, "boundary"): s.boundary for p, s in scopes if s.boundary is not None}
+    for block in blocks.values():
+        _check_lowers(block, name)
+    return blocks
+
+
+def _check_lowers(block, name: str) -> None:
+    """Raise ``LinkError`` when the SDK's lowering rejects ``block``: two skill
+    names that trim to one (``AgentPolicy._reject_blank_or_colliding_skill_names``,
+    hexgate/security/models.py:449), or a reserved tool name such as
+    ``agent.run`` (models.py:422)."""
+    from hexgate.security.compose import boundary_policy
+    from hexgate.security.modules import LinkError
+
+    try:
+        boundary_policy(block)
+    except ValidationError as exc:
+        raise LinkError(f"{name}: {exc}") from exc
 
 
 def _scopes(entry) -> Iterator[tuple[BlockPath, Any]]:
@@ -124,8 +154,8 @@ def _entries(block) -> dict[BlockPath, Any]:
     ``canonical_name`` (hexgate/security/models.py:521), which trims and maps a
     blank name to ``default``; two raw names on one target become a
     :class:`_Collision`. Tools need no such key: the lowering uses their names
-    as written (hexgate/security/compose/lower.py:122-125). Skills cannot collide:
-    ``SkillPolicy`` rejects two names that trim to one (models.py:464-470)."""
+    as written (hexgate/security/compose/lower.py:122-125). Skills cannot collide
+    here: :func:`_check_lowers` has already raised for two names that trim to one."""
     from hexgate.security.naming import canonical_name
 
     entries: dict[BlockPath, Any] = {
@@ -251,7 +281,7 @@ def _constraint_kinds(before: list[str], after: list[str]) -> set[Kind | None]:
 def _facts(constraints: list[str]) -> dict[tuple[str, str], Any]:
     """``{(family, subject): value}``. Families: ``upper`` and ``lower`` (a
     numeric bound, the tightest of its kind kept), ``in`` and ``not in`` (a
-    literal list, combined), ``text`` (any other condition, matched as written)."""
+    literal list, combined), ``text`` (any other condition, as its parsed tree)."""
     from hexgate.security.constraints import conjuncts
 
     facts: dict[tuple[str, str], Any] = {}
@@ -263,17 +293,11 @@ def _facts(constraints: list[str]) -> dict[tuple[str, str], Any]:
 
 
 def _fact(condition: str) -> tuple[str, str, Any]:
-    from hexgate.security.constraints import (
-        Cmp,
-        ConstraintParseError,
-        Lit,
-        parse_constraint,
-    )
+    from hexgate.security.constraints import Cmp, Lit, parse_constraint
 
-    try:
-        node = parse_constraint(condition)
-    except ConstraintParseError:
-        return "text", condition.strip(), None
+    # Every condition parses: _check_lowers has validated each constraint, and
+    # conjuncts splits a valid one only into valid parts.
+    node = parse_constraint(condition)
     if not isinstance(node, Cmp):
         return "text", repr(_tree(node)), None
     left, op, right = node.left, node.op, node.right

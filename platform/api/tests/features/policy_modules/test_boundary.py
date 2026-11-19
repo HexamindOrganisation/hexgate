@@ -16,6 +16,7 @@ from hexgate.security.modules import LinkError
 from hexgate_api.features.policy_modules import boundary
 from hexgate_api.features.policy_modules.boundary import boundary_changes
 from hexgate_api.features.policy_modules.seed_data import SEED_POLICY_FILES
+from hexgate_api.features.policy_modules.service import InvalidModuleError
 
 _GRANTS = "agents:\n  bot:\n    roles:\n      support: { import: [ grants.yaml ] }\n"
 W, T = "widened", "tightened"
@@ -374,8 +375,6 @@ def _spec(constraints: list[str], mode: str = "allow") -> str:
         (['args.c != "X"'], [], W),
         (['args.s <= "m"'], ['args.s  <=  "m"'], None),
         (["args.n <= 10 or args.vip == true"], ["args.n <= 99 or args.vip == true"], W),
-        (["args.n ~~ 1"], ["  args.n ~~ 1 "], None),
-        (["args.n ~~ 1"], [], W),
         # Literals compare as the engine compares them: 5 and 5.0 are one value,
         # true is not 1, and the same holds inside list literals.
         (["args.n in [5]"], ["args.n in [1, 5]", "args.n in [1.0, 5]"], W),
@@ -530,3 +529,30 @@ def test_when_changed_file_does_not_parse_then_link_error(side: str) -> None:
 def test_when_unchanged_file_does_not_parse_then_it_is_skipped() -> None:
     saved = {**_tool("{}"), "broken.yaml": "boundary: ["}
     assert boundary_changes(saved, dict(saved)) == []
+
+
+def test_when_draft_adds_the_first_entry_file_then_invalid_module_error() -> None:
+    # Saving it moves every agent off the module store or its own policy, which
+    # no boundary block describes, so there is no saved side to compare.
+    drafted = {"policy.yaml": "boundary: { tools: { refund: {} } }\n"}
+    with pytest.raises(InvalidModuleError, match="policy.yaml"):
+        boundary_changes({}, drafted)
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        # Two names that trim to one: last-wins lowering would make a reorder
+        # flip deny to allow under one key while the raw keys look unchanged.
+        '  skills:\n    pdf: { mode: deny }\n    "pdf ": { mode: allow }\n',
+        "  tools:\n    agent.run: { mode: allow }\n",
+        "  tools:\n    refund: { constraint: 'args.n ~~ 1' }\n",
+    ],
+    ids=["padded-skill-collision", "reserved-tool-name", "unparsed-constraint"],
+)
+@pytest.mark.parametrize("side", ["saved", "drafted"])
+def test_when_block_does_not_lower_then_link_error(block: str, side: str) -> None:
+    good, bad = _tool("{}"), _entry(block)
+    saved, drafted = (bad, good) if side == "saved" else (good, bad)
+    with pytest.raises(LinkError, match="policy.yaml"):
+        boundary_changes(saved, drafted)
