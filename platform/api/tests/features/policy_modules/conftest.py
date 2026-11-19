@@ -132,3 +132,10 @@ def add_bare_agent(session_factory):
             await session.commit()
 
     return add
+
+
+@pytest_asyncio.fixture
+async def session(session_factory):
+    """One session on the seeded database."""
+    async with session_factory() as session:
+        yield session
