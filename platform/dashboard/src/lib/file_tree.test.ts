@@ -14,6 +14,7 @@ function file(name: string): PolicyFileRead {
     name,
     content: "",
     content_hash: "h",
+    text_hash: "t",
     updated_at: "2026-01-01T00:00:00Z",
   };
 }

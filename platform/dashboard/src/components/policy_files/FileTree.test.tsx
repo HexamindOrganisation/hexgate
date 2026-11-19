@@ -15,7 +15,13 @@ import { FileTree } from "./FileTree";
 import { renderWithProviders } from "@/test/render";
 
 function file(name: string): PolicyFileRead {
-  return { name, content: "x", content_hash: "h", updated_at: "t" };
+  return {
+    name,
+    content: "x",
+    content_hash: "h",
+    text_hash: "t",
+    updated_at: "t",
+  };
 }
 
 const FILES = [file("policy.yaml"), file("caps/refunds.yaml")];

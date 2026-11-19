@@ -316,6 +316,7 @@ export interface PolicyFileRead {
   name: string;
   content: string;
   content_hash: string;
+  text_hash: string;
   updated_at: string;
 }
 
