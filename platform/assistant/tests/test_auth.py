@@ -4,8 +4,11 @@ import json
 import logging
 
 import httpx
+import jwt
 import pytest
 import respx
+from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt.algorithms import RSAAlgorithm
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -191,6 +194,19 @@ def test_when_token_is_refused_then_401(client, key, overrides):
 def test_when_token_is_not_signed_with_eddsa_then_401(client, key, algorithm):
     secret = None if algorithm == "none" else "a-shared-secret-of-32-bytes-long"
     token = key.mint(algorithm=algorithm, secret=secret)
+
+    assert _get(client, f"Bearer {token}").status_code == 401
+
+
+def test_when_token_uses_a_published_non_eddsa_key_then_401(client, jwks_route, key):
+    # The JWKS also publishes an RSA key, so only the verifier's algorithm
+    # allowlist stands between an RS256 token signed with it and acceptance.
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public = RSAAlgorithm.to_jwk(private.public_key(), as_dict=True)
+    jwks_route.respond(json={"keys": [*jwks(key)["keys"], {**public, "kid": "rsa-1"}]})
+    claims = jwt.decode(key.mint(), options={"verify_signature": False})
+    headers = {"kid": "rsa-1", "typ": ACCESS_TOKEN_TYPE}
+    token = jwt.encode(claims, private, algorithm="RS256", headers=headers)
 
     assert _get(client, f"Bearer {token}").status_code == 401
 
