@@ -165,6 +165,67 @@ def test_when_the_stored_effect_holds_only_the_required_keys_then_defaults_fill_
     }
 
 
+# An effect as a row stored today holds it, written out by hand and never
+# regenerated: a later required, renamed or removed field in the diff models
+# (top level or nested) fails the test below, as it would fail every such row.
+_FROZEN_EFFECT = {
+    "changes": [
+        {
+            "agent": "bot",
+            "role": "support",
+            "tool": "refund",
+            "before": {"mode": "allow", "constraints": ["args.amount <= 1000"]},
+            "after": {
+                "mode": "approval_required",
+                "constraints": ["args.amount <= 500"],
+            },
+            "constraints_added": ["args.amount <= 500"],
+            "constraints_removed": ["args.amount <= 1000"],
+        }
+    ],
+    "agent_changes": [
+        {
+            "agent": "bot",
+            "key": "usage",
+            "before": None,
+            "after": {"on_unavailable": "deny"},
+        }
+    ],
+    "gate_changes": [{"agent": "bot", "gate": "reach", "before": False, "after": True}],
+    "agents_affected": ["bot"],
+    "composes": _COMPOSES,
+}
+
+
+def _holds(read: object, stored: object) -> bool:
+    """``read`` carries every key and value of ``stored``; a field added since,
+    with its default, is allowed."""
+    if isinstance(stored, dict):
+        return isinstance(read, dict) and all(
+            k in read and _holds(read[k], v) for k, v in stored.items()
+        )
+    if isinstance(stored, list):
+        return (
+            isinstance(read, list)
+            and len(read) == len(stored)
+            and all(_holds(r, v) for r, v in zip(read, stored))
+        )
+    return read == stored
+
+
+def test_when_an_effect_stored_in_todays_shape_is_read_then_every_entry_survives(
+    client: TestClient, session_factory
+) -> None:
+    asyncio.run(
+        _seed(session_factory, "chg_old", DEFAULT_PROJECT_ID, effect=_FROZEN_EFFECT)
+    )
+
+    r = _get(client, DEFAULT_PROJECT_ID, "chg_old")
+
+    assert r.status_code == 200, r.text
+    assert _holds(r.json()["effect"], _FROZEN_EFFECT), r.json()["effect"]
+
+
 @pytest.mark.parametrize(
     "owner_project",
     [OTHER_PROJECT_ID, SIBLING_PROJECT_ID],
