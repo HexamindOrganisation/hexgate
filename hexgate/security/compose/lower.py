@@ -114,7 +114,7 @@ def _grants_policy(scope: _GrantScope) -> AgentPolicy | None:
     return AgentPolicy(tools=tools, agents=agents, admission=admission, skills=skills)
 
 
-def _boundary_policy(block: BoundaryBlock | None) -> AgentPolicy | None:
+def boundary_policy(block: BoundaryBlock | None) -> AgentPolicy | None:
     """An :class:`AgentPolicy` ceiling (``default_policy: deny``) for a boundary
     block. ``None`` when there is no boundary at this scope."""
     if block is None:
@@ -186,7 +186,7 @@ def _cell(
             grants = _grants_policy(frag)
             if grants is not None:
                 caps.append(_cap(tag, grants, frag._source))
-            ceiling = _boundary_policy(frag.boundary)
+            ceiling = boundary_policy(frag.boundary)
             if ceiling is not None:
                 boundaries.append(_boundary(f"boundary:{tag}", ceiling, frag._source))
     return boundaries, caps
