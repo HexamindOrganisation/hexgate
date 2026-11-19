@@ -2,13 +2,13 @@ import uuid
 from dataclasses import replace
 
 import pytest
-from sqlalchemy import inspect, make_url
+from sqlalchemy import delete, func, inspect, make_url, select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError, OperationalError
-from sqlalchemy.schema import CreateTable
+from sqlalchemy.schema import CreateIndex, CreateTable
 from starlette.testclient import TestClient
 
-from hexgate_assistant.db import create_engine, create_tables, session_factory
+from hexgate_assistant.db import create_tables, session_factory
 from hexgate_assistant.models import (
     AssistantMessage,
     AssistantSession,
@@ -24,13 +24,6 @@ TABLES = {
     "assistant_usage",
     "assistant_turn_lock",
 }
-
-
-@pytest.fixture
-async def engine(settings):
-    engine = create_engine(settings.database_url)
-    yield engine
-    await engine.dispose()
 
 
 @pytest.fixture
@@ -89,7 +82,15 @@ def test_postgres_ddl_happy_path():
     assert "id BIGSERIAL NOT NULL" in ddl[AssistantMessage.__tablename__]
     assert "id BIGSERIAL NOT NULL" in ddl[AssistantUsage.__tablename__]
     assert "created_at TIMESTAMP WITH TIME ZONE" in ddl[AssistantUsage.__tablename__]
-    assert "FOREIGN KEY(session_id)" in ddl[AssistantMessage.__tablename__]
+    assert (
+        "FOREIGN KEY(session_id) REFERENCES assistant_session (id) ON DELETE CASCADE"
+        in ddl[AssistantMessage.__tablename__]
+    )
+    (index,) = AssistantUsage.__table__.indexes
+    assert str(CreateIndex(index).compile(dialect=postgresql.dialect())) == (
+        "CREATE INDEX ix_assistant_usage_user_id_created_at "
+        "ON assistant_usage (user_id, created_at)"
+    )
 
 
 def _message(session_id: uuid.UUID, kind: str = "messages") -> AssistantMessage:
@@ -124,3 +125,17 @@ async def test_when_user_already_holds_the_lock_then_second_row_refused(db):
 
         with pytest.raises(IntegrityError):
             await s.commit()
+
+
+async def test_when_session_is_deleted_then_its_messages_are_deleted(db, session_id):
+    async with db() as s:
+        s.add(_message(session_id))
+        await s.commit()
+
+        await s.execute(
+            delete(AssistantSession).where(AssistantSession.id == session_id)
+        )
+        await s.commit()
+
+        count = select(func.count()).select_from(AssistantMessage)
+        assert await s.scalar(count) == 0

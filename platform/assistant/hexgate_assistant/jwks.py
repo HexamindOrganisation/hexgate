@@ -42,8 +42,9 @@ class JwksCache:
             # A known key is served at once, even past its ten minutes: the
             # refetch runs in the background, so no request waits on the
             # network for a key it already has. If the API can't be reached,
-            # the cached keys keep working: the API re-checks the token on
-            # every MCP call a turn makes, and while it's down none succeeds.
+            # the cached keys keep working, including one the API has since
+            # dropped: nothing re-checks the token before the model runs, so
+            # such a key verifies here until a refetch succeeds.
             if self._expired() and self._refetch_allowed():
                 self._refetch_task()
             return self._keys[kid]

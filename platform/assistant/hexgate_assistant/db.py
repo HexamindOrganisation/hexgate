@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import (
 from hexgate_assistant.models import Base
 
 
-def create_engine(database_url: URL) -> AsyncEngine:
+def make_engine(database_url: URL) -> AsyncEngine:
     # pre_ping drops connections Postgres closed while idle.
     return create_async_engine(database_url, pool_pre_ping=True)
 

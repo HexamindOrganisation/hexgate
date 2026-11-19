@@ -52,7 +52,10 @@ class AssistantMessage(Base):
     __tablename__ = "assistant_message"
 
     id: Mapped[int] = mapped_column(BigId, primary_key=True, autoincrement=True)
-    session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("assistant_session.id"))
+    # A purged session takes its messages with it.
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("assistant_session.id", ondelete="CASCADE")
+    )
     seq: Mapped[int] = mapped_column(Integer)
     kind: Mapped[str] = mapped_column(String)
     content: Mapped[Any] = mapped_column(JSON)

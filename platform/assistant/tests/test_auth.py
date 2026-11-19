@@ -21,11 +21,10 @@ from tests.conftest import (
     OTHER_PROJECT,
     PROJECT,
     RESOURCE,
+    SUB,
     SigningKey,
     jwks,
 )
-
-SUB = "00000000-0000-0000-0000-000000000002"
 
 
 def _verifier(http: httpx.AsyncClient) -> JwksTokenVerifier:
@@ -129,6 +128,22 @@ async def test_when_token_is_not_a_jwt_then_refused_without_fetch(
     assert "not-a-jwt" not in caplog.text
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"aud": [MCP_RESOURCE, ISSUER]}, id="aud-mcp-and-public"),
+        pytest.param({"iss": "https://evil.example"}, id="wrong-iss"),
+    ],
+)
+async def test_when_aud_or_iss_is_wrong_then_logged_as_warning(
+    verifier, key, overrides, caplog
+):
+    caplog.set_level(logging.INFO, logger="hexgate_assistant.auth")
+
+    assert await verifier.verify_token(key.mint(**overrides)) is None
+    assert [r.levelno for r in caplog.records] == [logging.WARNING]
+
+
 # authenticate, over HTTP: a throwaway app standing in for the turn route.
 
 
@@ -170,6 +185,14 @@ def test_when_token_is_refused_then_401(client, key, overrides):
 
     assert response.status_code == 401
     assert response.headers["WWW-Authenticate"] == "Bearer"
+
+
+@pytest.mark.parametrize("algorithm", ["none", "HS256"])
+def test_when_token_is_not_signed_with_eddsa_then_401(client, key, algorithm):
+    secret = None if algorithm == "none" else "a-shared-secret-of-32-bytes-long"
+    token = key.mint(algorithm=algorithm, secret=secret)
+
+    assert _get(client, f"Bearer {token}").status_code == 401
 
 
 @pytest.mark.parametrize(

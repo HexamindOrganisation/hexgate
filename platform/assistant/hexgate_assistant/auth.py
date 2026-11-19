@@ -98,7 +98,7 @@ async def authenticate(
     if access is None:
         raise HTTPException(401, headers={"WWW-Authenticate": "Bearer"})
     if project_id not in access.projects:
-        logger.info("project %s not granted to sub %s", project_id, access.subject)
+        logger.info("project %r not granted to sub %s", project_id[:64], access.subject)
         raise HTTPException(403, "project not granted to this token")
     return access
 
