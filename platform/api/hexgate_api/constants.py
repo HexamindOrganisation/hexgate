@@ -48,12 +48,20 @@ ASSISTANT_MODE_DEFAULT = "read_write"
 # scope registry). An unknown scope at /authorize is ``invalid_scope``, never
 # silently dropped.
 OAUTH_SCOPES = frozenset(
-    {"policy:read", "policy:write", "audit:read", "agents:read", "projects:read"}
+    {
+        "policy:read",
+        "policy:write",
+        "policy:apply",
+        "audit:read",
+        "agents:read",
+        "projects:read",
+    }
 )
 # What the consent page shows for each scope; one entry per scope above.
 OAUTH_SCOPE_DESCRIPTIONS = {
     "policy:read": "Read and check the policies of the projects you choose",
     "policy:write": "Save policy files in the projects you choose",
+    "policy:apply": "Apply policy changes, after their checks pass, in the projects you choose",
     "audit:read": "Read the audit decisions of the projects you choose",
     "agents:read": "Read the agent manifests of the projects you choose",
     "projects:read": "List the projects you choose and their organizations",
