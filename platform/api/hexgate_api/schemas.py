@@ -769,6 +769,42 @@ class PolicyDiffResponse(BaseModel):
     composes: PolicyComposesOut
 
 
+class ChangeFileOut(BaseModel):
+    """One file of an applied change. The ``before`` side is null for a file
+    the change created."""
+
+    name: str
+    before_content: str | None
+    before_hash: str | None
+    after_content: str
+    after_hash: str
+
+
+class ChangeRead(BaseModel):
+    """One applied policy change. ``samples``, ``checks`` and
+    ``boundary_changes`` are returned as they were recorded; ``effect`` is the
+    per-role diff computed before the save, read back as a diff response."""
+
+    id: str
+    project_id: str
+    session_id: str | None
+    created_by_user_id: str | None
+    client_id: str | None
+    summary: str
+    created_at: datetime
+    files: list[ChangeFileOut]
+    samples: list[dict[str, Any]]
+    checks: list[dict[str, Any]]
+    boundary_changes: list[dict[str, Any]]
+    effect: PolicyDiffResponse
+
+    @field_validator("created_at")
+    @classmethod
+    def _assume_utc(cls, v: datetime) -> datetime:
+        # SQLite hands back a naive datetime; the column is stored as UTC.
+        return as_utc(v)
+
+
 class PolicyTestResponse(BaseModel):
     """The gate's verdict for a single evaluated tool call."""
 

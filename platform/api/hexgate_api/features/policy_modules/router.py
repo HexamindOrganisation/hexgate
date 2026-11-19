@@ -26,6 +26,7 @@ from hexgate_api.deps.project import require_project_admin
 from hexgate_api.features.policy_modules import coverage, diff, service, similar
 from hexgate_api.models import OrganizationMember, PolicyFile, PolicyModule, User
 from hexgate_api.schemas import (
+    ChangeRead,
     PolicyCheckRequest,
     PolicyCheckResponse,
     PolicyCoverageResponse,
@@ -747,6 +748,29 @@ async def api_diff_policy(
     except service.InvalidModuleError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PolicyDiffResponse(**out)
+
+
+@router.get(
+    "/projects/{project_id}/policy/changes/{change_id}",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
+async def api_read_policy_change(
+    project_id: str,
+    change_id: str,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> ChangeRead:
+    """One applied policy change: its files before and after, the checks it
+    passed and its effect per role. 404 for an unknown id and for a change of
+    another project alike (``service.get_change``)."""
+    try:
+        change = await service.get_change(
+            session, project_id=project_id, change_id=change_id
+        )
+    except service.ChangeNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="change not found") from exc
+    return ChangeRead.model_validate(change, from_attributes=True)
 
 
 @router.post(
