@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from pydantic import BaseModel
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -32,6 +32,9 @@ from hexgate_api.features.policy_modules.boundary import (
     boundary_changes,
 )
 from hexgate_api.schemas import PolicyFileDraft, PolicyLintOut
+
+if TYPE_CHECKING:  # the SDK is imported lazily at run time
+    from hexgate.security import PolicyLint
 
 CheckId = Literal["yaml", "composes", "lints", "dry_runs", "boundary"]
 Status = Literal["pass", "warn", "fail", "skipped"]
@@ -80,7 +83,8 @@ class _Run:
     project_id: str
     drafts: list[PolicyFileDraft]
     samples: Sequence[Sample]
-    boundary_changes: list[BoundaryChange] = field(default_factory=list)
+    # The drafted project's lints, as the composes check computed them.
+    lints: list[PolicyLint] = field(default_factory=list)
 
 
 async def run_checks(
@@ -94,15 +98,25 @@ async def run_checks(
     draft the checks refuse."""
     run = _Run(session, project_id, list(files), samples)
     checks: list[Check] = []
-    failed: CheckId | None = None
     for check_id, check in _CHECKS:
-        if failed is None:
-            result = await check(run)
-            failed = check_id if result.status == "fail" else None
-        else:
-            result = Check(id=check_id, status="skipped", detail=f"{failed} failed")
-        checks.append(result)
-    return ChecksResult(checks=checks, boundary_changes=run.boundary_changes)
+        failed = _first_fail(checks)
+        checks.append(
+            await check(run) if failed is None else _skipped(check_id, failed)
+        )
+    failed = _first_fail(checks)
+    if failed is None:
+        boundary, changes = await _boundary(run)
+    else:
+        boundary, changes = _skipped("boundary", failed), []
+    return ChecksResult(checks=[*checks, boundary], boundary_changes=changes)
+
+
+def _first_fail(checks: list[Check]) -> CheckId | None:
+    return next((c.id for c in checks if c.status == "fail"), None)
+
+
+def _skipped(check_id: CheckId, failed: CheckId) -> Check:
+    return Check(id=check_id, status="skipped", detail=f"{failed} failed")
 
 
 def _check(
@@ -138,6 +152,7 @@ async def _composes(run: _Run) -> Check:
     if resolved is None:
         items = [{"error": lint.message} for lint in lints]
         return _check("composes", "fail", "the project does not resolve", items)
+    run.lints = lints  # the same findings check_auto returns for these files
     return _check("composes", "pass", "the project resolves for every agent")
 
 
@@ -147,7 +162,7 @@ async def _lints(run: _Run) -> Check:
     ``warn``, wherever the drafts report it: a project already red must not
     block every later change, and some errors (``unknown-guard``) follow the
     registered agents, which change outside the policy files."""
-    lints = await service.check_auto(run.session, run.project_id, run.drafts)
+    lints = run.lints
     saved: set[tuple] = set()
     if any(lint.severity == "error" for lint in lints):
         saved_lints = await service.check_auto(run.session, run.project_id)
@@ -188,9 +203,9 @@ def _strip_roles(message: str) -> str:
 
 def _defect(lint) -> tuple:
     """What a lint finds, wherever it is reported. The line, the agent, the
-    role and the roles the message names (:func:`_strip_roles`) say where: a draft that removes a role,
-    or the defect from the top level while an agent keeps it, moves those
-    without adding anything."""
+    role and the roles the message names (:func:`_strip_roles`) say where: a
+    draft that removes a role, or the defect from the top level while an agent
+    keeps it, moves those without adding anything."""
     message = _strip_roles(lint.message)
     return (lint.code, lint.severity, lint.source, lint.tool, message)
 
@@ -221,7 +236,8 @@ async def _dry_runs(run: _Run) -> Check:
 
 async def _dry_run(run: _Run, sample: Sample) -> tuple[str | None, str | None]:
     """``(outcome, reason)`` for one sample; the outcome is None when the
-    sample names a role the policy does not define, which is no outcome."""
+    sample names a role or an agent the policy does not define, which is no
+    outcome."""
     try:
         dry_run = await service.test_policy(
             run.session,
@@ -235,14 +251,18 @@ async def _dry_run(run: _Run, sample: Sample) -> tuple[str | None, str | None]:
         )
     except service.UnknownRoleError as exc:
         return None, str(exc)
+    if not dry_run.agent_declared:  # evaluated as "*", not as this agent
+        declared = dry_run.declared_agents
+        return None, f"agent {sample.agent!r} is not declared (declared: {declared})"
     verdict = dry_run.verdict
     return service.verdict_outcome(verdict), verdict.reason
 
 
-async def _boundary(run: _Run) -> Check:
-    """Fails on any widened block, and when the comparison itself refuses the
-    drafts (a first ``policy.yaml``, a block that does not lower): an
-    unchecked boundary is never a pass."""
+async def _boundary(run: _Run) -> tuple[Check, list[BoundaryChange]]:
+    """The check and every change ``boundary_changes`` reported. Fails on any
+    widened block, and when the comparison itself refuses the drafts (a first
+    ``policy.yaml``, a block that does not lower): an unchecked boundary is
+    never a pass."""
     from hexgate.security.modules import LinkError
 
     saved = await service._files_map(run.session, run.project_id)
@@ -250,20 +270,19 @@ async def _boundary(run: _Run) -> Check:
     try:
         changes = boundary_changes(saved, drafted)
     except (service.InvalidModuleError, LinkError) as exc:
-        return _check("boundary", "fail", str(exc))
-    run.boundary_changes = changes
+        return _check("boundary", "fail", str(exc)), []
     widened = sum(change.kind == WIDENED for change in changes)
     if widened:
         detail = f"{widened} boundary change(s) widen a ceiling"
-        return _check("boundary", "fail", detail)
+        return _check("boundary", "fail", detail), changes
     detail = f"{len(changes)} boundary change(s), none widen"
-    return _check("boundary", "pass", detail)
+    return _check("boundary", "pass", detail), changes
 
 
+# Every check but the last, boundary, which also returns its changes.
 _CHECKS: tuple[tuple[CheckId, Callable[[_Run], Awaitable[Check]]], ...] = (
     ("yaml", _yaml),
     ("composes", _composes),
     ("lints", _lints),
     ("dry_runs", _dry_runs),
-    ("boundary", _boundary),
 )

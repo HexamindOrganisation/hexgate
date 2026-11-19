@@ -186,12 +186,18 @@ async def test_when_the_saved_files_already_have_the_error_lint_then_lints_warns
 async def test_when_the_draft_introduces_a_link_error_then_lints_fails(
     session, monkeypatch
 ) -> None:
-    async def check_auto(_session, _pid, drafts=()):
-        warning = PolicyLint("unknown-root", "warning", "a warning")
-        if not drafts:  # the saved files
-            return [warning]
-        return [warning, PolicyLint("link-error", "error", "column does not link")]
+    # An analyzer link-error on a project that resolves (a column of the role
+    # map that does not link), which no real fixture here produces.
+    warning = PolicyLint("unknown-root", "warning", "a warning")
+    link_error = PolicyLint("link-error", "error", "column does not link")
 
+    async def compose_preview(*_args, **_kwargs):  # the drafted files
+        return {}, {}, [warning, link_error]
+
+    async def check_auto(*_args, **_kwargs):  # the saved files
+        return [warning]
+
+    monkeypatch.setattr(service, "compose_preview", compose_preview)
     monkeypatch.setattr(service, "check_auto", check_auto)
     result = await _run(session, {"grants.yaml": _GRANTS})
     assert _statuses(result) == ["pass", "pass", "fail", "skipped", "skipped"]
@@ -515,3 +521,78 @@ async def test_when_another_role_gets_a_different_unknown_arg_then_lints_fails(
     assert check.status == "fail"
     [new] = [i for i in check.items if i.get("new")]
     assert "args.amuont" in new["message"]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "consts:\n  cutoff: 2026-02-30\n",  # a YAML date that does not exist
+        "tools:\n  refund: { mode: allow, constraint: 2001-13-45 }\n",
+        "[" * 5000,  # nested past the interpreter's stack
+    ],
+    ids=["date const", "date constraint", "deep nesting"],
+)
+@pytest.mark.usefixtures("stored")
+async def test_when_a_draft_breaks_the_yaml_loader_then_yaml_fails(
+    session, content: str
+) -> None:
+    result = await _run(session, {"grants.yaml": content})
+    assert _statuses(result) == ["fail"] + ["skipped"] * 4
+    [item] = _by_id(result, "yaml").items
+    assert item["error"].startswith("grants.yaml: ")
+
+
+@pytest.mark.usefixtures("stored")
+async def test_when_a_sample_names_an_undeclared_agent_then_dry_runs_fails(
+    session,
+) -> None:
+    # "default" exists in the generic view, so the call would evaluate as "*".
+    ghost = Sample("default", "refund", "deny", agent="ghost")
+    result = await _run(session, {"grants.yaml": _GRANTS}, [ghost])
+    [item] = _by_id(result, "dry_runs").items
+    assert item["outcome"] is None
+    assert item["reason"].startswith("agent 'ghost' is not declared")
+
+
+_DEPT = "tools:\n  refund: {{ mode: allow, constraint: '{}' }}\n"
+
+
+async def test_when_a_saved_warning_becomes_an_error_then_lints_fails(session) -> None:
+    # One path read plainly (a warning), then under `not` (an error).
+    await _store(
+        session,
+        {
+            "policy.yaml": _bot(support="grants.yaml"),
+            "grants.yaml": _DEPT.format('user.department == "x"'),
+        },
+    )
+    result = await _run(
+        session, {"grants.yaml": _DEPT.format('not (user.department == "x")')}, ()
+    )
+    check = _by_id(result, "lints")
+    assert check.status == "fail"
+    assert [(i["code"], i["severity"]) for i in check.items if i.get("new")] == [
+        ("unknown-root", "error")
+    ]
+
+
+async def test_when_an_agent_errs_where_the_generic_view_warns_then_lints_fails(
+    session,
+) -> None:
+    # The "*" view warns on user.department; bot's fail-open grant makes the
+    # same text an error, which must not be deduped away as the "*" lint.
+    top = (
+        "tools:\n  view: { mode: allow, constraint: 'user.department == \"sales\"' }\n"
+    )
+    entry = "import: [ top.yaml ]\n" + _bot(support="grants.yaml")
+    await _store(session, {"policy.yaml": entry, "top.yaml": top, "grants.yaml": _OK})
+    drafted = _DEPT.format('not (user.department == "contractor")')
+    result = await _run(session, {"grants.yaml": drafted}, ())
+    check = _by_id(result, "lints")
+    assert check.status == "fail"
+    [new] = [i for i in check.items if i.get("new")]
+    assert (new["code"], new["severity"], new["agent"]) == (
+        "unknown-root",
+        "error",
+        "bot",
+    )

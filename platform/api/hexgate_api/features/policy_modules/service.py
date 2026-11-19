@@ -814,6 +814,10 @@ def validate_compose_file(content: str, source: str = "<file>") -> None:
         parse_entry(content, source=source)
     except LinkError as exc:
         raise InvalidModuleError(str(exc)) from exc
+    except RecursionError as exc:  # YAML nested past the interpreter's stack
+        raise InvalidModuleError(f"{source}: nested too deeply") from exc
+    except ValueError as exc:  # a YAML timestamp that is no date (2026-02-30)
+        raise InvalidModuleError(f"{source}: {exc}") from exc
 
 
 async def project_resolves_with_file(
@@ -986,15 +990,16 @@ def _compose_lints(resolved: dict, manifests: dict) -> list[PolicyLint]:
     file, which the resolved form no longer tells apart.
 
     A named agent's lint is tagged with the agent and dropped only when the
-    ``"*"`` view already reported it (a top-level rule every agent shares), so two
-    named agents with the same defect each report it."""
+    ``"*"`` view already reported it at the same severity (a top-level rule every
+    agent shares), so two named agents with the same defect each report it, and
+    an agent's error is kept beside a ``"*"`` warning of the same text."""
     from dataclasses import replace
 
     from hexgate.security import analyze_policy
     from hexgate.security.analyzer import SEVERITY_RANK
 
     def key(lint) -> tuple:
-        return (lint.code, lint.message, lint.tool, lint.role)
+        return (lint.code, lint.severity, lint.message, lint.tool, lint.role)
 
     generic = analyze_policy(resolved[DEFAULT_AGENT].policy_set, source=ENTRY_FILE)
     shared = {key(lint) for lint in generic}
