@@ -1,0 +1,23 @@
+# Fake accounts for the Shipyard demo app. Edit freely: the app re-reads this
+# file at every sign-in.
+#
+# Passwords are plain text on purpose: this is a local demo, never a real login.
+# `roles` is what the copilot passes to hexgate as the caller's roles, so it is
+# what the policy decides on. A role the policy doesn't mention gets the
+# policy's `default` access.
+
+users:
+  riley:
+    name: Riley Chen
+    password: look-dont-touch
+    roles: [viewer]
+
+  sam:
+    name: Sam Kowalski
+    password: shipit-sam
+    roles: [engineer]
+
+  jordan:
+    name: Jordan Lee
+    password: release-jordan
+    roles: [release]

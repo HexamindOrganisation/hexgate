@@ -48,18 +48,16 @@ const G: PolicyGraph = {
 };
 
 describe("agentSubgraph", () => {
-  it("expands the tools the agent's own reach targets can touch", () => {
+  it("keeps one hop: its roles, its tools and the sub-agents it reaches", () => {
     const sub = agentSubgraph(G, "a");
-    // a's neighbourhood + t2 (via a→b→t2); s is shown as an inbound caller.
+    // b is a node, not b's tools; s, which reaches into a, isn't drawn.
     expect(sub.nodes.map((n) => n.id).sort()).toEqual([
       "agent:a",
       "agent:b",
-      "agent:s",
       "role:support",
       "tool:t",
-      "tool:t2",
     ]);
-    expect(sub.edges).toHaveLength(5);
+    expect(sub.edges).toHaveLength(3);
   });
 
   it("does not pull an inbound caller's own tools into the subgraph", () => {
@@ -116,7 +114,7 @@ describe("agentSubgraph", () => {
     });
   });
 
-  it("follows permitted reach hop by hop", () => {
+  it("doesn't follow reach past the first hop", () => {
     const g: PolicyGraph = {
       ...G,
       nodes: [
@@ -130,9 +128,9 @@ describe("agentSubgraph", () => {
         edge("agent:c", "tool:t3", "call"),
       ],
     };
-    expect(agentSubgraph(g, "a").nodes.some((n) => n.id === "tool:t3")).toBe(
-      true,
-    );
+    const ids = agentSubgraph(g, "a").nodes.map((n) => n.id);
+    expect(ids).not.toContain("agent:c");
+    expect(ids).not.toContain("tool:t3");
   });
 
   it("doesn't count a reach to itself as reaching an agent", () => {
@@ -161,7 +159,8 @@ describe("agentSubgraph", () => {
     };
     const sub = agentSubgraph(g, "support_bot");
     expect(agentReachCounts(sub).tools).toBe(1);
-    expect(sub.nodes.some((n) => n.id === "agent:supervisor")).toBe(true);
+    // Its caller has a graph of its own.
+    expect(sub.nodes.some((n) => n.id === "agent:supervisor")).toBe(false);
   });
 
   it("keeps a declared agent with only roles admitting it as itself", () => {
@@ -195,7 +194,6 @@ describe("agentSubgraph", () => {
     expect(agentReachCounts(agentSubgraph(g, "locked")).tools).toBe(0);
   });
 });
-
 const NONE = { reaches: [], calledBy: [] };
 const namesOf = (g: PolicyGraph) =>
   g.nodes
@@ -308,5 +306,57 @@ describe("agentReachEdges", () => {
     // s reaches into a; that's a's caller, not its sub-agent.
     expect(agentReachEdges(G, "b").size).toBe(0);
     expect(agentReachEdges(G, "ghost").size).toBe(0);
+  });
+
+  describe("agentSubgraph through *", () => {
+    it("drops *'s reach to the agent itself", () => {
+      const g: PolicyGraph = {
+        roles: [],
+        nodes: [
+          { id: "agent:*", kind: "agent", label: "*" },
+          { id: "agent:x", kind: "agent", label: "x" },
+        ],
+        edges: [edge("agent:*", "agent:x", "reach")],
+      };
+      expect(agentSubgraph(g, "x").edges).toHaveLength(0);
+    });
+  });
+
+  describe("a reach to *", () => {
+    it("isn't drawn as a sub-agent", () => {
+      const g: PolicyGraph = {
+        roles: [],
+        nodes: [
+          { id: "agent:a", kind: "agent", label: "a" },
+          { id: "agent:*", kind: "agent", label: "*" },
+        ],
+        edges: [edge("agent:a", "agent:*", "reach")],
+      };
+      const sub = agentSubgraph(g, "a");
+      expect(sub.nodes.map((n) => n.id)).toEqual(["agent:a"]);
+      expect(agentReachCounts(sub).agents).toBe(0);
+    });
+  });
+
+  describe("declared_agents", () => {
+    it("keeps a declared agent as itself, even when only reached", () => {
+      // Under some role, y reaches x and x's own cell grants it nothing.
+      const g: PolicyGraph = {
+        roles: [],
+        declared_agents: ["*", "x", "y"],
+        nodes: [
+          { id: "agent:*", kind: "agent", label: "*" },
+          { id: "agent:x", kind: "agent", label: "x" },
+          { id: "agent:y", kind: "agent", label: "y" },
+          { id: "tool:t", kind: "tool", label: "t" },
+        ],
+        edges: [
+          edge("agent:y", "agent:x", "reach"),
+          edge("agent:*", "tool:t", "call"),
+        ],
+      };
+      // Not *'s grants: x is declared, with none of its own.
+      expect(agentReachCounts(agentSubgraph(g, "x")).tools).toBe(0);
+    });
   });
 });

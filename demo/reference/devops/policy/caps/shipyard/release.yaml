@@ -1,0 +1,5 @@
+# Release managers act on any environment; every deploy needs a human's approval.
+tools:
+  restart_service: { mode: allow }
+  scale_service: { mode: allow }
+  deploy_version: { mode: approval_required }

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
@@ -28,6 +29,7 @@ import { DocsLink } from "@/components/DocsLink";
 import { DOC_PATHS } from "@/lib/docs";
 import { api, type TokenListItem, type TokenMintResponse } from "@/lib/api";
 import { useProjectScoped } from "@/lib/active";
+import { useCopy } from "@/lib/use-copy";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/page-header";
 import { isStaleKey } from "@/lib/keys";
@@ -75,10 +77,9 @@ function JustMintedBanner({
   onDismiss: () => void;
 }) {
   // Brief "Copied!" feedback on successful copy, with a label since this
-  // is the prominent action on the dialog. 1200ms is long enough to
-  // register, short enough that the operator who clicks twice doesn't see
-  // a stale checkmark.
-  const [copied, setCopied] = useState(false);
+  // is the prominent action on the dialog.
+  const [copyStatus, copy] = useCopy();
+  const copied = copyStatus === "copied";
   // Copy-only \u2014 no reveal UI. Matches the show-once + copy-only pattern
   // GitHub / AWS / Stripe / Vercel / Discord use for API tokens. The
   // mask still shows the env-tagged prefix and the last 4 chars so the
@@ -117,11 +118,7 @@ function JustMintedBanner({
         <Button
           variant="default"
           size="sm"
-          onClick={async () => {
-            await navigator.clipboard.writeText(token.full);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
-          }}
+          onClick={() => copy(token.full)}
           className="gap-1.5"
         >
           {copied ? (
@@ -132,6 +129,14 @@ function JustMintedBanner({
           {copied ? "Copied!" : "Copy"}
         </Button>
       </div>
+      {copyStatus === "failed" && (
+        // The key is shown once: a silent failure would let the operator
+        // dismiss this thinking it was copied.
+        <p role="alert" className="mt-2 text-xs text-deny">
+          Couldn't copy to the clipboard (permission denied or an insecure
+          page). Allow clipboard access and click Copy again before dismissing.
+        </p>
+      )}
 
       <div className="mt-3 flex items-center gap-4 text-xs text-muted-foreground">
         <span className="flex items-center gap-1.5">
@@ -160,8 +165,36 @@ function MintDialog({
   projectId: string;
   onSuccess: (token: TokenMintResponse) => void;
 }) {
+  // `?mint=1` (optionally `&name=…`) deep-links straight into this dialog;
+  // the quickstart and Home's "Get started" checklist link here. It must also
+  // work when /tokens is already mounted (navigating to it from the quickstart
+  // keeps this component), so the request is picked up while rendering rather
+  // than only in the initial state, then stripped from the URL so a reload or
+  // Back doesn't reopen it. `handled` resets once the params are gone, so the
+  // same link works again later.
+  const [params, setParams] = useSearchParams();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
+  const mintRequest = params.get("mint") === "1" ? params.toString() : null;
+  const [handled, setHandled] = useState<string | null>(null);
+  if (mintRequest !== handled) {
+    setHandled(mintRequest);
+    if (mintRequest) {
+      setOpen(true);
+      setName(params.get("name") ?? "");
+    }
+  }
+  useEffect(() => {
+    if (!params.has("mint") && !params.has("name")) return;
+    setParams(
+      (p) => {
+        p.delete("mint");
+        p.delete("name");
+        return p;
+      },
+      { replace: true },
+    );
+  }, [params, setParams]);
   const [env, setEnv] = useState<"test" | "live">("live");
   const qc = useQueryClient();
 

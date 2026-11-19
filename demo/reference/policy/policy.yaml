@@ -1,0 +1,17 @@
+# Hexa Bank: bank_assistant policy.
+# Boundary = what the bank allows at most (security-owned, nobody goes past it).
+# Each role then gets only the capabilities it imports.
+boundary:
+  tools:
+    get_balance: { mode: allow }
+    list_transactions: { mode: allow }
+    # Transfers only ever stay inside Hexa Bank (IBANs starting FR76 4242 4).
+    transfer_funds: { mode: allow, constraint: 'matches(args.to_iban, "^FR76 ?4242 ?4")' }
+    close_account: { mode: deny }        # never through the assistant
+  admission: { mode: allow }
+agents:
+  bank_assistant:
+    roles:
+      default: { import: [ caps/bank/read.yaml ] }
+      teller:
+        import: [ caps/bank/ingress.yaml, caps/bank/read.yaml, caps/bank/transfer_teller.yaml ]
