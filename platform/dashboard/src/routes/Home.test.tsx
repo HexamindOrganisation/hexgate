@@ -326,6 +326,33 @@ describe("HomePage", () => {
     await waitFor(() => expect(useUi.getState().quickstartOpen).toBe(true));
   });
 
+  it("offers the quickstart to a new account, whose org has no project yet", async () => {
+    act(() => useActive.setState({ activeProjectId: null }));
+    stub({ "/v1/orgs/o1/projects": [] });
+    renderWithProviders(<HomePage />);
+    expect(await screen.findByText("No project selected")).toBeInTheDocument();
+    await waitFor(() => expect(useUi.getState().quickstartOpen).toBe(true));
+  });
+
+  it("doesn't offer it while an existing user's default project is picked", async () => {
+    // Projects exist, but none is active yet (a fresh browser, before the
+    // shell's bootstrap picks one): the page shows "no project" for a moment.
+    act(() => useActive.setState({ activeProjectId: null }));
+    stub();
+    renderWithProviders(<HomePage />);
+    expect(await screen.findByText("No project selected")).toBeInTheDocument();
+    // Once the project list has loaded (with one project), still no auto-open.
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(window.fetch)
+          .mock.calls.some(([u]) => String(u).includes("/v1/orgs/o1/projects")),
+      ).toBe(true),
+    );
+    await act(async () => {});
+    expect(useUi.getState().quickstartOpen).toBe(false);
+  });
+
   it("doesn't reopen the quickstart once it has been seen", async () => {
     useUi.setState({ quickstartSeen: true });
     stub({ "/v1/projects/p1/agents/manifest": [] });

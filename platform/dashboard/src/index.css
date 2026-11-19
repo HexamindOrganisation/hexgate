@@ -619,6 +619,27 @@
   }
 }
 
+/* Quickstart code tokens (components/quickstart/highlight.tsx). The blocks are
+ * always dark, so these are the policy editor's dark-palette inks. */
+.qs-tok-keyword {
+  color: #ff79c6;
+}
+.qs-tok-string {
+  color: #50fa7b;
+}
+.qs-tok-number {
+  color: #ffb86c;
+}
+.qs-tok-comment {
+  color: #6272a4;
+}
+.qs-tok-function {
+  color: #8be9fd;
+}
+.qs-tok-key {
+  color: #bd93f9;
+}
+
 /* A highlight sweeping across a changed line. */
 .qs-mark {
   animation: qs-mark 1.4s ease both;

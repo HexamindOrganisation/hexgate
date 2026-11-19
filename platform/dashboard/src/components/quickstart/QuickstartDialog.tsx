@@ -6,7 +6,7 @@
  * Open/step/seen state lives in the `useUi` store.
  */
 
-import { useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
@@ -38,6 +38,7 @@ import {
   WRAP,
   type Framework,
 } from "@/components/quickstart/content";
+import { highlight, type CodeLang } from "@/components/quickstart/highlight";
 import {
   IdeaScene,
   KeyScene,
@@ -52,8 +53,17 @@ import { useCopy } from "@/lib/use-copy";
 import { cn } from "@/lib/utils";
 
 /** A dark code block with a copy button. */
-function CodeBlock({ title, code }: { title: string; code: string }) {
+function CodeBlock({
+  title,
+  code,
+  lang = "text",
+}: {
+  title: string;
+  code: string;
+  lang?: CodeLang;
+}) {
   const [status, copyText] = useCopy();
+  const tokens = useMemo(() => highlight(code, lang), [code, lang]);
   const copy = () => void copyText(code);
   const label =
     status === "copied"
@@ -88,7 +98,7 @@ function CodeBlock({ title, code }: { title: string; code: string }) {
         </span>
       </div>
       <pre className="overflow-x-auto p-3 pt-2 font-mono text-[11.5px] leading-relaxed scrollbar-thin">
-        <code>{code}</code>
+        <code>{tokens}</code>
       </pre>
     </div>
   );
@@ -149,7 +159,7 @@ const STEP_DEFS: Record<QuickstartStepId, Omit<Step, "id">> = {
           This walkthrough uses one refund tool and two roles. Support may
           refund up to $50 in USD; billing up to $500 in USD or EUR.
         </p>
-        <CodeBlock title="policy.yaml" code={POLICY_YAML} />
+        <CodeBlock title="policy.yaml" lang="yaml" code={POLICY_YAML} />
       </>
     ),
     scene: () => <IdeaScene />,
@@ -163,7 +173,7 @@ const STEP_DEFS: Record<QuickstartStepId, Omit<Step, "id">> = {
           straight away: it is shown in full only once. The key ties your agent
           to this project.
         </p>
-        <CodeBlock title=".env" code={ENV_FILE} />
+        <CodeBlock title=".env" lang="env" code={ENV_FILE} />
       </>
     ),
     scene: () => <KeyScene />,
@@ -192,8 +202,16 @@ const STEP_DEFS: Record<QuickstartStepId, Omit<Step, "id">> = {
           ; point them at your own agent's module instead.
         </p>
         <FrameworkPicker value={framework} onChange={setFramework} />
-        <CodeBlock title="bash" code={`${INSTALL}\n${REGISTER[framework]}`} />
-        <CodeBlock title="guarded_agent.py" code={WRAP[framework]} />
+        <CodeBlock
+          title="bash"
+          lang="bash"
+          code={`${INSTALL}\n${REGISTER[framework]}`}
+        />
+        <CodeBlock
+          title="guarded_agent.py"
+          lang="python"
+          code={WRAP[framework]}
+        />
         <p className="text-muted-foreground">
           <code>HexgateContext</code> says who is asking. In your app, fill it
           from the signed-in user. Don't run it yet: the starter policy is still
@@ -213,7 +231,7 @@ const STEP_DEFS: Record<QuickstartStepId, Omit<Step, "id">> = {
           starter policy with yours and save. The platform signs it and serves
           it to the agent, so the file no longer ships with your code.
         </p>
-        <CodeBlock title="policy.yaml" code={POLICY_YAML} />
+        <CodeBlock title="policy.yaml" lang="yaml" code={POLICY_YAML} />
         <p className="text-muted-foreground">
           Re-registering later updates the tool list but keeps your policy
           edits.
@@ -231,7 +249,7 @@ const STEP_DEFS: Record<QuickstartStepId, Omit<Step, "id">> = {
           Run the script. It sends the same request, "Refund $400 on order
           O-42", once as <code>support</code> and once as <code>billing</code>.
         </p>
-        <CodeBlock title="bash" code={RUN_COMMAND} />
+        <CodeBlock title="bash" lang="bash" code={RUN_COMMAND} />
         <CodeBlock
           title="output · the model's wording will vary"
           code={RUN_OUTPUT}

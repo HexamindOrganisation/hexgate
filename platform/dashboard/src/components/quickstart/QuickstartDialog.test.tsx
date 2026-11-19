@@ -26,6 +26,13 @@ function renderDialog() {
   );
 }
 
+/** The dialog's code blocks as plain text (highlighting splits them into
+ * token spans, which text queries don't match across). */
+const codeText = () =>
+  [...document.querySelectorAll("pre code")]
+    .map((c) => c.textContent)
+    .join("\n");
+
 describe("QuickstartDialog", () => {
   afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
@@ -42,7 +49,7 @@ describe("QuickstartDialog", () => {
     useUi.setState({ quickstartStep: QUICKSTART_STEP.register });
     renderDialog();
     // The register step installs the SDK before registering.
-    expect(screen.getByText(/pip install hexgate/)).toBeInTheDocument();
+    expect(codeText()).toContain("pip install hexgate");
     vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(
       new Error("denied"),
     );
@@ -94,11 +101,11 @@ describe("QuickstartDialog", () => {
     await user.click(
       screen.getByRole("button", { name: /step 3: register and wrap/i }),
     );
-    expect(screen.getByText(/wrap_langchain_agent\(agent=graph/)).toBeTruthy();
+    expect(codeText()).toContain("wrap_langchain_agent(agent=graph");
 
     await user.click(screen.getByRole("radio", { name: "Pydantic AI" }));
-    expect(screen.getByText(/wrap_pydantic_agent\(agent=agent\)/)).toBeTruthy();
-    expect(screen.queryByText(/wrap_langchain_agent\(agent=graph/)).toBeNull();
+    expect(codeText()).toContain("wrap_pydantic_agent(agent=agent)");
+    expect(codeText()).not.toContain("wrap_langchain_agent(agent=graph");
   });
 
   it("navigates to the step's page and closes", async () => {
