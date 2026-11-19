@@ -509,15 +509,22 @@ compose-check: ## The assistant's secrets reach only its services in the deploy 
 .PHONY: platform-env-pull
 platform-env-pull: ## Pull platform/.env.<stage> and .env.<stage>.assistant from Scaleway: make platform-env-pull STAGE=prod
 	@bash platform/scripts/env-secret.sh $(STAGE)
+	@bash platform/scripts/env-split-check.sh platform/.env.$(STAGE)
 
 # Auto-pull only a missing env file; an existing one is left untouched
 # (`make platform-env-pull` to force a refresh). A secret that cannot be
-# pulled stops the target here, and so does an assistant secret in the main
-# file, where the api would load it.
+# pulled stops the target here.
 .PHONY: _require-stage-env
 _require-stage-env:
 	@test -f platform/.env.$(STAGE) || bash platform/scripts/env-secret.sh $(STAGE) main
 	@test -f platform/.env.$(STAGE).assistant || bash platform/scripts/env-secret.sh $(STAGE) assistant
+
+# The targets that start or change containers also refuse an assistant secret
+# in the main file, where the api would load it, before the upgrade stops
+# anything. platform-down and platform-logs do not: an operator must be able
+# to stop the stack or read its logs without first fixing a secret.
+.PHONY: _require-stage-env-split
+_require-stage-env-split: _require-stage-env
 	@bash platform/scripts/env-split-check.sh platform/.env.$(STAGE)
 
 # The two writers whose sessions hold the locks platform-migrate needs.
@@ -527,11 +534,12 @@ _require-stage-env:
 DEPLOY_WRITERS = api enricher
 
 # A target rather than a raw compose line in the runbook. This is the FIRST
-# command of every upgrade, and _require-stage-env is the only thing that pulls
-# a missing .env.<stage> or .env.<stage>.assistant — a hand-written `docker compose --env-file` here dies
+# command of every upgrade, and its prerequisite _require-stage-env is the only
+# thing that pulls a missing .env.<stage> or .env.<stage>.assistant — a
+# hand-written `docker compose --env-file` here dies
 # with `couldn't find env file` before platform-migrate would have fetched it.
 .PHONY: platform-stop-writers
-platform-stop-writers: _require-stage-env ## Stop api + enricher ahead of a migrate: make platform-stop-writers STAGE=prod
+platform-stop-writers: _require-stage-env-split ## Stop api + enricher ahead of a migrate: make platform-stop-writers STAGE=prod
 	$(DEPLOY_COMPOSE) stop $(DEPLOY_WRITERS)
 
 # Runs BEFORE platform-up on any release that adds a column: init_db() is
@@ -557,7 +565,7 @@ platform-stop-writers: _require-stage-env ## Stop api + enricher ahead of a migr
 # lock_timeout, so stop `api` and `enricher` first (keep `collector` and
 # `redpanda` up, so OTLP keeps buffering) or expect the run to give up.
 .PHONY: platform-migrate
-platform-migrate: _require-stage-env ## Apply platform/{postgres,clickhouse}/migrations/*.sql to a deploy stack: make platform-migrate STAGE=prod
+platform-migrate: _require-stage-env-split ## Apply platform/{postgres,clickhouse}/migrations/*.sql to a deploy stack: make platform-migrate STAGE=prod
 	$(DEPLOY_COMPOSE) up -d --wait postgres clickhouse
 	@bash platform/scripts/migrate.sh $(STAGE)
 
@@ -568,7 +576,7 @@ platform-migrate: _require-stage-env ## Apply platform/{postgres,clickhouse}/mig
 # the views and by the backfill, for good. `ps` without -a lists only running
 # (and restarting) containers.
 .PHONY: platform-backfill
-platform-backfill: _require-stage-env ## One-time backfill, writers stopped: make platform-backfill STAGE=prod FILE=0005_usage_minute
+platform-backfill: _require-stage-env-split ## One-time backfill, writers stopped: make platform-backfill STAGE=prod FILE=0005_usage_minute
 	@test -n "$(FILE)" || (echo "Set FILE=<name>, e.g. make platform-backfill STAGE=prod FILE=0005_usage_minute" && exit 1)
 	@running="$$($(DEPLOY_COMPOSE) ps --services $(DEPLOY_WRITERS))" || exit 1; \
 		test -z "$$running" || (echo "Refusing to backfill while these writers run:" $$running "-- make platform-stop-writers STAGE=$(STAGE) first" && exit 1)
@@ -576,7 +584,7 @@ platform-backfill: _require-stage-env ## One-time backfill, writers stopped: mak
 	@bash platform/scripts/backfill.sh $(STAGE) platform/clickhouse/backfills/$(FILE).sql
 
 .PHONY: platform-up
-platform-up: _require-stage-env ## Build + (re)start a deploy stack: make platform-up STAGE=prod (default staging)
+platform-up: _require-stage-env-split ## Build + (re)start a deploy stack: make platform-up STAGE=prod (default staging)
 	@# Compose starts a finished one-shot again only when its config changes,
 	@# so an edit to assistant_db.sql (a bind mount) would never reach a stage.
 	@# A failure stops here, before any container is replaced.

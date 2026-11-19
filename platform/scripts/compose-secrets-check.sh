@@ -9,9 +9,11 @@
 #   2. The assistant receives exactly its own environment (an allowlist of
 #      keys), no env_file and no volume, so no secret of .env.<stage> and no
 #      signing key reaches it.
-#   3. `make _require-stage-env` refuses a .env.<stage> that holds one of the
-#      assistant's secrets (env-split-check.sh): compose cannot tell where an
-#      interpolated value came from, so that is checked on the file.
+#   3. The deploy targets that start or change containers, and
+#      platform-env-pull, refuse a .env.<stage> that holds one of the
+#      assistant's secrets (env-split-check.sh); down and logs do not.
+#      Compose cannot tell where an interpolated value came from, so that is
+#      checked on the file.
 # Needs docker compose and jq; without them the check is skipped with a
 # notice, unless HEXGATE_COMPOSE_CHECK_REQUIRED is set (the CI job sets it).
 set -euo pipefail
@@ -86,12 +88,12 @@ if [[ "$got_env" != "$want_env" ]]; then
     echo "the assistant's environment is '$got_env' (want: '$want_env')" >&2
     fail=1
 fi
-for field in env_file volumes; do
-    if [[ "$(jq -r --arg f "$field" '.services.assistant[$f] // empty | length' "$tmp/config.json")" != "" ]]; then
-        echo "the assistant has $field; it must have none" >&2
-        fail=1
-    fi
-done
+# No env_file check: `config` merges an env_file into `environment`, which
+# the allowlist above already pins.
+if [[ "$(jq -r '.services.assistant.volumes // empty | length' "$tmp/config.json")" != "" ]]; then
+    echo "the assistant has volumes; it must have none" >&2
+    fail=1
+fi
 # The marker reaching the assistant at all proves each key is passed through,
 # not only that none leaks.
 for key in HEXGATE_ASSISTANT_POSTGRES_PASSWORD HEXGATE_ASSISTANT_MODEL HEXGATE_ASSISTANT_OPENROUTER_KEY; do
@@ -116,11 +118,33 @@ for line in HEXGATE_ASSISTANT_POSTGRES_PASSWORD=m HEXGATE_ASSISTANT_MODEL=m HEXG
         fail=1
     fi
 done
-if ! make -s -n -C "$here/.." _require-stage-env STAGE=staging 2>/dev/null \
-        | grep -qF 'platform/scripts/env-split-check.sh platform/.env.staging'; then
-    echo "make _require-stage-env does not run env-split-check.sh on .env.<stage>" >&2
-    fail=1
-fi
+# Which targets run it: every one that starts or changes containers, and the
+# pull; never down or logs, which must work during an incident.
+# Prints yes or no, and fails when make prints no recipe for the target (a
+# renamed target, or one left behind only as .PHONY), so the "must not" half
+# cannot pass by default.
+runs_guard() {
+    # Captured first: `grep -q` exiting early would SIGPIPE make under pipefail.
+    local recipe
+    recipe="$(make -s -n -C "$here/.." "$1" STAGE=staging FILE=x)" || return 1
+    grep -q 'docker compose\|env-secret.sh' <<<"$recipe" || return 1
+    if grep -qF 'platform/scripts/env-split-check.sh platform/.env.staging' <<<"$recipe"; then
+        echo yes
+    else
+        echo no
+    fi
+}
+for target in platform-stop-writers platform-migrate platform-backfill platform-up platform-env-pull \
+        platform-down platform-logs; do
+    case "$target" in platform-down | platform-logs) want=no ;; *) want=yes ;; esac
+    if ! got="$(runs_guard "$target")"; then
+        echo "make -n $target failed" >&2
+        fail=1
+    elif [[ "$got" != "$want" ]]; then
+        echo "make $target runs env-split-check.sh: $got (want: $want)" >&2
+        fail=1
+    fi
+done
 
 (( fail == 0 )) || exit 1
 echo "compose: the assistant's secrets reach only assistant and assistant-db-init, the assistant holds only its allowlist, and the deploy targets refuse them in .env.<stage>"

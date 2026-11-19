@@ -86,8 +86,9 @@ directory.
 (opaque, full env file as payload), never hand-copied, and
 `platform/.env.<stage>.assistant` from `/hexgate/<stage>-assistant`. The second
 holds only the policy assistant's secrets: the api, api-init and enricher load
-all of `.env.<stage>`, so a secret there reaches all three. Every deploy
-target refuses a `.env.<stage>` holding `HEXGATE_ASSISTANT_POSTGRES_PASSWORD`,
+all of `.env.<stage>`, so a secret there reaches all three. `make
+platform-env-pull` and every deploy target that starts or changes containers
+(not `platform-down` or `platform-logs`) refuse a `.env.<stage>` holding `HEXGATE_ASSISTANT_POSTGRES_PASSWORD`,
 `_MODEL` or `_OPENROUTER_KEY` (`platform/scripts/env-split-check.sh`);
 `HEXGATE_ASSISTANT_PORT` and `_ENABLED` are not secret and stay there.
 
