@@ -19,6 +19,7 @@ from hexgate_api.constants import (
     DEFAULT_USER_ID,
     ROLE_MEMBER,
 )
+from hexgate_api.features.policy_modules.diff import diff_files
 from hexgate_api.models import (
     AssistantChange,
     Organization,
@@ -26,12 +27,32 @@ from hexgate_api.models import (
     Project,
     User,
 )
+from hexgate_api.schemas import PolicyDiffResponse
 
-ME = {"X-Dev-User": DEFAULT_USER_ID}
 OTHER_ORG_ID = "org_other"
 OTHER_PROJECT_ID = "prj_other_org"
 SIBLING_PROJECT_ID = "prj_sibling"
 MEMBER_ID = "usr_member"
+
+_COMPOSES = {"before": True, "after": True}
+# The effect as the writer stores it: the diff of two file maps, dumped. This
+# change tightens a grant, switches usage on and declares reach, so every list
+# of the diff has an entry.
+_EFFECT = PolicyDiffResponse(
+    **diff_files(
+        {
+            "policy.yaml": "agents:\n  bot:\n    roles:\n      support:\n"
+            "        tools: { refund: { mode: allow } }\n"
+        },
+        {
+            "policy.yaml": "boundary: { tools: { refund: {} }, reach: { billing_bot: {} } }\n"
+            "usage: { on_unavailable: deny }\n"
+            "agents:\n  bot:\n    roles:\n      support:\n"
+            "        tools: { refund: { mode: approval_required } }\n"
+            "        reach: { billing_bot: {} }\n"
+        },
+    )
+).model_dump(mode="json")
 
 # Every stored field but the id, the project and the time, as the API returns it.
 _ROW = {
@@ -71,17 +92,11 @@ _ROW = {
     "boundary_changes": [
         {"file": "policy.yaml", "path": "x", "kind": "tightened", "extra": 1}
     ],
-    "effect": {
-        "changes": [],
-        "agent_changes": [],
-        "gate_changes": [],
-        "agents_affected": ["billing-bot"],
-        "composes": {"before": True, "after": True},
-    },
+    "effect": _EFFECT,
 }
 
 
-async def _seed(session_factory, change_id: str, project_id: str) -> None:
+async def _seed(session_factory, change_id: str, project_id: str, **overrides) -> None:
     """A sibling project in the caller's org, an org the caller is not in, and
     one change stored under ``project_id``."""
     async with session_factory() as s:
@@ -93,15 +108,18 @@ async def _seed(session_factory, change_id: str, project_id: str) -> None:
                 id=change_id,
                 project_id=project_id,
                 created_at=datetime(2026, 11, 19, 10, 0, tzinfo=timezone.utc),
-                **_ROW,
+                **(_ROW | overrides),
             )
         )
         await s.commit()
 
 
-def _get(client: TestClient, project_id: str, change_id: str):
+def _get(
+    client: TestClient, project_id: str, change_id: str, user: str = DEFAULT_USER_ID
+):
     return client.get(
-        f"/v1/projects/{project_id}/policy/changes/{change_id}", headers=ME
+        f"/v1/projects/{project_id}/policy/changes/{change_id}",
+        headers={"X-Dev-User": user},
     )
 
 
@@ -116,6 +134,34 @@ def test_api_read_policy_change_happy_path(client: TestClient, session_factory) 
         "id": "chg_mine",
         "project_id": DEFAULT_PROJECT_ID,
         "created_at": "2026-11-19T10:00:00Z",
+    }
+    effect = r.json()["effect"]
+    assert effect["agent_changes"] and effect["gate_changes"]
+    assert any(c["before"] and c["after"] for c in effect["changes"])
+
+
+def test_when_the_stored_effect_holds_only_the_required_keys_then_defaults_fill_it(
+    client: TestClient, session_factory
+) -> None:
+    """A row stored before a list was added to the diff still reads back."""
+    asyncio.run(
+        _seed(
+            session_factory,
+            "chg_old",
+            DEFAULT_PROJECT_ID,
+            effect={"composes": _COMPOSES},
+        )
+    )
+
+    r = _get(client, DEFAULT_PROJECT_ID, "chg_old")
+
+    assert r.status_code == 200, r.text
+    assert r.json()["effect"] == {
+        "changes": [],
+        "agent_changes": [],
+        "gate_changes": [],
+        "agents_affected": [],
+        "composes": _COMPOSES,
     }
 
 
@@ -149,7 +195,7 @@ def test_when_asked_through_the_owning_project_of_another_org_then_403(
     assert r.status_code == 403, r.text
 
 
-async def _add_member(session_factory) -> str:
+async def _add_member(session_factory) -> None:
     async with session_factory() as s:
         s.add(User(id=MEMBER_ID, email="member@example.test"))
         s.add(
@@ -158,7 +204,6 @@ async def _add_member(session_factory) -> str:
             )
         )
         await s.commit()
-    return MEMBER_ID
 
 
 def test_when_the_caller_is_a_plain_org_member_then_the_change_is_read(
@@ -166,11 +211,8 @@ def test_when_the_caller_is_a_plain_org_member_then_the_change_is_read(
 ) -> None:
     """Reading a change is a read: any member of the org, not only its admins."""
     asyncio.run(_seed(session_factory, "chg_mine", DEFAULT_PROJECT_ID))
-    member = asyncio.run(_add_member(session_factory))
+    asyncio.run(_add_member(session_factory))
 
-    r = client.get(
-        f"/v1/projects/{DEFAULT_PROJECT_ID}/policy/changes/chg_mine",
-        headers={"X-Dev-User": member},
-    )
+    r = _get(client, DEFAULT_PROJECT_ID, "chg_mine", user=MEMBER_ID)
 
     assert r.status_code == 200, r.text

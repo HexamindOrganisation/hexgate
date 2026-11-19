@@ -760,7 +760,12 @@ class PolicyComposesOut(BaseModel):
 
 class PolicyDiffResponse(BaseModel):
     """Only what changes. Empty lists with ``composes`` false on a side mean that
-    side does not compose, so there was nothing to compare."""
+    side does not compose, so there was nothing to compare.
+
+    Also the stored shape of ``assistant_change.effect``, read back through
+    ``ChangeRead``: those rows are kept for the project's lifetime, so a new
+    field here, or in a model nested in it, needs a default, and nothing is
+    renamed or removed."""
 
     changes: list[PolicyChangeOut] = Field(default_factory=list)
     agent_changes: list[PolicyAgentChangeOut] = Field(default_factory=list)
