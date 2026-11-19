@@ -8,13 +8,15 @@ JSON API (`/v1/*`) and that env's dashboard SPA same-origin, listening plain
 HTTP on a **loopback port** (prod `7000`, staging `7200`). Its **collector**
 (OTLP/HTTP receiver for the SDK's spans) listens on a second loopback port
 (prod `7001`, staging `7201`), and its **MCP server** (what Claude Code and
-other MCP clients connect to) on a third (prod `7002`, staging `7202`). There
+other MCP clients connect to) on a third (prod `7002`, staging `7202`), and its
+**policy assistant** (the dashboard's chat about policies) on a fourth (prod
+`7003`, staging `7203`). There
 is no separate edge container — the SPA
 is baked into the API image and served by it.
 
 The box **already runs nginx** (host-installed, one `sites-available` file per
 hostname) that owns 80/443 and terminates TLS. Hexgate does not ship its own
-front proxy — you point the existing one at the three loopback ports by
+front proxy — you point the existing one at the four loopback ports by
 hostname and path.
 
 ```
@@ -23,24 +25,28 @@ hostname and path.
    app.hexgate.ai          │  Host: app.hexgate.ai          → 127.0.0.1:7000
                            │    path /v1/traces             → 127.0.0.1:7001
                            │    path /mcp (+ its metadata)  → 127.0.0.1:7002
+                           │    path /v1/assistant/         → 127.0.0.1:7003
    app.staging.hexgate.ai  │  Host: app.staging.hexgate.ai  → 127.0.0.1:7200
                            │    path /v1/traces             → 127.0.0.1:7201
                            │    path /mcp (+ its metadata)  → 127.0.0.1:7202
+                           │    path /v1/assistant/         → 127.0.0.1:7203
                   ┌───────┴───────────────┐    ┌───────────────────────┐
                   │ hexgate-prod          │    │ hexgate-staging       │
                   │  api→pg,ch            │    │  api→pg,ch            │
                   │  collector→redpanda   │    │  collector→redpanda   │
                   │  enricher: redpanda→ch│    │  enricher: redpanda→ch│
                   │  mcp→api              │    │  mcp→api              │
+                  │  assistant→mcp,api,pg │    │  assistant→mcp,api,pg │
                   └───────────────────────┘    └───────────────────────┘
 ```
 
 The reverse proxy must be able to reach the host loopback (it's host-installed
 or runs with host networking). A bridged proxy container can't see
-`127.0.0.1:7000` — in that case change the `api`, `collector` AND `mcp` port
-bindings in the compose to publish on a shared Docker network or a
-non-loopback port instead (republishing only the api leaves every
-`/v1/traces` POST and every MCP call 502ing while `/v1/*` works).
+`127.0.0.1:7000` — in that case change the `api`, `collector`, `mcp` AND
+`assistant` port bindings in the compose to publish on a shared Docker network
+or a non-loopback port instead (republishing only the api leaves every
+`/v1/traces` POST, every MCP call and every assistant turn 502ing while `/v1/*`
+works).
 
 Images build **on the box** — the box pulls nothing from a registry. The box is
 amd64, and the compose pins `platform: linux/amd64` (the API image also runs a
@@ -59,7 +65,8 @@ app.staging.hexgate.ai  A   <box-IP>
 ```
 
 **80 and 443** are owned by the box's reverse proxy. The 7000/7200 (api),
-7001/7201 (collector) and 7002/7202 (mcp) ports stay loopback — never exposed.
+7001/7201 (collector), 7002/7202 (mcp) and 7003/7203 (assistant) ports stay
+loopback — never exposed.
 
 ## 2. Layout (two checkouts)
 
@@ -76,12 +83,17 @@ directory.
 ## 3. Configure
 
 `platform/.env.<stage>` is **pulled from the Scaleway secret `/hexgate/<stage>`**
-(opaque, full env file as payload), never hand-copied.
+(opaque, full env file as payload), never hand-copied, and
+`platform/.env.<stage>.assistant` from `/hexgate/<stage>-assistant`. The second
+holds only the policy assistant's secrets: the api, api-init and enricher load
+all of `.env.<stage>`, so a secret there reaches all three.
 
 **Admin, one-time:** create `/hexgate/<stage>` as an opaque secret in `fr-par`
 from the `platform/.env.sample` template — `HEXGATE_POSTGRES_PASSWORD`,
 `HEXGATE_CLICKHOUSE_PASSWORD` (`openssl rand -hex 32`), any `RESEND_API_KEY` /
-Google OAuth values. Editing it adds a version; pull takes the latest.
+Google OAuth values — and `/hexgate/<stage>-assistant` from
+`platform/.env.assistant.sample` (`HEXGATE_ASSISTANT_POSTGRES_PASSWORD`, another
+`openssl rand -hex 32`). Editing a secret adds a version; pull takes the latest.
 
 **Box prerequisites:** `scw` + `jq`, with read-only Secret Manager creds
 (`scw init`, or `SCW_ACCESS_KEY` / `SCW_SECRET_KEY` / `SCW_DEFAULT_PROJECT_ID`).
@@ -89,15 +101,15 @@ Region defaults to `fr-par` (`SCW_DEFAULT_REGION`), folder to `/hexgate`
 (`HEXGATE_SECRET_PATH`).
 
 ```bash
-make platform-env-pull STAGE=prod      # writes platform/.env.prod (also auto-run by platform-up if absent)
+make platform-env-pull STAGE=prod      # writes platform/.env.prod and .env.prod.assistant (each also pulled by platform-up if absent)
 ```
 
 Then add two routes to the box's reverse proxy (one-time), so each hostname
 terminates TLS and proxies to its loopback port:
 
 ```
-app.hexgate.ai          → 127.0.0.1:7000   (except path /v1/traces → 127.0.0.1:7001, and the MCP paths → 127.0.0.1:7002)
-app.staging.hexgate.ai  → 127.0.0.1:7200   (except path /v1/traces → 127.0.0.1:7201, and the MCP paths → 127.0.0.1:7202)
+app.hexgate.ai          → 127.0.0.1:7000   (except path /v1/traces → 127.0.0.1:7001, the MCP paths → 127.0.0.1:7002, and /v1/assistant/ → 127.0.0.1:7003)
+app.staging.hexgate.ai  → 127.0.0.1:7200   (except path /v1/traces → 127.0.0.1:7201, the MCP paths → 127.0.0.1:7202, and /v1/assistant/ → 127.0.0.1:7203)
 ```
 
 The `/v1/traces` path routes to the stage's `HEXGATE_OTLP_PORT` — the
@@ -207,9 +219,10 @@ Forward `X-Forwarded-Proto: https` — the API trusts it, via uvicorn
 `--proxy-headers`, for correct https OAuth callbacks — and set
 `proxy_set_header Host $host`. The images trust those headers only from
 the peers in `FORWARDED_ALLOW_IPS` (loopback by default); the deploy compose
-sets it to `*` on the api and mcp services, which is safe only because their
-ports are published on `127.0.0.1`. `/v1` includes WebSocket endpoints, so the
-server block also needs the `Upgrade`/`Connection` headers set.
+sets it to `*` on the api, mcp and assistant services, which is safe only
+because their ports are published on `127.0.0.1`. `/v1` includes WebSocket
+endpoints, so the server block also needs the `Upgrade`/`Connection` headers
+set.
 
 **The MCP routes and rate limits** are in the same files. `/mcp` (a `^~`
 prefix: the MCP server redirects `/mcp/` to `/mcp`) and its protected-resource
@@ -246,6 +259,31 @@ redirect is built from the Host it receives (uvicorn's proxy headers correct
 the scheme, not the host), so without it the redirect points at
 `127.0.0.1:7002`.
 
+**The assistant route** is in the same files too: `^~ /v1/assistant/` goes to
+the stage's `HEXGATE_ASSISTANT_PORT`, limited per client IP with its own zone.
+A chat turn is to stream server-sent events for up to five minutes, so the
+location turns buffering off and sets `proxy_read_timeout 330s`; `make
+nginx-check` fails without either. The route's prefix leaves every
+`/v1/projects/` path, where the api will mint the assistant's tokens, on the
+api. The compose derives the assistant's
+resource URL as `HEXGATE_PUBLIC_URL` + `/v1/assistant`, beside the MCP one.
+
+The assistant has its own Postgres login and database (`hexgate_assistant`),
+never the main password: the `assistant-db-init` one-shot creates them on
+every `make platform-up` (the stages' existing `pg-data` volumes rule out an
+init script),
+sets the login's password from `HEXGATE_ASSISTANT_POSTGRES_PASSWORD`, and
+revokes `CONNECT` from `PUBLIC` on both databases, so that login cannot open
+`hexgate`. The service has no `env_file`, so the stage's other secrets never
+reach it; its own come from `.env.<stage>.assistant` (above), and `make
+compose-check` fails if they reach any other service.
+`HEXGATE_ASSISTANT_ENABLED` (default `false`) will be the api's switch for the
+Assistant tab and the assistant's tokens, so the container runs on every stage
+while the feature stays dark. `HEXGATE_ASSISTANT_MODEL` and
+`HEXGATE_ASSISTANT_OPENROUTER_KEY` are optional until a stage is enabled;
+without a model the assistant will run no chat turn. Set a credit limit with a
+daily reset on the OpenRouter key before enabling a stage.
+
 `$binary_remote_addr`, the limits' key, is the client's address only because
 nothing sits in front of this proxy; put a CDN or load balancer in front of it
 and the key becomes that hop's address, throttling every user as one.
@@ -257,7 +295,7 @@ and the key becomes that hop's address, throttling every user as one.
 make platform-up STAGE=prod
 # /srv/hexgate-staging
 make platform-up STAGE=staging
-# then reload the box's reverse proxy so it routes to 7000/7200 (+ /v1/traces → 7001/7201, MCP paths → 7002/7202)
+# then reload the box's reverse proxy so it routes to 7000/7200 (+ /v1/traces → 7001/7201, MCP paths → 7002/7202, /v1/assistant/ → 7003/7203)
 ```
 
 Bring the env stacks up before the proxy routes them, so TLS issuance doesn't
@@ -271,7 +309,8 @@ Verify:
 
 ```bash
 docker ps                                    # hexgate-prod-* and hexgate-staging-* healthy —
-                                             # except api-init/redpanda-init (one-shots: Exited (0))
+                                             # except api-init/redpanda-init/assistant-db-init
+                                             # (one-shots: Exited (0))
                                              # and enricher (no healthcheck yet; check its logs)
 curl -sf https://app.hexgate.ai/v1/health    # → 200
 curl -sf https://app.staging.hexgate.ai/v1/health
@@ -288,6 +327,19 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://app.hexgate.ai/v1/trace
 curl -s -o /dev/null -w '%{http_code}\n' -X POST https://app.hexgate.ai/mcp        # → 401
 curl -s https://app.hexgate.ai/.well-known/oauth-protected-resource/mcp           # → {"resource":"https://app.hexgate.ai/mcp",…}
 curl -s https://app.hexgate.ai/.well-known/oauth-authorization-server             # → {"issuer":"https://app.hexgate.ai",…}
+# The assistant: its healthcheck runs inside the container, so curl the
+# published port (on the box) and the route. 404 = the location is missing
+# (the api answered), 502 = the container is down. Staging: 7203, its hostname.
+curl -s http://127.0.0.1:7003/v1/assistant/health                                # → {"status":"ok","service":"hexgate-assistant"}
+curl -s https://app.hexgate.ai/v1/assistant/health                                # → {"status":"ok","service":"hexgate-assistant"}
+# Its login opens its own database, not the main one. From a container on the
+# stack's network: loopback inside the postgres container skips the password.
+# psql prompts for HEXGATE_ASSISTANT_POSTGRES_PASSWORD (.env.<stage>.assistant).
+# Staging: hexgate-staging_default.
+docker run --rm -it --network hexgate-prod_default postgres:16 \
+  psql -h postgres -U hexgate_assistant -d hexgate_assistant -c 'select 1'      # → 1
+docker run --rm -it --network hexgate-prod_default postgres:16 \
+  psql -h postgres -U hexgate_assistant -d hexgate -c 'select 1'                # → permission denied for database "hexgate"
 ```
 
 Then prove the pipeline behind the front door. From a laptop with the repo
@@ -403,7 +455,8 @@ server block keeps the hand-written block, and routes added to
 added columns has its own step — see below.
 
 Upgrades reuse the env already on the box: the deploy targets only pull a
-MISSING `.env.<stage>`, never refresh an existing one. If the secret changed,
+MISSING `.env.<stage>` or `.env.<stage>.assistant`, never refresh an existing
+one. If the secret changed,
 refresh it first: `make platform-env-pull STAGE=<stage>`.
 
 **When a release adds a required key** (the compose aborts with `required
@@ -422,6 +475,14 @@ far that did this:
 | OTLP pipeline (collector/redpanda/enricher) | `HEXGATE_OTLP_PORT` | `7001` prod, `7201` staging |
 | MCP server | `HEXGATE_MCP_PORT` | `7002` prod, `7202` staging |
 | MCP server | `HEXGATE_PUBLIC_URL` | `https://app.hexgate.ai` prod, `https://app.staging.hexgate.ai` staging — no trailing slash (the api and mcp refuse to boot with one) |
+| Policy assistant | `HEXGATE_ASSISTANT_PORT` | `7003` prod, `7203` staging |
+| Policy assistant | `HEXGATE_ASSISTANT_POSTGRES_PASSWORD` | `openssl rand -hex 32`, different from `HEXGATE_POSTGRES_PASSWORD`; in the new `/hexgate/<stage>-assistant` secret, not `/hexgate/<stage>` |
+
+The policy assistant release also adds that second secret. Create
+`/hexgate/<stage>-assistant` before the box pulls the release: the first deploy
+target after the pull fetches the missing `.env.<stage>.assistant` by itself
+(an existing `.env.<stage>` is left alone), and stops with `cannot access
+/hexgate/<stage>-assistant` while the secret does not exist.
 
 The MCP server release adds its routes to `platform/nginx/` and a zones file
 per stage, which nginx needs at `http` level first. In the same upgrade, before
@@ -562,6 +623,14 @@ location = /v1/traces {
 }
 ```
 
+**Rolling back past the policy assistant.** An older checkout's compose has no
+`assistant` service, so `up` only warns about the orphan and leaves it running,
+with its secrets. Before checking such a commit out, remove both containers:
+`docker compose -p hexgate-<stage> --env-file platform/.env.<stage> --env-file
+platform/.env.<stage>.assistant -f platform/docker-compose.deploy.yml rm -sf
+assistant assistant-db-init`. The `hexgate_assistant` database and login stay
+behind, unused.
+
 **Rolling back past a migration.** The columns stay behind when the code goes
 away, and old code does not know to filter on them. Nothing here is automatic,
 so a rollback that skips the compensating step below is silent — the stack comes
@@ -575,7 +644,7 @@ Before checking out a tag older than that release:
 ```bash
 cd /srv/hexgate-<stage>
 docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
-  -f platform/docker-compose.deploy.yml exec -T postgres \
+  --env-file platform/.env.<stage>.assistant -f platform/docker-compose.deploy.yml exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U hexgate -d hexgate \
   -c "DELETE FROM devtoken WHERE revoked_at IS NOT NULL"
 ```
@@ -607,7 +676,7 @@ hide the whole rollback window from every `30d` count.
 ```bash
 cd /srv/hexgate-<stage>
 docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
-  -f platform/docker-compose.deploy.yml exec -T clickhouse sh -c \
+  --env-file platform/.env.<stage>.assistant -f platform/docker-compose.deploy.yml exec -T clickhouse sh -c \
   'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --multiquery' <<'SQL'
 DROP VIEW IF EXISTS hexgate_audit.usage_minute_from_runs;
 DROP VIEW IF EXISTS hexgate_audit.usage_minute_from_decisions;
@@ -626,7 +695,7 @@ for the same reason as `0005`:
 ```bash
 cd /srv/hexgate-<stage>
 docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
-  -f platform/docker-compose.deploy.yml exec -T clickhouse sh -c \
+  --env-file platform/.env.<stage>.assistant -f platform/docker-compose.deploy.yml exec -T clickhouse sh -c \
   'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --multiquery' <<'SQL'
 DROP VIEW IF EXISTS hexgate_audit.usage_minute_user_from_runs;
 DROP VIEW IF EXISTS hexgate_audit.usage_minute_user_from_decisions;
@@ -647,13 +716,13 @@ is now sized to send:
 ```bash
 cd /srv/hexgate-<stage>
 docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
-  -f platform/docker-compose.deploy.yml run --rm redpanda-init
+  --env-file platform/.env.<stage>.assistant -f platform/docker-compose.deploy.yml run --rm redpanda-init
 # verify, then restart the two clients of that limit
 docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
-  -f platform/docker-compose.deploy.yml exec redpanda \
+  --env-file platform/.env.<stage>.assistant -f platform/docker-compose.deploy.yml exec redpanda \
   rpk topic describe hexgate.otlp.raw --brokers localhost:9092
 docker compose -p hexgate-<stage> --env-file platform/.env.<stage> \
-  -f platform/docker-compose.deploy.yml restart collector enricher
+  --env-file platform/.env.<stage>.assistant -f platform/docker-compose.deploy.yml restart collector enricher
 ```
 
 `run --rm` starts a sibling container rather than reusing the completed one, so

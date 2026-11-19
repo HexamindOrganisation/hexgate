@@ -14,10 +14,12 @@
 #      a zone name the two stages share, or a file the server wildcard would
 #      pull in at the wrong level, fails here too.
 #   4. Every location proxies to the port its route table names (api x000,
-#      collector x001, MCP server x002), and /v1/traces has a body cap equal
-#      to the collector's own max_request_body_size: if the proxy allows less,
-#      large exports get a 413 from nginx; if more, nginx buffers bodies the
-#      collector then refuses.
+#      collector x001, MCP server x002, assistant x003), and /v1/traces has a
+#      body cap equal to the collector's own max_request_body_size: if the
+#      proxy allows less, large exports get a 413 from nginx; if more, nginx
+#      buffers bodies the collector then refuses.
+#   5. /v1/assistant/ neither buffers nor cuts a stream at nginx's 60 s
+#      default read timeout.
 # Needs `nginx` on PATH; without it the check is skipped with a notice, unless
 # NGINX_CHECK_REQUIRED is set (the CI job sets it, so a broken install step
 # fails instead of passing). Writes nothing outside a temp directory.
@@ -165,10 +167,12 @@ location_block() {
 }
 
 # Each route's upstream on prod (staging follows through the drift check):
-# 7000 api, 7001 collector, 7002 MCP server. A location missing from this
-# table fails, so a new route has to say where it goes.
+# 7000 api, 7001 collector, 7002 MCP server, 7003 policy assistant. A
+# location missing from this table fails, so a new route has to say where it
+# goes.
 routes=("= /v1/traces 7001" "^~ /mcp 7002" "= /.well-known/oauth-protected-resource/mcp 7002"
-        "= /.well-known/oauth-authorization-server 7000" "= /.well-known/jwks.json 7000" "^~ /v1/oauth/ 7000")
+        "= /.well-known/oauth-authorization-server 7000" "= /.well-known/jwks.json 7000" "^~ /v1/oauth/ 7000"
+        "^~ /v1/assistant/ 7003")
 while IFS= read -r header; do
     known=""
     for route in "${routes[@]}"; do
@@ -200,3 +204,15 @@ if ! [[ "$collector_bytes" =~ ^[0-9]+$ && "$proxy_mib" =~ ^[0-9]+$ ]] \
     exit 1
 fi
 echo "/v1/traces goes to the collector, body cap ${proxy_mib}m matches it"
+
+# A buffered stream reaches the browser only when the turn ends, and the 60 s
+# default read timeout cuts a turn that waits on a slow model. Both fail
+# silently on the box, so they are checked here.
+assistant_block="$(location_block "^~ /v1/assistant/")"
+for want in "proxy_buffering off;" "proxy_read_timeout 330s;"; do
+    if ! grep -qxF "$want" <<<"$assistant_block"; then
+        echo "location ^~ /v1/assistant/ lacks '$want' on prod" >&2
+        exit 1
+    fi
+done
+echo "/v1/assistant/ goes to the assistant, unbuffered, with a 330s read timeout"

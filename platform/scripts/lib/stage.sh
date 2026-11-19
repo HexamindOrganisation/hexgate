@@ -1,9 +1,11 @@
 # Shared by migrate.sh and backfill.sh: sourced, not run. The caller sets STAGE
 # first. Paths are relative to the repo root, where `make platform-*` runs them.
 
+# The Makefile's DEPLOY_COMPOSE, repeated; keep the two in step.
 compose() {
   docker compose -p "hexgate-$STAGE" \
     --env-file "platform/.env.$STAGE" \
+    --env-file "platform/.env.$STAGE.assistant" \
     -f platform/docker-compose.deploy.yml "$@"
 }
 
