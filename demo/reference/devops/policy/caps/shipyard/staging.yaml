@@ -1,0 +1,5 @@
+# Engineers act on staging only.
+tools:
+  restart_service: { mode: allow, constraint: 'args.env == "staging"' }
+  scale_service: { mode: allow, constraint: 'args.env == "staging"' }
+  deploy_version: { mode: allow, constraint: 'args.env == "staging"' }

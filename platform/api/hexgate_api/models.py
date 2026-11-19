@@ -1,9 +1,11 @@
 import uuid
 from datetime import date, datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import JSON, Column, DateTime, ForeignKey, LargeBinary, String
 from sqlmodel import Field, Relationship, SQLModel, UniqueConstraint
+
+from hexgate_api.constants import ASSISTANT_MODE_DEFAULT
 
 
 def utcnow() -> datetime:
@@ -101,6 +103,15 @@ class Organization(SQLModel, table=True):
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
     updated_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
+    # What the dashboard's policy assistant may do in this org: "off",
+    # "read_only" or "read_write". It governs the assistant's own client only;
+    # every other MCP client keeps the scopes its user granted it. The server
+    # default matches migration 0006, so an API build that predates the column
+    # can still insert an org once the migration has run.
+    assistant_mode: str = Field(
+        default=ASSISTANT_MODE_DEFAULT,
+        sa_column_kwargs={"server_default": ASSISTANT_MODE_DEFAULT},
+    )
 
 
 class User(SQLModel, table=True):
@@ -648,6 +659,10 @@ class PolicyFile(SQLModel, table=True):
         default_factory=utcnow, sa_type=DateTime(timezone=True)
     )
     updated_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
+    # The assistant_change that last wrote this file, or NULL when the last
+    # write was a plain save. Like ``updated_by_user_id`` it names the LAST
+    # writer only; the change row keeps the before and after text.
+    updated_via_change_id: Optional[str] = Field(default=None, index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -760,3 +775,45 @@ class AiActReport(SQLModel, table=True):
     annex_bytes: int
     signature: bytes = Field(sa_column=Column(LargeBinary, nullable=False))
     signing_kid: str
+
+
+# ---------------------------------------------------------------------------
+# Policy changes saved through the apply route.
+# ---------------------------------------------------------------------------
+
+
+class AssistantChange(SQLModel, table=True):
+    """One applied policy change: the files before and after, and its checks.
+
+    Written once, in the same transaction as the file rows it changed, and
+    never edited: it is the record of what was saved, by whom, and what the
+    checks said at the time. Kept for the project's lifetime.
+
+    ``files`` holds ``[{name, before_content, before_hash, after_content,
+    after_hash}]``, at most 10 files of 256 KiB per side, so one row stays
+    around 5 MiB. ``effect`` is the per-role diff computed before the save:
+    once the files are stored they are the "after" side, and recomputing it
+    would compare a project with itself.
+    """
+
+    __tablename__ = "assistant_change"
+
+    id: str = Field(primary_key=True)  # new_id(AssistantChange) -> "chg_…"
+    project_id: str = Field(foreign_key="project.id", index=True)
+    # The assistant's chat session. It lives in the assistant's own database,
+    # so there is no foreign key to point at; NULL from every other client.
+    session_id: Optional[str] = None
+    created_by_user_id: Optional[str] = Field(default=None, sa_column=actor_fk_column())
+    # The OAuth client that applied the change, from its access token.
+    client_id: Optional[str] = None
+    summary: str
+    files: list[dict[str, Any]] = Field(sa_column=Column(JSON, nullable=False))
+    samples: list[dict[str, Any]] = Field(sa_column=Column(JSON, nullable=False))
+    checks: list[dict[str, Any]] = Field(sa_column=Column(JSON, nullable=False))
+    boundary_changes: list[dict[str, Any]] = Field(
+        sa_column=Column(JSON, nullable=False)
+    )
+    effect: dict[str, Any] = Field(sa_column=Column(JSON, nullable=False))
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_type=DateTime(timezone=True)
+    )

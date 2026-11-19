@@ -15,7 +15,7 @@ import type {
   ResolvedPolicy,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
-import { PolicyGraphDialog } from "./PolicyGraphDialog";
+import { AgentGraphPicker } from "./AgentGraphPicker";
 import { TestPanel } from "./TestPanel";
 import { cn } from "@/lib/utils";
 import { MATRIX_MODE_TONE } from "@/lib/policy_files";
@@ -128,6 +128,7 @@ export function InspectorTabs({
   agentNames,
   inspectAgent,
   onInspectAgentChange,
+  unsaved = false,
 }: {
   projectId: string;
   resolved: ResolvedPolicy | undefined | null;
@@ -141,6 +142,8 @@ export function InspectorTabs({
   agentNames: string[];
   inspectAgent: string;
   onInspectAgentChange: (agent: string) => void;
+  /** Unsaved edits: the graph opens in a new tab so they survive. */
+  unsaved?: boolean;
 }) {
   const [tab, setTab] = useState<Tab>("resolved");
   const [graphOpen, setGraphOpen] = useState(false);
@@ -183,7 +186,7 @@ export function InspectorTabs({
         {modular && (
           <button
             onClick={() => setGraphOpen(true)}
-            title="Open the policy graph"
+            title="Open an agent's graph"
             className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
           >
             <Network size={13} />
@@ -192,11 +195,11 @@ export function InspectorTabs({
         )}
       </div>
       {graphOpen && (
-        <PolicyGraphDialog
-          open={graphOpen}
-          onOpenChange={setGraphOpen}
+        // Graphs are per agent: pick one and open its hub.
+        <AgentGraphPicker
           projectId={projectId}
-          roleNames={roleNames}
+          newTab={unsaved}
+          onClose={() => setGraphOpen(false)}
         />
       )}
       <div className="flex-1 overflow-hidden">

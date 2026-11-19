@@ -13,7 +13,12 @@ import { useUi } from "@/lib/ui";
 describe("useUi", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    useUi.setState({ sidebarCollapsed: false });
+    useUi.setState({
+      sidebarCollapsed: false,
+      quickstartOpen: false,
+      quickstartSeen: false,
+      quickstartStep: 0,
+    });
   });
 
   afterEach(() => {
@@ -36,5 +41,32 @@ describe("useUi", () => {
     const raw = window.localStorage.getItem("hexgate-ui");
     expect(raw).not.toBeNull();
     expect(JSON.parse(raw!).state.sidebarCollapsed).toBe(true);
+  });
+
+  it("closing the quickstart marks it seen", () => {
+    useUi.getState().openQuickstart();
+    expect(useUi.getState().quickstartOpen).toBe(true);
+    useUi.getState().closeQuickstart();
+    expect(useUi.getState().quickstartOpen).toBe(false);
+    expect(useUi.getState().quickstartSeen).toBe(true);
+  });
+
+  it("persists quickstartSeen but never the open state", () => {
+    useUi.getState().openQuickstart();
+    useUi.getState().closeQuickstart();
+    useUi.getState().openQuickstart();
+    const state = JSON.parse(window.localStorage.getItem("hexgate-ui")!).state;
+    expect(state.quickstartSeen).toBe(true);
+    expect(state).not.toHaveProperty("quickstartOpen");
+  });
+
+  it("opens at a given step, else where it was left; reset rewinds", () => {
+    useUi.getState().openQuickstart(3);
+    expect(useUi.getState().quickstartStep).toBe(3);
+    useUi.getState().closeQuickstart();
+    useUi.getState().openQuickstart();
+    expect(useUi.getState().quickstartStep).toBe(3);
+    useUi.getState().closeQuickstart({ reset: true });
+    expect(useUi.getState().quickstartStep).toBe(0);
   });
 });

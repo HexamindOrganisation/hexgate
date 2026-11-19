@@ -1,22 +1,27 @@
 /**
- * Layered layout for the policy graph: roles, then agents (one column per
- * permitted reach hop, so agent-as-tool chains read left to right), then
+ * Layered layout for one agent's graph: roles, then agents (one column per
+ * reach hop, denied or not, so sub-agents sit right of the agent), then
  * tools. An edge that spans columns bends through a reserved slot in each
  * column it crosses, and one within a column loops out to its right, so no
  * edge runs under a node it doesn't touch.
  * Pure and deterministic, so it's testable without React Flow.
  */
 
-import type { PolicyGraph } from "./api";
+/** The shape the layout reads: any graph whose nodes have a kind (roles,
+ * agents, then everything else as the last column). */
+export type LayoutGraph = {
+  nodes: { id: string; kind: string }[];
+  edges: { source: string; target: string; kind: string; verdict: string }[];
+};
 
-/** A node's box (the graph's hexagon); positions are node centres. */
+/** A node's box (every shape fits in it); positions are node centres. */
 export const HEX_W = 136;
 export const HEX_H = 118;
 /** Least column pitch, and row pitch; both leave room for lanes beside the
  * hexes. A column with more loops than fit grows wider. */
 export const COL_W = 300;
 export const ROW_H = 150;
-/** First loop lane right of a column's centre, clear of the hex's side tip. */
+/** First loop lane right of a column's centre, clear of the node box. */
 const LOOP_X = HEX_W / 2 + 16;
 /** Gap between loop lanes: wider than a lane's label, so two never overlap. */
 export const LANE_W = 64;
@@ -41,11 +46,6 @@ export interface LayeredLayout {
   endDy: Record<number, number>;
 }
 
-/** Whether an edge lets its source delegate to its target: a permitted
- * reach. A denied one delegates nothing. */
-export const delegates = (e: { kind: string; verdict: string }) =>
-  e.kind === "reach" && e.verdict !== "deny";
-
 /** Append `v` to the list at `k`, starting it if need be. */
 export const push = <K, V>(m: Map<K, V[]>, k: K, v: V) => {
   const a = m.get(k);
@@ -53,18 +53,19 @@ export const push = <K, V>(m: Map<K, V[]>, k: K, v: V) => {
   else m.set(k, [v]);
 };
 
-/** Column per node — roles 0, agents 1 + their shortest permitted reach
+/** Column per node — roles 0, agents 1 + their shortest reach
  * depth, tools and MCP servers last — and the column count. */
-function columnsOf(graph: PolicyGraph): {
+function columnsOf(graph: LayoutGraph): {
   col: Record<string, number>;
   nCols: number;
 } {
   const agents = graph.nodes.filter((n) => n.kind === "agent").map((n) => n.id);
-  // Only a permitted reach delegates; a self-loop adds no hop.
+  // Every reach is a hop, denied or not: in one agent's graph each sub-agent
+  // sits in the sub-agent column. A self-loop adds no hop.
   const out = new Map<string, string[]>();
   const reached = new Set<string>();
   for (const e of graph.edges) {
-    if (!delegates(e) || e.source === e.target) continue;
+    if (e.kind !== "reach" || e.source === e.target) continue;
     push(out, e.source, e.target);
     reached.add(e.target);
   }
@@ -105,7 +106,7 @@ function columnsOf(graph: PolicyGraph): {
   return { col, nCols: maxAgent + 3 };
 }
 
-export function layeredLayout(graph: PolicyGraph): LayeredLayout {
+export function layeredLayout(graph: LayoutGraph): LayeredLayout {
   const { col, nCols } = columnsOf(graph);
 
   // Each column holds nodes and bend slots, in the server's (stable) order.
@@ -182,7 +183,7 @@ export function layeredLayout(graph: PolicyGraph): LayeredLayout {
     col[e.source] != null && col[e.source] === col[e.target];
   const loops = Array.from({ length: nCols }, () => 0);
   for (const e of graph.edges) if (isLoop(e)) loops[col[e.source]]++;
-  // A column is as wide as its lanes plus the next column's half hex.
+  // A column is as wide as its lanes plus the next column's half node.
   const width = (c: number) =>
     Math.max(COL_W, LOOP_X + loops[c] * LANE_W + HEX_W / 2);
   const colX = [0];

@@ -1,20 +1,33 @@
-import { useId, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { ChevronRight } from "lucide-react";
+import { useId, useMemo, useState } from "react";
+import { ChevronRight, X } from "lucide-react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 
+import { matchesQuery, normalizeQuery } from "@/lib/search";
+import { useAgentManifests } from "@/lib/agent-manifests";
 import { agentReachMap } from "@/lib/agent-graph";
 import { usePolicyGraph } from "@/lib/policy_files";
-import { ApiError, api } from "@/lib/api";
+import { ApiError } from "@/lib/api";
 import { useProjectScoped } from "@/lib/active";
 import { Badge } from "@/components/ui/badge";
 import { NoProjectEmptyState } from "@/components/NoProjectEmptyState";
 import { DocsLink } from "@/components/DocsLink";
 import { DOC_PATHS } from "@/lib/docs";
 import { Card } from "@/components/ui/card";
+import { SearchField } from "@/components/ui/search-field";
+import { Button } from "@/components/ui/button";
+import { AgentFilterDialog } from "@/components/agents/AgentFilterDialog";
+import {
+  type AgentFacts,
+  type AgentFilters,
+  NO_FILTERS,
+  activeCount,
+  matches,
+  ACTIVITY_LABEL,
+} from "@/lib/agent-filters";
+import { rolesThatRun } from "@/lib/agent-graph-view";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatStrip, type Stat } from "@/components/ui/stat-strip";
-import { agentHubPath } from "@/lib/agent-paths";
+import { AGENT_LIST_CAP, agentHubPath } from "@/lib/agent-paths";
 import { denyRatePct, useAgentActivity24h } from "@/lib/audit-summary";
 import { pluralise } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -31,14 +44,22 @@ import { cn } from "@/lib/utils";
  * Editing happens elsewhere: policy authoring in /policies, manifest
  * registration through the SDK's ``hexgate register``.
  */
+
 export function AgentsPage() {
   const scope = useProjectScoped();
   const [searchParams] = useSearchParams();
-  const manifests = useQuery({
-    queryKey: ["agent-manifests", scope.projectId],
-    queryFn: () => api.listAgentManifests(scope.projectId as string),
-    enabled: !!scope.projectId,
-  });
+  const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState<AgentFilters>(NO_FILTERS);
+  const [filtering, setFiltering] = useState(false);
+  // Filters belong to a project: another project starts unfiltered.
+  const [filtersFor, setFiltersFor] = useState(scope.projectId);
+  if (filtersFor !== scope.projectId) {
+    setFiltersFor(scope.projectId);
+    setFilters(NO_FILTERS);
+    setQuery("");
+    setFiltering(false);
+  }
+  const manifests = useAgentManifests(scope.projectId);
   // 24h activity per agent; shares Home's cache entry.
   const { summary, activityOf } = useAgentActivity24h(scope.projectId);
   // Agent-to-agent delegation, from the policy graph (a classic project's
@@ -58,6 +79,36 @@ export function AgentsPage() {
         : new Map(),
     [graph.data, graph.isPlaceholderData, manifests.data],
   );
+  // Which roles run each agent: one pass per graph, not per summary poll.
+  const runBy = useMemo(
+    () =>
+      rolesThatRun(
+        graph.data && !graph.isPlaceholderData ? graph.data : undefined,
+        (manifests.data ?? []).map((a) => a.name),
+      ),
+    [graph.data, graph.isPlaceholderData, manifests.data],
+  );
+  // A prior project's graph, kept while this one loads, isn't this one's.
+  const graphKnown = !!graph.data && !graph.isPlaceholderData;
+  // What the filter reads off each agent.
+  const facts = useMemo<AgentFacts[]>(
+    () =>
+      (manifests.data ?? []).map((a) => {
+        const reach = reachByAgent.get(a.name);
+        return {
+          name: a.name,
+          registered: !!a.manifest,
+          framework: a.manifest?.framework?.trim() || null,
+          activity: activityOf(a.name),
+          reaches: !!reach?.reaches.length,
+          calledBy: !!reach?.calledBy.length,
+          runBy: runBy.get(a.name) ?? null,
+          graphKnown,
+        };
+      }),
+    [manifests.data, reachByAgent, activityOf, runBy, graphKnown],
+  );
+
   // The 24h summary never loaded, so every count reads "—"; or a later poll
   // (of it or the agent list) failed, so what's shown is the last loaded.
   const summaryFailed = summary.isError && !summary.data;
@@ -135,6 +186,38 @@ export function AgentsPage() {
   }
 
   const agents = manifests.data ?? [];
+  // A role or framework the project no longer has can't be unticked in the
+  // dialog (it isn't listed): drop it once the data says it's gone.
+  if (graphKnown && filters.roles.some((r) => !graph.data!.roles.includes(r)))
+    setFilters((f) => ({
+      ...f,
+      roles: f.roles.filter((r) => graph.data!.roles.includes(r)),
+    }));
+  if (
+    manifests.data &&
+    filters.frameworks.some((fw) => !facts.some((a) => a.framework === fw))
+  )
+    setFilters((f) => ({
+      ...f,
+      frameworks: f.frameworks.filter((fw) =>
+        facts.some((a) => a.framework === fw),
+      ),
+    }));
+  // Filters set whose data isn't there: kept, but said so.
+  const unapplied = [
+    filters.activity.length > 0 && !summary.data && "24h activity",
+    filters.delegation.length > 0 && !graphKnown && "delegation",
+    filters.roles.length > 0 && !graphKnown && "roles",
+  ].filter(Boolean) as string[];
+  // Only while the toolbar is there: filters left from a bigger project
+  // mustn't hide rows they can no longer clear.
+  const toolbar = agents.length > AGENT_LIST_CAP;
+  const q = toolbar ? normalizeQuery(query) : "";
+  const f = toolbar ? filters : NO_FILTERS;
+  const keep = new Set(facts.filter((a) => matches(f, a)).map((a) => a.name));
+  const shown = agents.filter(
+    (a) => keep.has(a.name) && matchesQuery(a.name, q),
+  );
 
   return (
     <div className="mx-auto max-w-[1240px]">
@@ -171,6 +254,58 @@ export function AgentsPage() {
         )}
       </div>
 
+      {toolbar && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <SearchField
+            value={query}
+            onChange={setQuery}
+            placeholder={`Filter ${agents.length} agents by name`}
+            label="Filter agents by name"
+            className="h-9 max-w-xs flex-1 basis-60 bg-card"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-9 gap-2"
+            onClick={() => setFiltering(true)}
+          >
+            Filters
+            {activeCount(filters) > 0 && (
+              <span className="grid h-5 min-w-5 place-items-center rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground">
+                {activeCount(filters)}
+              </span>
+            )}
+          </Button>
+          <FilterChips f={filters} setF={setFilters} />
+        </div>
+      )}
+      {toolbar && unapplied.length > 0 && (
+        <p className="-mt-1 mb-3 text-meta text-muted-foreground">
+          {/* A failed load won't come on its own: say so, not "until". */}
+          {summaryFailed || graphFailed
+            ? `Not applied, as their data couldn't load: ${unapplied.join(", ")}.`
+            : `Not applied until their data loads: ${unapplied.join(", ")}.`}
+        </p>
+      )}
+      {filtering && (
+        <AgentFilterDialog
+          // What the name search already keeps, so its counts match the list.
+          facts={q ? facts.filter((a) => matchesQuery(a.name, q)) : facts}
+          roles={graphKnown ? (graph.data?.roles ?? []) : []}
+          activityKnown={!!summary.data}
+          graphKnown={graphKnown}
+          activityFailed={summaryFailed}
+          graphFailed={graphFailed}
+          applied={filters}
+          onApply={(next) => {
+            setFilters(next);
+            setFiltering(false);
+          }}
+          onClose={() => setFiltering(false)}
+        />
+      )}
+
       <Card className="overflow-hidden p-0">
         <nav aria-label="Agents" className="flex flex-col">
           {manifests.isPending ? (
@@ -182,134 +317,142 @@ export function AgentsPage() {
               Couldn't load agents.
             </div>
           ) : agents.length ? (
-            agents.map((a, i) => {
-              // From useId and the index: agent names may hold spaces.
-              const id = `${rowId}-${i}`;
-              const activity = activityOf(a.name);
-              const registered = !!a.manifest;
-              const tools = a.manifest?.tools?.length ?? 0;
-              const skills = a.manifest?.skills?.length ?? 0;
-              const model = a.manifest?.model?.trim();
-              const reach = reachByAgent.get(a.name);
-              const reachText = reach?.reaches.length
-                ? `reaches ${reach.reaches.join(", ")}`
-                : null;
-              // Everything after the model, so a missing model never leaves a
-              // dangling leading "· ". Outbound delegation ("reaches") rides
-              // here; inbound ("called by") is a chip by the name instead.
-              const facts = [
-                a.manifest?.framework?.trim(),
-                pluralise(tools, "tool"),
-                skills > 0 ? pluralise(skills, "skill") : null,
-                reachText,
-              ]
-                .filter(Boolean)
-                .join(" · ");
-              const calledBy = !!reach?.calledBy.length;
-              return (
-                <Link
-                  key={a.name}
-                  to={agentHubPath(a.name)}
-                  // The name alone; the rest of the row describes it.
-                  aria-labelledby={`${id}-name`}
-                  aria-describedby={[
-                    `${id}-badge`,
-                    calledBy && `${id}-chip`,
-                    `${id}-facts`,
-                    `${id}-counts`,
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                  className="group flex items-center gap-3 border-t border-border/60 px-4 py-3.5 transition-colors first:border-t-0 hover:bg-accent/50"
-                >
-                  <span
-                    className={cn(
-                      "size-1.5 shrink-0 rounded-full",
-                      registered ? "bg-success" : "bg-muted-foreground/40",
-                    )}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span
-                        id={`${id}-name`}
-                        className="truncate font-mono text-[13px] font-medium"
-                      >
-                        {a.name}
-                      </span>
-                      <Badge
-                        id={`${id}-badge`}
-                        variant="outline"
-                        className="font-mono text-[11px]"
-                      >
-                        {a.version !== null
-                          ? `v${a.version}`
-                          : "not registered"}
-                      </Badge>
-                      {calledBy && (
-                        <span
-                          id={`${id}-chip`}
-                          className="rounded-full bg-primary/10 px-1.5 py-0.5 text-caption font-medium text-primary"
-                        >
-                          called by {reach!.calledBy.join(", ")}
-                        </span>
-                      )}
-                    </div>
-                    <div
-                      id={`${id}-facts`}
-                      className="mt-0.5 truncate text-meta text-muted-foreground"
-                    >
-                      {registered ? (
-                        <>
-                          {model && (
-                            <span className="font-mono text-foreground">
-                              {model}
-                            </span>
-                          )}
-                          {model ? ` · ${facts}` : facts}
-                        </>
-                      ) : (
-                        <>
-                          not registered · run{" "}
-                          <span className="font-mono">hexgate register</span>
-                          {reachText && ` · ${reachText}`}
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  {/* Always there, "—" until the summary lands: an unregistered
-                      agent can still be running and calling tools. */}
-                  <div
-                    id={`${id}-counts`}
-                    className="hidden shrink-0 gap-5 text-right sm:flex"
+            shown.length === 0 ? (
+              <div className="px-4 py-5 text-meta text-muted-foreground">
+                {q && activeCount(f) === 0
+                  ? `No agent matches “${query.trim()}”.`
+                  : "No agent matches these filters."}
+              </div>
+            ) : (
+              shown.map((a, i) => {
+                // From useId and the index: agent names may hold spaces.
+                const id = `${rowId}-${i}`;
+                const activity = activityOf(a.name);
+                const registered = !!a.manifest;
+                const tools = a.manifest?.tools?.length ?? 0;
+                const skills = a.manifest?.skills?.length ?? 0;
+                const model = a.manifest?.model?.trim();
+                const reach = reachByAgent.get(a.name);
+                const reachText = reach?.reaches.length
+                  ? `reaches ${reach.reaches.join(", ")}`
+                  : null;
+                // Everything after the model, so a missing model never leaves a
+                // dangling leading "· ". Outbound delegation ("reaches") rides
+                // here; inbound ("called by") is a chip by the name instead.
+                const caption = [
+                  a.manifest?.framework?.trim(),
+                  pluralise(tools, "tool"),
+                  skills > 0 ? pluralise(skills, "skill") : null,
+                  reachText,
+                ]
+                  .filter(Boolean)
+                  .join(" · ");
+                const calledBy = !!reach?.calledBy.length;
+                return (
+                  <Link
+                    key={a.name}
+                    to={agentHubPath(a.name)}
+                    // The name alone; the rest of the row describes it.
+                    aria-labelledby={`${id}-name`}
+                    aria-describedby={[
+                      `${id}-badge`,
+                      calledBy && `${id}-chip`,
+                      `${id}-caption`,
+                      `${id}-counts`,
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    className="group flex items-center gap-3 border-t border-border/60 px-4 py-3.5 transition-colors first:border-t-0 hover:bg-accent/50"
                   >
-                    <div>
-                      <div className="text-[15px] font-semibold tabular-nums">
-                        {activity ? activity.all.toLocaleString() : "—"}
-                      </div>
-                      <div className="text-caption text-muted-foreground">
-                        calls 24h
-                      </div>
-                    </div>
-                    <div>
-                      <div
-                        className={cn(
-                          "text-[15px] font-semibold tabular-nums",
-                          activity && activity.deny > 0
-                            ? "text-deny"
-                            : "text-muted-foreground",
+                    <span
+                      className={cn(
+                        "size-1.5 shrink-0 rounded-full",
+                        registered ? "bg-success" : "bg-muted-foreground/40",
+                      )}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          id={`${id}-name`}
+                          className="truncate font-mono text-[13px] font-medium"
+                        >
+                          {a.name}
+                        </span>
+                        <Badge
+                          id={`${id}-badge`}
+                          variant="outline"
+                          className="font-mono text-[11px]"
+                        >
+                          {a.version !== null
+                            ? `v${a.version}`
+                            : "not registered"}
+                        </Badge>
+                        {calledBy && (
+                          <span
+                            id={`${id}-chip`}
+                            className="rounded-full bg-primary/10 px-1.5 py-0.5 text-caption font-medium text-primary"
+                          >
+                            called by {reach!.calledBy.join(", ")}
+                          </span>
                         )}
-                      >
-                        {activity ? activity.deny.toLocaleString() : "—"}
                       </div>
-                      <div className="text-caption text-muted-foreground">
-                        denied
+                      <div
+                        id={`${id}-caption`}
+                        className="mt-0.5 truncate text-meta text-muted-foreground"
+                      >
+                        {registered ? (
+                          <>
+                            {model && (
+                              <span className="font-mono text-foreground">
+                                {model}
+                              </span>
+                            )}
+                            {model ? ` · ${caption}` : caption}
+                          </>
+                        ) : (
+                          <>
+                            not registered · run{" "}
+                            <span className="font-mono">hexgate register</span>
+                            {reachText && ` · ${reachText}`}
+                          </>
+                        )}
                       </div>
                     </div>
-                  </div>
-                  <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
-                </Link>
-              );
-            })
+                    {/* Always there, "—" until the summary lands: an unregistered
+                      agent can still be running and calling tools. */}
+                    <div
+                      id={`${id}-counts`}
+                      className="hidden shrink-0 gap-5 text-right sm:flex"
+                    >
+                      <div>
+                        <div className="text-[15px] font-semibold tabular-nums">
+                          {activity ? activity.all.toLocaleString() : "—"}
+                        </div>
+                        <div className="text-caption text-muted-foreground">
+                          calls 24h
+                        </div>
+                      </div>
+                      <div>
+                        <div
+                          className={cn(
+                            "text-[15px] font-semibold tabular-nums",
+                            activity && activity.deny > 0
+                              ? "text-deny"
+                              : "text-muted-foreground",
+                          )}
+                        >
+                          {activity ? activity.deny.toLocaleString() : "—"}
+                        </div>
+                        <div className="text-caption text-muted-foreground">
+                          denied
+                        </div>
+                      </div>
+                    </div>
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
+                  </Link>
+                );
+              })
+            )
           ) : (
             <div className="px-4 py-5 text-meta text-muted-foreground">
               No agents yet. Register one with{" "}
@@ -322,5 +465,73 @@ export function AgentsPage() {
         </nav>
       </Card>
     </div>
+  );
+}
+
+/** One removable chip per filter set, and Clear all. */
+function FilterChips({
+  f,
+  setF,
+}: {
+  f: AgentFilters;
+  setF: (f: AgentFilters) => void;
+}) {
+  const chips: { key: string; label: string; clear: () => void }[] = [
+    ...(f.status === "any"
+      ? []
+      : [
+          {
+            key: "status",
+            label: f.status === "registered" ? "Registered" : "Not registered",
+            clear: () => setF({ ...f, status: "any" }),
+          },
+        ]),
+    ...f.activity.map((v) => ({
+      key: `a:${v}`,
+      label: `${ACTIVITY_LABEL[v]} · 24h`,
+      clear: () => setF({ ...f, activity: f.activity.filter((x) => x !== v) }),
+    })),
+    ...f.frameworks.map((v) => ({
+      key: `f:${v}`,
+      label: v,
+      clear: () =>
+        setF({ ...f, frameworks: f.frameworks.filter((x) => x !== v) }),
+    })),
+    ...f.delegation.map((v) => ({
+      key: `d:${v}`,
+      label: v === "reaches" ? "Reaches agents" : "Called by agents",
+      clear: () =>
+        setF({ ...f, delegation: f.delegation.filter((x) => x !== v) }),
+    })),
+    ...f.roles.map((v) => ({
+      key: `r:${v}`,
+      label: `Run by ${v}`,
+      clear: () => setF({ ...f, roles: f.roles.filter((x) => x !== v) }),
+    })),
+  ];
+  if (!chips.length) return null;
+  return (
+    <>
+      {chips.map((c) => (
+        <button
+          key={c.key}
+          type="button"
+          onClick={c.clear}
+          aria-label={`Remove filter: ${c.label}`}
+          className="inline-flex h-8 items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2.5 text-xs font-medium text-foreground hover:bg-primary/15"
+        >
+          {c.label}
+          <X className="size-3" aria-hidden />
+        </button>
+      ))}
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => setF(NO_FILTERS)}
+      >
+        Clear all
+      </Button>
+    </>
   );
 }
