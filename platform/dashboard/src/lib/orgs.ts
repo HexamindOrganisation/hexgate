@@ -10,12 +10,17 @@ import { ApiError } from "./api";
 export const ROLES = ["owner", "admin", "member"] as const;
 export type Role = (typeof ROLES)[number];
 
+export const ASSISTANT_MODES = ["off", "read_only", "read_write"] as const;
+/** Mirror of platform/api/hexgate_api/schemas.py:AssistantMode. */
+export type AssistantMode = (typeof ASSISTANT_MODES)[number];
+
 /** Mirror of platform/api/schemas.py:OrgRead. ``created_at`` arrives as
  * an ISO-8601 string (JSON has no native datetime). */
 export interface OrgRead {
   id: string;
   slug: string;
   name: string;
+  assistant_mode: AssistantMode;
   created_at: string;
 }
 
@@ -85,6 +90,7 @@ interface UpdateOrgInput {
   orgId: string;
   name?: string;
   slug?: string;
+  assistant_mode?: AssistantMode;
 }
 
 async function updateOrgRequest(input: UpdateOrgInput): Promise<OrgRead> {
