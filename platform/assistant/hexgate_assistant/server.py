@@ -9,7 +9,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from hexgate_assistant.db import create_tables, make_engine, session_factory
+from hexgate_assistant.db import (
+    create_tables,
+    make_engine,
+    session_factory,
+    verify_schema,
+)
 from hexgate_assistant.settings import Settings
 
 
@@ -22,9 +27,11 @@ def create_app(settings: Settings) -> Starlette:
     async def lifespan(app: Starlette) -> AsyncIterator[None]:
         engine = make_engine(settings.database_url)
         try:
-            # Before the first request: a database that cannot be reached
-            # stops the start-up, rather than every turn failing later.
+            # Before the first request: a database that cannot be reached,
+            # or that lacks a column the code reads, stops the start-up,
+            # rather than every turn failing later.
             await create_tables(engine)
+            await verify_schema(engine)
             app.state.db_sessions = session_factory(engine)
             yield
         finally:

@@ -2,13 +2,18 @@ import uuid
 from dataclasses import replace
 
 import pytest
-from sqlalchemy import delete, func, inspect, make_url, select
+from sqlalchemy import delete, func, inspect, make_url, select, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.schema import CreateIndex, CreateTable
 from starlette.testclient import TestClient
 
-from hexgate_assistant.db import create_tables, session_factory
+from hexgate_assistant.db import (
+    SchemaOutOfDate,
+    create_tables,
+    session_factory,
+    verify_schema,
+)
 from hexgate_assistant.models import (
     AssistantMessage,
     AssistantSession,
@@ -139,3 +144,41 @@ async def test_when_session_is_deleted_then_its_messages_are_deleted(db, session
 
         count = select(func.count()).select_from(AssistantMessage)
         assert await s.scalar(count) == 0
+
+
+async def _create_lock_table(engine, columns: str) -> None:
+    """assistant_turn_lock as some other build would have created it."""
+    async with engine.begin() as conn:
+        await conn.execute(text(f"CREATE TABLE assistant_turn_lock ({columns})"))
+
+
+async def test_verify_schema_happy_path(engine):
+    await create_tables(engine)
+
+    await verify_schema(engine)
+
+
+async def test_when_a_live_table_lacks_a_model_column_then_start_up_refuses(
+    settings, engine
+):
+    # An older build's table, without started_at.
+    await _create_lock_table(engine, "user_id VARCHAR PRIMARY KEY, turn_id VARCHAR")
+
+    with pytest.raises(SchemaOutOfDate) as exc_info:
+        with TestClient(create_app(settings)):
+            pass
+
+    assert exc_info.value.missing == {"assistant_turn_lock": ["started_at"]}
+    assert "assistant_turn_lock.started_at" in str(exc_info.value)
+
+
+async def test_when_a_live_table_has_an_extra_column_then_schema_passes(engine):
+    # A newer migration's column, read by no code in this build.
+    await _create_lock_table(
+        engine,
+        "user_id VARCHAR PRIMARY KEY, turn_id VARCHAR,"
+        " started_at TIMESTAMP WITH TIME ZONE, added_later VARCHAR",
+    )
+    await create_tables(engine)
+
+    await verify_schema(engine)
