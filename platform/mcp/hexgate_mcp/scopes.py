@@ -6,5 +6,12 @@ tests/test_api_constants.py fails when the two lists drift.
 
 # platform/api/hexgate_api/constants.py OAUTH_SCOPES
 OAUTH_SCOPES = frozenset(
-    {"policy:read", "policy:write", "audit:read", "agents:read", "projects:read"}
+    {
+        "policy:read",
+        "policy:write",
+        "policy:apply",
+        "audit:read",
+        "agents:read",
+        "projects:read",
+    }
 )
