@@ -52,8 +52,8 @@ const SettingsSchema = z.object({
 type SettingsValues = z.infer<typeof SettingsSchema>;
 
 /**
- * `/orgs/:orgId/settings` — name + slug editing + the "Leave organization"
- * danger zone.
+ * `/orgs/:orgId/settings` — name, slug and assistant mode editing + the
+ * "Leave organization" danger zone.
  *
  * Role-aware:
  *   - Plain members see read-only inputs + an explanatory line

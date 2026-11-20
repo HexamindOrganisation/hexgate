@@ -14,7 +14,7 @@ export const ASSISTANT_MODES = ["off", "read_only", "read_write"] as const;
 /** Mirror of platform/api/hexgate_api/schemas.py:AssistantMode. */
 export type AssistantMode = (typeof ASSISTANT_MODES)[number];
 
-/** Mirror of platform/api/schemas.py:OrgRead. ``created_at`` arrives as
+/** Mirror of platform/api/hexgate_api/schemas.py:OrgRead. ``created_at`` arrives as
  * an ISO-8601 string (JSON has no native datetime). */
 export interface OrgRead {
   id: string;

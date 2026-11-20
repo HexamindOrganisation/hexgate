@@ -174,6 +174,32 @@ describe("OrgSettingsPage", () => {
     });
   });
 
+  it("goes clean after a save that changes only the assistant mode", async () => {
+    let row = orgRow("owner");
+    vi.spyOn(window, "fetch").mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = input.toString().split("?")[0];
+        if (init?.method === "PATCH") {
+          row = { ...row, ...JSON.parse(init.body as string) };
+          return Response.json(row);
+        }
+        return Response.json(path === "/v1/orgs" ? [row] : ME);
+      },
+    );
+    const user = userEvent.setup();
+
+    renderSettings("org-1");
+
+    await user.click(await screen.findByLabelText("Policy assistant"));
+    await user.click(await screen.findByRole("option", { name: "Read only" }));
+    await user.click(screen.getByText("Save changes"));
+
+    // The refetched org carries the saved mode; the form re-seeds from it.
+    await waitFor(() => {
+      expect(screen.getByText("Save changes")).toBeDisabled();
+    });
+  });
+
   it("repopulates the assistant mode when switching org", async () => {
     stubFetch({
       "/v1/orgs": [
