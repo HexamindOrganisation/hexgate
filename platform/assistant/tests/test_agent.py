@@ -3,7 +3,11 @@ import asyncio
 import httpx2
 import pytest
 from pydantic_ai import ModelMessage, ModelResponse, TextPart, ToolCallPart
-from pydantic_ai.exceptions import ModelRequestTimeout, UsageLimitExceeded
+from pydantic_ai.exceptions import (
+    IncompleteToolCall,
+    ModelRequestTimeout,
+    UsageLimitExceeded,
+)
 from pydantic_ai.messages import ModelRequest, RetryPromptPart, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
@@ -12,6 +16,7 @@ from hexgate_assistant.agent import (
     ALLOWLIST,
     INSTRUCTIONS,
     MODEL_SETTINGS,
+    TOOL_RETRIES,
     TURN_LIMITS,
     TurnDeps,
     build_agent,
@@ -65,6 +70,8 @@ async def run(model: FunctionModel, mcp: FakeMCP, token: str = "tok-a") -> str:
 def test_turn_limits_happy_path():
     assert TURN_LIMITS.request_limit == 25
     assert TURN_LIMITS.tool_calls_limit == 40
+    # Apart from the 40 tool calls: refusals of one tool in a row.
+    assert TOOL_RETRIES == 3
     assert TURN_LIMITS.input_tokens_limit == 300_000
 
 
@@ -142,8 +149,9 @@ async def test_when_the_model_never_stops_calling_tools_then_the_turn_ends_at_25
 async def test_when_an_mcp_call_runs_over_its_time_then_the_model_is_told_and_the_turn_goes_on(
     mcp: FakeMCP, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setattr(agent_module, "MCP_CALL_SECONDS", 0.2)
-    mcp.delay = 2
+    # read_timeout also bounds initialize and tools/list: keep a wide margin.
+    monkeypatch.setattr(agent_module, "MCP_CALL_SECONDS", 1)
+    mcp.delay = 5
 
     output = await run(call_once(LIST_FILES), mcp)
 
@@ -198,6 +206,23 @@ async def test_when_mcp_refuses_calls_in_a_row_then_the_turn_goes_on(mcp: FakeMC
     assert output == "done"
     assert len(mcp.calls) == 3
     assert all("role 'auditor' not defined" in r for r in refusals)
+
+
+async def test_when_the_token_cap_cuts_a_tool_call_then_the_turn_ends_after_4_attempts(
+    mcp: FakeMCP,
+):
+    requests: list[int] = []
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        requests.append(1)
+        cut = ToolCallPart("policy_check", '{"project_id": "p1", "drafts": [{"na')
+        return ModelResponse(parts=[cut], finish_reason="length")
+
+    with pytest.raises(IncompleteToolCall):
+        await run(FunctionModel(respond), mcp)
+
+    assert len(requests) == 4
+    assert mcp.calls == []
 
 
 async def test_when_a_model_request_runs_past_its_deadline_then_it_ends(

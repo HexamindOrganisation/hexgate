@@ -4,7 +4,7 @@ import httpx2
 import pytest
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.models.test import TestModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 
 from hexgate_assistant.model import (
     MODEL_REQUEST_ATTEMPTS,
@@ -109,8 +109,27 @@ async def test_when_openrouter_answers_a_client_error_then_it_is_not_retried(
     assert len(openrouter.requests) == 1
 
 
-def test_when_the_model_is_not_openrouter_then_pydantic_ai_resolves_it():
-    assert isinstance(build_model("test", None), TestModel)
+@pytest.mark.parametrize(
+    ("name", "kind"),
+    [("openai:gpt-x", OpenAIResponsesModel), ("openai-chat:llama", OpenAIChatModel)],
+)
+def test_when_the_model_is_openai_compatible_then_it_carries_no_openrouter_routing(
+    monkeypatch, name: str, kind: type
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    model = build_model(name, None)
+
+    assert type(model) is kind
+    assert "openrouter_provider" not in (model.settings or {})
+
+
+@pytest.mark.parametrize(
+    "name", ["anthropic:claude-x", "bedrock:anthropic.claude-x", "mistral:m", "test"]
+)
+def test_when_the_model_prefix_is_not_supported_then_build_model_refuses(name: str):
+    with pytest.raises(ValueError, match="openrouter:, openai:, openai-chat:"):
+        build_model(name, "sk-or-test")
 
 
 def test_when_an_openrouter_model_has_no_key_then_build_model_refuses():
@@ -118,8 +137,12 @@ def test_when_an_openrouter_model_has_no_key_then_build_model_refuses():
         build_model(MODEL, None)
 
 
-@pytest.mark.parametrize("slug", ["claude-sonnet-4.5", "/claude-sonnet-4.5"])
-def test_when_an_openrouter_model_has_no_vendor_then_build_model_refuses(slug: str):
+@pytest.mark.parametrize(
+    "slug", ["claude-sonnet-4.5", "/claude-sonnet-4.5", "anthropic/"]
+)
+def test_when_an_openrouter_model_is_not_vendor_slash_model_then_build_model_refuses(
+    slug: str,
+):
     with pytest.raises(ValueError, match="vendor/model"):
         build_model(f"openrouter:{slug}", "sk-or-test")
 

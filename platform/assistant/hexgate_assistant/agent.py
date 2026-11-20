@@ -44,6 +44,9 @@ TURN_LIMITS = UsageLimits(
 # per-attempt `timeout` is kept at the same value, so it never ends first.
 MODEL_SETTINGS = ModelSettings(max_tokens=4000, timeout=120, request_timeout=120)
 
+# Refused calls in a row, per tool, before the turn ends.
+TOOL_RETRIES = 3
+
 # One MCP call. A call that runs over comes back to the model as the tool's
 # result; a call the server refuses comes back as a retry (see `retries`).
 MCP_CALL_SECONDS = 30
@@ -69,10 +72,11 @@ def build_agent(model: Model, mcp_url: str) -> Agent[TurnDeps, str]:
         toolsets=[build_toolset(mcp_url)],
         model_settings=MODEL_SETTINGS,
         # A refused call (the server's refusal, an unknown tool, bad
-        # arguments) uses a retry of that tool, and the default budget of one
-        # would end the turn on the second in a row. Refused calls do not
-        # count as tool calls; the turn's request limit bounds them.
-        retries={"tools": TURN_LIMITS.tool_calls_limit},
+        # arguments) uses a retry of that tool: the default of one would end
+        # the turn on the second refusal in a row. Kept small, because a call
+        # whose arguments the output-token cap cut off fails only once the
+        # budget is spent: 4 attempts, then IncompleteToolCall.
+        retries={"tools": TOOL_RETRIES},
     )
 
 

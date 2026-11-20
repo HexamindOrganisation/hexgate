@@ -3,8 +3,11 @@ string.
 
 An ``openrouter:`` model runs on our key and is pinned to its own vendor:
 no fallback to another provider, none that keeps or trains on the data.
-Any other string goes to Pydantic AI's own lookup, which reads that
-provider's standard environment variables (self-hosted installs).
+An ``openai:`` model (OpenAI's Responses API) or an ``openai-chat:`` model
+(Chat Completions: OpenAI, or a self-hosted OpenAI-compatible server such as
+vLLM or Ollama) goes to Pydantic AI's own lookup, which reads OpenAI's
+standard environment variables. Every other prefix is refused at start-up:
+these three are the supported ones.
 """
 
 import httpx2
@@ -23,6 +26,9 @@ from pydantic_ai.retries import (
 from tenacity import RetryCallState, retry_if_exception_type, stop_after_attempt
 
 OPENROUTER_PREFIX = "openrouter:"
+# The self-hosted prefixes supported; both need only the OpenAI SDK, which
+# the openrouter extra installs.
+OPENAI_PREFIXES = ("openai:", "openai-chat:")
 
 # The first try and 3 retries, on 429, 5xx and overloaded (529).
 MODEL_REQUEST_ATTEMPTS = 4
@@ -47,8 +53,13 @@ def build_model(
     transport: httpx2.AsyncBaseTransport | None = None,
 ) -> Model:
     """The model for ``name``. ``transport`` replaces the network in tests."""
-    if not name.startswith(OPENROUTER_PREFIX):
+    if name.startswith(OPENAI_PREFIXES):
         return infer_model(name)
+    if not name.startswith(OPENROUTER_PREFIX):
+        supported = ", ".join((OPENROUTER_PREFIX, *OPENAI_PREFIXES))
+        raise ValueError(
+            f"HEXGATE_ASSISTANT_MODEL {name!r} is not supported: use one of {supported}"
+        )
     if openrouter_key is None:
         raise ValueError(
             f"HEXGATE_ASSISTANT_OPENROUTER_KEY is required for {OPENROUTER_PREFIX} models"
@@ -69,8 +80,8 @@ def build_model(
 def provider_routing(slug: str) -> OpenRouterProviderConfig:
     """Route ``vendor/model`` to the vendor's own providers alone, with no
     fallback and no data kept by them."""
-    vendor, sep, _ = slug.partition("/")
-    if not sep or not vendor:
+    vendor, sep, model = slug.partition("/")
+    if not sep or not vendor or not model:
         raise ValueError(f"OpenRouter model {slug!r} is not of the form vendor/model")
     if vendor not in PROVIDERS_BY_VENDOR:
         raise ValueError(
