@@ -16,6 +16,7 @@ from hexgate_api.features.agents.router import router as agents_router
 from hexgate_api.features.agents.service import backfill_bundles
 from hexgate_api.features.ai_act.render.router import router as ai_act_pdf_router
 from hexgate_api.features.ai_act.router import router as ai_act_router
+from hexgate_api.features.assistant.router import router as assistant_router
 from hexgate_api.features.audit.router import router as audit_router
 from hexgate_api.features.audit.service import verify_schema as verify_audit_schema
 from hexgate_api.features.auth.router import include_auth_routers, mount_oauth_routers
@@ -142,6 +143,7 @@ def _build_v1_router() -> APIRouter:
     v1.include_router(ai_act_router)
     v1.include_router(ai_act_pdf_router)
     v1.include_router(oauth_router)
+    v1.include_router(assistant_router)
     include_auth_routers(v1)
     return v1
 
