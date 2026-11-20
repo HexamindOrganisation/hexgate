@@ -42,13 +42,15 @@ async def api_assistant_token(
 ) -> AssistantToken:
     """A token for the assistant's next message on this project."""
     if not get_settings().assistant_enabled:
-        raise HTTPException(status_code=404, detail="Not Found")
+        raise HTTPException(status_code=404, detail={"code": "assistant_disabled"})
     if not user.is_verified:
-        raise HTTPException(status_code=403, detail={"code": "not_verified"})
+        raise HTTPException(status_code=403, detail={"code": "user_not_verified"})
     access = await assistant_access(session, project_id, user.id)
-    # Fail closed: a mode this code does not know refuses, as "off" does.
-    if access.mode not in ("read_only", "read_write"):
+    if access.mode == "off":
         raise HTTPException(status_code=403, detail={"code": "assistant_off"})
+    # Fail closed on a stored mode this code does not know.
+    if access.mode not in ("read_only", "read_write"):
+        raise HTTPException(status_code=403, detail={"code": "assistant_mode_unknown"})
     token, expires_at = mint_assistant_token(
         user_id=user.id, project_id=project_id, can_write=access.can_write
     )

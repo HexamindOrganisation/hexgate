@@ -223,14 +223,15 @@ async def test_when_mode_is_off_then_403_assistant_off(
     assert resp.json()["detail"] == {"code": "assistant_off"}
 
 
-async def test_when_stored_mode_is_unknown_then_403_assistant_off(
+async def test_when_stored_mode_is_unknown_then_403_assistant_mode_unknown(
     client: TestClient, factory
 ) -> None:
     """Fail closed: a mode this code does not know is refused, never minted."""
     await _set_mode(factory, "read_write_v2")
     resp = _token(client)
     assert resp.status_code == 403
-    assert resp.json()["detail"] == {"code": "assistant_off"}
+    assert resp.json()["detail"] == {"code": "assistant_mode_unknown"}
+    assert "token" not in resp.json()
 
 
 def test_when_no_session_and_no_origin_then_401(client: TestClient) -> None:
@@ -238,10 +239,10 @@ def test_when_no_session_and_no_origin_then_401(client: TestClient) -> None:
     assert client.post(f"{P}/token").status_code == 401
 
 
-def test_when_user_is_unverified_then_403_not_verified(client: TestClient) -> None:
+def test_when_user_is_unverified_then_403_user_not_verified(client: TestClient) -> None:
     resp = _token(client, UNVERIFIED_ID)
     assert resp.status_code == 403
-    assert resp.json()["detail"] == {"code": "not_verified"}
+    assert resp.json()["detail"] == {"code": "user_not_verified"}
 
 
 def test_when_assistant_disabled_then_token_is_404(
@@ -249,7 +250,9 @@ def test_when_assistant_disabled_then_token_is_404(
 ) -> None:
     monkeypatch.setenv("HEXGATE_ASSISTANT_ENABLED", "false")
     get_settings.cache_clear()
-    assert _token(client).status_code == 404
+    resp = _token(client)
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": {"code": "assistant_disabled"}}
 
 
 @pytest.mark.parametrize(
