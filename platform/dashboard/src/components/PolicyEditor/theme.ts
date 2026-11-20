@@ -16,19 +16,17 @@ import {
   tokyoNightStormStyle,
 } from "@uiw/codemirror-theme-tokyo-night-storm";
 
-import { DARK_INK } from "./palette";
-
 // Map Tokyo Night Storm's own syntax colors → a dark-mode violet palette.
 const DARK_VIOLET: Record<string, string> = {
-  "#bb9af7": DARK_INK.keyword, // keyword / operator → dracula purple
-  "#7aa2f7": DARK_INK.keyword, // propertyName / function (YAML keys) → purple
-  "#9ece6a": DARK_INK.string, // string → green
-  "#c0caf5": DARK_INK.text, // names → foreground
-  "#ff9e64": DARK_INK.number, // number → orange
-  "#2ac3de": DARK_INK.type, // type → cyan
-  "#b4f9f8": DARK_INK.type, // url / regexp → cyan
-  "#565f89": DARK_INK.comment, // comment → muted
-  "#89ddff": DARK_INK.heading, // heading → pink
+  "#bb9af7": "#bd93f9", // keyword / operator → dracula purple
+  "#7aa2f7": "#bd93f9", // propertyName / function (YAML keys) → purple
+  "#9ece6a": "#50fa7b", // string → green
+  "#c0caf5": "#f8f8f2", // names → foreground
+  "#ff9e64": "#ffb86c", // number → orange
+  "#2ac3de": "#8be9fd", // type → cyan
+  "#b4f9f8": "#8be9fd", // url / regexp → cyan
+  "#565f89": "#6272a4", // comment → muted
+  "#89ddff": "#ff79c6", // heading → pink
 };
 
 // The same tags recolored for a LIGHT ground — darker, saturated inks that stay
@@ -104,8 +102,12 @@ const chromeAndDecorationsTheme = EditorView.theme({
   },
 });
 
+/** The dark syntax styles (lezer tag → color), also used to color read-only
+ * code outside an editor (the quickstart dialog). */
+export const darkSyntax = recolor(DARK_VIOLET);
+
 const darkTheme = [
-  base("hsl(var(--editor))", darkChrome, recolor(DARK_VIOLET)),
+  base("hsl(var(--editor))", darkChrome, darkSyntax),
   chromeAndDecorationsTheme,
 ];
 const lightTheme = [

@@ -1,10 +1,11 @@
 /**
  * highlight — colors the quickstart's snippets without changing a character of
- * them, and tags the tokens a reader looks for (YAML keys, Python keywords,
- * comments, shell commands and flags, .env keys).
+ * them, with the policy editor's colors: YAML keys, Python keywords and calls,
+ * comments, shell commands and flags, .env keys.
  */
 
 import { render } from "@testing-library/react";
+import { tags as t } from "@lezer/highlight";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -16,16 +17,34 @@ import {
   RUN_COMMAND,
   WRAP,
 } from "@/components/quickstart/content";
-import { highlight, type CodeLang } from "@/components/quickstart/highlight";
-import { DARK_INK } from "@/components/PolicyEditor/palette";
+import {
+  highlight,
+  ink,
+  type CodeLang,
+} from "@/components/quickstart/highlight";
 
 function renderCode(code: string, lang: CodeLang) {
   const { container } = render(<code>{highlight(code, lang)}</code>);
   return container.querySelector("code")!;
 }
 
-const tokens = (el: HTMLElement, cls: string) =>
-  [...el.querySelectorAll(`.${cls}`)].map((n) => n.textContent);
+function rgb(hex: string) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgb(${n >> 16}, ${(n >> 8) & 255}, ${n & 255})`;
+}
+
+/** The text of every token drawn in `color`. */
+const tokens = (el: HTMLElement, color: string | undefined) =>
+  [...el.querySelectorAll<HTMLElement>("span")]
+    .filter((n) => n.style.color === rgb(color!))
+    .map((n) => n.textContent);
+
+const KEY = ink(t.propertyName); // the editor's YAML key color
+const KEYWORD = ink(t.keyword);
+const CALL = ink(t.function(t.variableName));
+const STRING = ink(t.string);
+const FLAG = ink(t.typeName);
+const COMMENT = ink(t.comment);
 
 describe("highlight", () => {
   const snippets: [string, string, CodeLang][] = [
@@ -42,73 +61,60 @@ describe("highlight", () => {
     expect(renderCode(code, lang).textContent).toBe(code);
   });
 
-  it("colors YAML keys, strings and comments", () => {
+  it("colors YAML keys and comments", () => {
     const el = renderCode(POLICY_YAML, "yaml");
-    expect(tokens(el, "qs-tok-key")).toEqual(
+    expect(tokens(el, KEY)).toEqual(
       expect.arrayContaining(["version", "roles", "support", "constraints"]),
     );
-    expect(tokens(el, "qs-tok-comment")).toContain(
+    expect(tokens(el, COMMENT)).toContain(
       "# front-line: small USD refunds only",
     );
   });
 
-  it("colors Python keywords, strings and calls", () => {
+  it("colors Python keywords, calls and strings", () => {
     const el = renderCode(WRAP.openai, "python");
-    expect(tokens(el, "qs-tok-keyword")).toEqual(
-      expect.arrayContaining(["import", "from", "async", "def", "await"]),
+    expect(tokens(el, KEYWORD)).toEqual(
+      expect.arrayContaining(["import", "from", "def", "await"]),
     );
-    expect(tokens(el, "qs-tok-function")).toContain("HexgateRunner");
-    expect(tokens(el, "qs-tok-key")).toContain("refund_as");
-    expect(tokens(el, "qs-tok-string").length).toBeGreaterThan(0);
+    expect(tokens(el, CALL)).toContain("HexgateRunner");
+    expect(tokens(el, STRING).length).toBeGreaterThan(0);
   });
 
-  it("colors shell commands, flags and comments, and .env keys", () => {
+  it("colors shell commands and flags, reading continuations from the backslash", () => {
     const sh = renderCode(`${INSTALL}\n${REGISTER.langchain}`, "bash");
-    expect(tokens(sh, "qs-tok-function")).toEqual(["pip", "hexgate"]);
-    expect(tokens(sh, "qs-tok-keyword")).toEqual(
-      expect.arrayContaining(["--agent", "--tools", "--model"]),
-    );
+    expect(tokens(sh, CALL)).toEqual(["pip", "hexgate"]);
+    expect(tokens(sh, FLAG)).toEqual(["--agent", "--tools", "--model"]);
 
+    // An unindented continuation line starts with a flag, not a command.
+    const cont = renderCode("hexgate register \\\n--tools x:T", "bash");
+    expect(tokens(cont, CALL)).toEqual(["hexgate"]);
+    expect(tokens(cont, FLAG)).toEqual(["--tools"]);
+  });
+
+  it("colors .env keys and whole-line comments only", () => {
     const env = renderCode(ENV_FILE, "env");
-    expect(tokens(env, "qs-tok-key")).toEqual([
-      "HEXGATE_API_KEY",
-      "OPENAI_API_KEY",
-    ]);
-    expect(tokens(env, "qs-tok-comment")).toHaveLength(1);
+    expect(tokens(env, KEY)).toEqual(["HEXGATE_API_KEY", "OPENAI_API_KEY"]);
+    expect(tokens(env, COMMENT)).toHaveLength(1);
+
+    const quoted = renderCode('NOTE="a #b"', "env");
+    expect(tokens(quoted, COMMENT)).toEqual([]);
   });
 
-  it("reads shell continuations from the backslash, and commands after && or ;", () => {
-    const el = renderCode(
-      "hexgate register \\\n--tools x:T\ncd app && pip install hexgate; ls",
-      "bash",
-    );
-    expect(tokens(el, "qs-tok-function")).toEqual([
-      "hexgate",
-      "cd",
-      "pip",
-      "ls",
-    ]);
-    expect(tokens(el, "qs-tok-keyword")).toEqual(["--tools"]);
-  });
-
-  it("doesn't start a comment at a # inside quotes", () => {
-    const sh = renderCode('git commit -m "fix #1" # amend later', "bash");
-    expect(tokens(sh, "qs-tok-comment")).toEqual(["# amend later"]);
-
-    const env = renderCode('NOTE="a #b"\n# a comment', "env");
-    expect(tokens(env, "qs-tok-key")).toEqual(["NOTE"]);
-    expect(tokens(env, "qs-tok-comment")).toEqual(["# a comment"]);
-    expect(env.textContent).toBe('NOTE="a #b"\n# a comment');
-  });
-
-  it("colors tokens with the policy editor's inks", () => {
-    const el = renderCode(POLICY_YAML, "yaml");
-    const key = el.querySelector<HTMLElement>(".qs-tok-key")!;
-    expect(key.style.color).toBe(hexToRgb(DARK_INK.keyword));
+  it("uses the editor's colors, with comments readable on the dark block", () => {
+    expect(KEY).toBe("#bd93f9");
+    // WCAG AA for small text on the block's #0a0d14 ground.
+    expect(contrast(COMMENT!, "#0a0d14")).toBeGreaterThanOrEqual(4.5);
   });
 });
 
-function hexToRgb(hex: string) {
-  const n = parseInt(hex.slice(1), 16);
-  return `rgb(${n >> 16}, ${(n >> 8) & 255}, ${n & 255})`;
+function contrast(a: string, b: string) {
+  const lum = (hex: string) => {
+    const [r, g, bl] = [1, 3, 5].map((i) => {
+      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
 }

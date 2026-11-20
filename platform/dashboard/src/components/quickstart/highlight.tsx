@@ -1,72 +1,48 @@
 /**
- * Read-only syntax highlighting for the quickstart's code blocks. YAML and
- * Python go through their Lezer parsers (the same grammars CodeMirror uses),
- * without an editor; shell and .env snippets are short enough for a small
- * quote-aware scanner. Tokens become `qs-tok-*` spans colored with the policy
- * editor's dark inks (`DARK_INK`), since the blocks are always dark.
+ * Read-only syntax highlighting for the quickstart's code blocks, colored by
+ * the policy editor's own dark syntax styles (`darkSyntax`), since the blocks
+ * are always dark. YAML and Python go through their Lezer parsers (the same
+ * grammars CodeMirror uses) without an editor; the few shell and .env lines
+ * are colored by line shape.
  */
 
 import type { ReactNode } from "react";
-import { highlightCode, tagHighlighter, tags as t } from "@lezer/highlight";
+import {
+  highlightCode,
+  tagHighlighter,
+  tags as t,
+  type Tag,
+} from "@lezer/highlight";
 import { parser as pythonParser } from "@lezer/python";
 import { parser as yamlParser } from "@lezer/yaml";
 
-import { DARK_INK } from "@/components/PolicyEditor/palette";
+import { darkSyntax } from "@/components/PolicyEditor/theme";
 
 /** "text" is left as is (program output). */
 export type CodeLang = "yaml" | "python" | "bash" | "env" | "text";
 
+/** Comments are lighter than the editor's: at the dialog's 11.5px on its
+ * near-black ground, the editor's comment color is under 4.5:1 contrast. */
+const COMMENT = "#7a86b4";
+
+// The editor's tag → color table, with each color as the "class" so a token's
+// class is its color. Later entries win, so the comment override applies.
 const highlighter = tagHighlighter([
-  {
-    tag: [
-      t.keyword,
-      t.controlKeyword,
-      t.definitionKeyword,
-      t.moduleKeyword,
-      t.operatorKeyword,
-      t.modifier,
-      t.meta,
-    ],
-    class: "qs-tok-keyword",
-  },
-  { tag: [t.string, t.special(t.string)], class: "qs-tok-string" },
-  { tag: [t.number, t.bool, t.null], class: "qs-tok-number" },
-  { tag: t.lineComment, class: "qs-tok-comment" },
-  {
-    tag: [
-      t.function(t.variableName),
-      t.function(t.propertyName),
-      t.definition(t.className),
-    ],
-    class: "qs-tok-function",
-  },
-  // YAML keys, and Python function names where they're defined.
-  {
-    tag: [
-      t.definition(t.propertyName),
-      t.function(t.definition(t.variableName)),
-    ],
-    class: "qs-tok-key",
-  },
+  ...darkSyntax.flatMap((s) =>
+    s.color ? [{ tag: s.tag, class: String(s.color) }] : [],
+  ),
+  { tag: [t.comment, t.meta], class: COMMENT },
 ]);
 
-const INK: Record<string, string> = {
-  "qs-tok-keyword": DARK_INK.keyword,
-  "qs-tok-key": DARK_INK.keyword,
-  "qs-tok-string": DARK_INK.string,
-  "qs-tok-number": DARK_INK.number,
-  "qs-tok-comment": DARK_INK.comment,
-  "qs-tok-function": DARK_INK.type,
-};
+/** The color the editor gives `tag`, for tokens colored by hand. */
+export const ink = (tag: Tag): string | undefined =>
+  highlighter.style([tag]) ?? undefined;
 
-function span(text: string, cls: string, key: number): ReactNode {
-  if (!cls) return text;
-  const color = cls
-    .split(" ")
-    .map((c) => INK[c])
-    .find(Boolean);
+function span(text: string, color: string | undefined, key: number) {
+  if (!color) return text;
   return (
-    <span key={key} className={cls} style={{ color }}>
+    // Nested styles come as space-separated classes; the innermost is last.
+    <span key={key} style={{ color: color.split(" ").pop() }}>
       {text}
     </span>
   );
@@ -85,74 +61,34 @@ function lezer(code: string, lang: "yaml" | "python"): ReactNode[] {
   return out;
 }
 
-/** A line as words and the whitespace between them, plus a trailing
- * comment: a `#` that starts a word outside quotes. Quoted text stays inside
- * its word, so `"a #b"` is not a comment. */
-function scan(line: string): { parts: string[]; comment: string } {
-  const parts: string[] = [];
-  let cur = "";
-  let quote: string | null = null;
-  const isSpace = (ch: string) => /\s/.test(ch);
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (quote) {
-      cur += ch;
-      if (ch === quote) quote = null;
-      continue;
-    }
-    // Starting whitespace after a word, or a word after whitespace.
-    if (cur && isSpace(ch) !== isSpace(cur[0])) {
-      parts.push(cur);
-      cur = "";
-    }
-    if (ch === "#" && cur === "") return { parts, comment: line.slice(i) };
-    if (ch === '"' || ch === "'") quote = ch;
-    cur += ch;
-  }
-  if (cur) parts.push(cur);
-  return { parts, comment: "" };
-}
-
-// After these, the next word is a command again.
-const SEPARATORS = new Set(["&&", "||", ";", "|"]);
-
+/** Shell and .env: a whole-line `#` comment, a .env `KEY=`, a command word
+ * (unless the line continues the last one with a trailing `\`) and its
+ * `--flags`. Enough for the dialog's fixed snippets, not a shell grammar. */
 function shellLines(code: string, lang: "bash" | "env"): ReactNode[] {
   const out: ReactNode[] = [];
-  // Whether this line continues the previous one (trailing backslash), so
-  // its first word is an argument, not a command.
   let continued = false;
   code.split("\n").forEach((line, i) => {
     if (i > 0) out.push("\n");
-    const { parts, comment } = scan(line);
-    if (lang === "env") {
-      const body = parts.join("");
-      const kv = /^([A-Za-z_][A-Za-z0-9_]*)(=.*)$/s.exec(body);
-      if (kv) out.push(span(kv[1], "qs-tok-key", out.length), kv[2]);
-      else out.push(body);
-    } else {
-      let command = !continued;
-      // A `;` written against a word (`install hexgate; ls`) ends it too.
-      const words = parts.flatMap((p) =>
-        p.length > 1 && p.endsWith(";") ? [p.slice(0, -1), ";"] : [p],
-      );
-      for (const p of words) {
-        if (!/\S/.test(p)) {
-          out.push(p);
-        } else if (SEPARATORS.has(p)) {
-          out.push(p);
-          command = true;
-        } else if (command) {
-          out.push(span(p, "qs-tok-function", out.length));
-          command = false;
-        } else if (/^--?[\w-]+/.test(p)) {
-          out.push(span(p, "qs-tok-keyword", out.length));
-        } else {
-          out.push(p);
-        }
-      }
-      continued = !comment && /\\\s*$/.test(line);
+    if (/^\s*#/.test(line)) {
+      out.push(span(line, COMMENT, out.length));
+      return;
     }
-    if (comment) out.push(span(comment, "qs-tok-comment", out.length));
+    if (lang === "env") {
+      const kv = /^([A-Za-z_]\w*)(=.*)$/.exec(line);
+      if (kv) out.push(span(kv[1], ink(t.propertyName), out.length), kv[2]);
+      else out.push(line);
+      return;
+    }
+    line.split(/(\s+)/).forEach((word, j) => {
+      if (j === 0 && word && !continued) {
+        out.push(span(word, ink(t.function(t.variableName)), out.length));
+      } else if (/^--?\w/.test(word)) {
+        out.push(span(word, ink(t.typeName), out.length));
+      } else {
+        out.push(word);
+      }
+    });
+    continued = /\\\s*$/.test(line);
   });
   return out;
 }

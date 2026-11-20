@@ -60,10 +60,20 @@ describe("QuickstartDialog", () => {
     expect(
       await screen.findByText("Create a project first."),
     ).toBeInTheDocument();
+    // The step's page needs a project, so its button waits for one.
+    expect(
+      screen.getByRole("button", { name: "Mint an API key" }),
+    ).toBeDisabled();
+
     await user.click(screen.getByRole("button", { name: "Create a project" }));
     expect(
       await screen.findByRole("heading", { name: "Create project" }),
     ).toBeInTheDocument();
+    // Arrow keys on that dialog's buttons stay there: the quickstart keeps
+    // its step.
+    act(() => screen.getByRole("button", { name: "Cancel" }).focus());
+    await user.keyboard("{ArrowRight}");
+    expect(useUi.getState().quickstartStep).toBe(1);
   });
 
   it("tells assistive tech when a copy fails", async () => {

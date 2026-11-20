@@ -330,176 +330,182 @@ export function QuickstartDialog() {
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        // Ligatures would render <= and == as glyphs that differ from what Copy
-        // puts on the clipboard.
-        className="flex h-[min(680px,92vh)] max-w-5xl flex-col gap-0 overflow-hidden p-0 [font-variant-ligatures:none]"
-        onCloseAutoFocus={(e) => {
-          const to = pendingNav.current;
-          if (!to) return;
-          pendingNav.current = null;
-          // Focus moves to the page we open, not back to the opener.
-          e.preventDefault();
-          navigate(to);
-        }}
-        onOpenAutoFocus={(e) => {
-          // Land on the primary action rather than the first button (Replay).
-          e.preventDefault();
-          primaryRef.current?.focus();
-        }}
-        onKeyDown={(e) => {
-          // Arrow keys page through the steps unless focus is in a control
-          // that uses them itself.
-          // Modified arrows belong to the browser (history, text navigation).
-          if (e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
-          const t = e.target as HTMLElement;
-          if (t.closest("pre, input, textarea, [role='group']")) return;
-          if (e.key === "ArrowRight") go(index + 1);
-          if (e.key === "ArrowLeft") go(index - 1);
-        }}
-      >
-        <header className="flex items-center gap-4 border-b border-border px-6 py-4 pr-12">
-          <div className="min-w-0 flex-1">
-            <DialogTitle>Quickstart</DialogTitle>
-            <DialogDescription className="text-xs">
-              Put an agent under a role-aware policy in six steps.
-            </DialogDescription>
-          </div>
-          <a
-            href={docsUrl(DOC_PATHS.quickstart)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hidden items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground sm:flex"
-          >
-            <BookOpen className="size-3.5" />
-            Full guide
-          </a>
-        </header>
-
-        <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] md:grid-rows-1">
-          <section
-            aria-label="Animation"
-            className="relative order-first overflow-hidden border-b border-border bg-muted/40 p-5 md:order-last md:border-b-0 md:border-l md:p-8"
-          >
-            <div
-              key={`${step.id}-${replay}`}
-              className="mx-auto h-[220px] max-w-md md:h-full"
-              aria-hidden="true"
-            >
-              {step.scene(ctx)}
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent
+          // Ligatures would render <= and == as glyphs that differ from what Copy
+          // puts on the clipboard.
+          className="flex h-[min(680px,92vh)] max-w-5xl flex-col gap-0 overflow-hidden p-0 [font-variant-ligatures:none]"
+          onCloseAutoFocus={(e) => {
+            const to = pendingNav.current;
+            if (!to) return;
+            pendingNav.current = null;
+            // Focus moves to the page we open, not back to the opener.
+            e.preventDefault();
+            navigate(to);
+          }}
+          onOpenAutoFocus={(e) => {
+            // Land on the primary action rather than the first button (Replay).
+            e.preventDefault();
+            primaryRef.current?.focus();
+          }}
+          onKeyDown={(e) => {
+            // Arrow keys page through the steps unless focus is in a control
+            // that uses them itself.
+            // Modified arrows belong to the browser (history, text navigation).
+            if (e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
+            const t = e.target as HTMLElement;
+            if (t.closest("pre, input, textarea, [role='group']")) return;
+            if (e.key === "ArrowRight") go(index + 1);
+            if (e.key === "ArrowLeft") go(index - 1);
+          }}
+        >
+          <header className="flex items-center gap-4 border-b border-border px-6 py-4 pr-12">
+            <div className="min-w-0 flex-1">
+              <DialogTitle>Quickstart</DialogTitle>
+              <DialogDescription className="text-xs">
+                Put an agent under a role-aware policy in six steps.
+              </DialogDescription>
             </div>
+            <a
+              href={docsUrl(DOC_PATHS.quickstart)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hidden items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground sm:flex"
+            >
+              <BookOpen className="size-3.5" />
+              Full guide
+            </a>
+          </header>
+
+          <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] md:grid-rows-1">
+            <section
+              aria-label="Animation"
+              className="relative order-first overflow-hidden border-b border-border bg-muted/40 p-5 md:order-last md:border-b-0 md:border-l md:p-8"
+            >
+              <div
+                key={`${step.id}-${replay}`}
+                className="mx-auto h-[220px] max-w-md md:h-full"
+                aria-hidden="true"
+              >
+                {step.scene(ctx)}
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="absolute bottom-2 right-2 h-7 gap-1.5 text-xs text-muted-foreground"
+                onClick={() => setReplay((r) => r + 1)}
+              >
+                <RotateCcw className="size-3" />
+                Replay
+              </Button>
+            </section>
+
+            <section className="min-h-0 overflow-y-auto px-6 py-5 scrollbar-thin">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-primary">
+                Step {index + 1} of {STEPS.length}
+              </p>
+              <h3 className="mb-3 mt-1 text-lg font-semibold tracking-tight">
+                {step.title}
+              </h3>
+              <div className="flex flex-col gap-3 text-sm leading-relaxed [&_code]:font-mono [&_code]:text-[0.9em] [&_p>code]:rounded [&_p>code]:bg-muted [&_p>code]:px-1">
+                {needsProject && (
+                  <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2.5">
+                    <p className="min-w-0 flex-1">
+                      <b>Create a project first.</b> Keys, agents and policies
+                      live in a project, and this organization has none yet.
+                    </p>
+                    <Button
+                      size="sm"
+                      className="gap-1.5"
+                      onClick={() => setCreateOpen(true)}
+                    >
+                      <FolderPlus className="size-3.5" />
+                      Create a project
+                    </Button>
+                  </div>
+                )}
+                {step.body(ctx)}
+              </div>
+              {step.action ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-4 gap-1.5"
+                  // Its page needs a project; the note above offers to create one.
+                  disabled={needsProject}
+                  onClick={() => {
+                    // Keeps the step, so reopening resumes here. The page opens
+                    // once the dialog has closed (onCloseAutoFocus), so a dialog
+                    // that page opens (Mint API key) isn't fighting this one's
+                    // focus scope on the way out.
+                    pendingNav.current = step.action!.to;
+                    close();
+                  }}
+                >
+                  {step.action.label}
+                  <ArrowRight className="size-3.5" />
+                </Button>
+              ) : null}
+            </section>
+          </div>
+
+          <footer className="flex items-center justify-between gap-3 border-t border-border px-6 py-3">
             <Button
               variant="ghost"
               size="sm"
-              className="absolute bottom-2 right-2 h-7 gap-1.5 text-xs text-muted-foreground"
-              onClick={() => setReplay((r) => r + 1)}
-            >
-              <RotateCcw className="size-3" />
-              Replay
-            </Button>
-          </section>
-
-          <section className="min-h-0 overflow-y-auto px-6 py-5 scrollbar-thin">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-primary">
-              Step {index + 1} of {STEPS.length}
-            </p>
-            <h3 className="mb-3 mt-1 text-lg font-semibold tracking-tight">
-              {step.title}
-            </h3>
-            <div className="flex flex-col gap-3 text-sm leading-relaxed [&_code]:font-mono [&_code]:text-[0.9em] [&_p>code]:rounded [&_p>code]:bg-muted [&_p>code]:px-1">
-              {needsProject && (
-                <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2.5">
-                  <p className="min-w-0 flex-1">
-                    <b>Create a project first.</b> Keys, agents and policies
-                    live in a project, and this organization has none yet.
-                  </p>
-                  <Button
-                    size="sm"
-                    className="gap-1.5"
-                    onClick={() => setCreateOpen(true)}
-                  >
-                    <FolderPlus className="size-3.5" />
-                    Create a project
-                  </Button>
-                </div>
-              )}
-              {step.body(ctx)}
-            </div>
-            {step.action ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-4 gap-1.5"
-                onClick={() => {
-                  // Keeps the step, so reopening resumes here. The page opens
-                  // once the dialog has closed (onCloseAutoFocus), so a dialog
-                  // that page opens (Mint API key) isn't fighting this one's
-                  // focus scope on the way out.
-                  pendingNav.current = step.action!.to;
-                  close();
-                }}
-              >
-                {step.action.label}
-                <ArrowRight className="size-3.5" />
-              </Button>
-            ) : null}
-          </section>
-        </div>
-
-        <footer className="flex items-center justify-between gap-3 border-t border-border px-6 py-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => go(index - 1)}
-            disabled={index === 0}
-            className="gap-1.5"
-          >
-            <ArrowLeft className="size-3.5" />
-            Back
-          </Button>
-          <ol className="flex items-center gap-1.5" aria-label="Steps">
-            {STEPS.map((s, i) => (
-              <li key={s.id}>
-                <button
-                  type="button"
-                  onClick={() => go(i)}
-                  aria-label={`Step ${i + 1}: ${s.title}`}
-                  aria-current={i === index ? "step" : undefined}
-                  className={cn(
-                    "block h-1.5 rounded-full transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                    i === index
-                      ? "w-6 bg-primary"
-                      : i < index
-                        ? "w-1.5 bg-primary/50"
-                        : "w-1.5 bg-border",
-                  )}
-                />
-              </li>
-            ))}
-          </ol>
-          {last ? (
-            <Button
-              ref={primaryRef}
-              size="sm"
-              onClick={() => close({ reset: true })}
-            >
-              Done
-            </Button>
-          ) : (
-            <Button
-              ref={primaryRef}
-              size="sm"
-              onClick={() => go(index + 1)}
+              onClick={() => go(index - 1)}
+              disabled={index === 0}
               className="gap-1.5"
             >
-              Next
-              <ArrowRight className="size-3.5" />
+              <ArrowLeft className="size-3.5" />
+              Back
             </Button>
-          )}
-        </footer>
-        <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} />
-      </DialogContent>
-    </Dialog>
+            <ol className="flex items-center gap-1.5" aria-label="Steps">
+              {STEPS.map((s, i) => (
+                <li key={s.id}>
+                  <button
+                    type="button"
+                    onClick={() => go(i)}
+                    aria-label={`Step ${i + 1}: ${s.title}`}
+                    aria-current={i === index ? "step" : undefined}
+                    className={cn(
+                      "block h-1.5 rounded-full transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      i === index
+                        ? "w-6 bg-primary"
+                        : i < index
+                          ? "w-1.5 bg-primary/50"
+                          : "w-1.5 bg-border",
+                    )}
+                  />
+                </li>
+              ))}
+            </ol>
+            {last ? (
+              <Button
+                ref={primaryRef}
+                size="sm"
+                onClick={() => close({ reset: true })}
+              >
+                Done
+              </Button>
+            ) : (
+              <Button
+                ref={primaryRef}
+                size="sm"
+                onClick={() => go(index + 1)}
+                className="gap-1.5"
+              >
+                Next
+                <ArrowRight className="size-3.5" />
+              </Button>
+            )}
+          </footer>
+        </DialogContent>
+      </Dialog>
+      {/* Beside the quickstart, not inside its content: keys pressed in this
+        dialog would otherwise bubble to the quickstart's arrow-key paging. */}
+      <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} />
+    </>
   );
 }

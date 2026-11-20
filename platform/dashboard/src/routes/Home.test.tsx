@@ -344,6 +344,16 @@ describe("HomePage", () => {
     await waitFor(() => expect(useUi.getState().quickstartOpen).toBe(true));
   });
 
+  it("leaves an open quickstart on its step when a new project's agents load", async () => {
+    // A new user on step 2 creates a project: its agent list loads empty,
+    // which is the first-run state again, but the dialog is already open.
+    useUi.setState({ quickstartOpen: true, quickstartStep: 1 });
+    stub({ "/v1/projects/p1/agents/manifest": [] });
+    renderWithProviders(<HomePage />);
+    expect(await screen.findByText(/No agents yet/)).toBeInTheDocument();
+    expect(useUi.getState().quickstartStep).toBe(1);
+  });
+
   it("doesn't offer it while an existing user's default project is picked", async () => {
     // Projects exist, but none is active yet (a fresh browser, before the
     // shell's bootstrap picks one): the page shows "no project" for a moment.
