@@ -53,7 +53,13 @@ async def test_assistant_change_happy_path(
         samples=[{"role": "billing", "tool": "refund_order", "expect": "deny"}],
         checks=[{"id": "yaml", "status": "pass", "detail": "", "items": []}],
         boundary_changes=[],
-        effect={"rows": []},
+        effect={
+            "changes": [],
+            "agent_changes": [],
+            "gate_changes": [],
+            "agents_affected": [],
+            "composes": {"before": True, "after": True},
+        },
     )
     async with factory() as session:
         session.add(change)
