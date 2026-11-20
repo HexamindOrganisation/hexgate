@@ -330,6 +330,10 @@ async def _lints_of(session, entry: str):
     return _by_id(await _run(session, {"policy.yaml": entry}, samples=()), "lints")
 
 
+async def _lints_of_files(session, files: dict[str, str]):
+    return _by_id(await _run(session, files, samples=()), "lints")
+
+
 async def test_when_an_error_is_only_on_the_draft_then_lints_fails(session) -> None:
     await _store_bot(session, _bot(default="ok.yaml", support="ok.yaml"))
     check = await _lints_of(session, _bot(default="ok.yaml", support="bad.yaml"))
@@ -596,3 +600,25 @@ async def test_when_an_agent_errs_where_the_generic_view_warns_then_lints_fails(
         "error",
         "bot",
     )
+
+
+async def test_known_limit_when_a_new_rule_repeats_a_saved_dead_path_then_lints_only_warns(
+    session,
+) -> None:
+    """Known limit, pinned so its fix shows up. ``unknown-root`` carries no
+    tool and the compose source is always ``policy.yaml``, so a new rule on
+    another tool reading the same unset path is the saved defect: ``warn``
+    today. This flips to ``fail`` when the SDK puts the tool (and location)
+    into these lints (a follow-up SDK change); that change updates this test."""
+    saved = "tools:\n  view: { mode: allow, constraint: 'not (user.department == \"contractor\")' }\n"
+    drafted = saved + (
+        "  delete_account: { mode: allow, constraint: 'not (user.department == \"intern\")' }\n"
+    )
+    await _store(
+        session, {"policy.yaml": _bot(support="support.yaml"), "support.yaml": saved}
+    )
+    check = await _lints_of_files(session, {"support.yaml": drafted})
+    assert check.status == "warn"
+    errors = [i["code"] for i in check.items if i["severity"] == "error"]
+    assert errors == ["unknown-root"]
+    assert not any(i.get("new") for i in check.items)
