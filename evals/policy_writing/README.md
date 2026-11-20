@@ -330,8 +330,9 @@ a URL path or query; `pytest -m integration tests/evals` probes all of this.
 Claude Code on every case before the skill is tuned against them; later skill
 changes report against this.
 
-- `make policy-eval CASES= EPOCHS=3 MAX_SANDBOXES=4`, `MODEL` unset: the
-  subscription's default, `claude-sonnet-5-5` in every sample's `modelUsage`.
+- `make policy-eval CASES= EPOCHS=3 MAX_SANDBOXES=4 MODEL=claude-sonnet-5-5`
+  (run with `MODEL` unset, which resolved to `claude-sonnet-5-5` in every
+  sample's `modelUsage`; pin it, as the default may change).
 - Commit `d3ba8fe5` (clean tree), 2026-11-19, log
   `2026-11-19T11-11-28-00-00_policy-writing_KTc6fpPvpnK7dvSRWV4Ar7.eval`
   (`logs/` is not committed). 105 of 105 samples scored, none errored or hit
