@@ -4,6 +4,12 @@ version = "0.1.0"
 description = "Hexgate policy assistant — chat over the platform's policy tools, in its own container"
 requires-python = ">=3.13"
 dependencies = [
+    # Pinned exactly: it releases several times a week and the agent leans on
+    # its MCP, OpenRouter and retry internals. Bumped by hand, with the tests.
+    "pydantic-ai-slim[mcp,openrouter,retries]==2.71.0",
+    # Imported directly by model.py (the retrying transport).
+    "httpx2>=2.16",
+    "tenacity>=9",
     # Both imported directly (starlette by the app, uvicorn by __main__), so
     # pinned the same way platform/mcp pins them.
     "starlette>=0.40",
@@ -19,6 +25,8 @@ dev = [
     # run the root's over platform/assistant, `make assistant-check` runs this
     # one, and two versions would one day disagree on the same file.
     "ruff==0.15.12",
+    # The fake MCP server the agent tests call over HTTP.
+    "fastmcp-slim[server]>=4.2.2",
 ]
 
 [tool.ruff.lint]
