@@ -17,7 +17,7 @@ ARG TARGETARCH
 # once, natively, instead of again under emulation.
 # Base images are pinned by digest (tag kept for readability), so a re-pushed
 # tag can't change what we publish; Dependabot proposes the bumps.
-FROM --platform=$BUILDPLATFORM node:22-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS dashboard
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS dashboard
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 RUN corepack enable
@@ -52,7 +52,7 @@ ADD --checksum=sha256:810aa96e44f1f852d044888cf830324e44eafd0f510345339011347ab4
 FROM opa-${TARGETARCH} AS opa
 
 # The uv binary only, for the runtime stage below.
-FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
+FROM ghcr.io/astral-sh/uv:0.13.9@sha256:d3b601f0c7b118bc1753febf7c41cc80981df678445e0254284eecf84db79a7d AS uv
 
 # ---- control-plane API ---------------------------------------------------
 # The official Python image, not uv's python image: it is rebuilt with each
