@@ -1,0 +1,25 @@
+# Fake accounts for the Claimdesk demo app. Edit freely: the app re-reads this
+# file at every sign-in.
+#
+# Passwords are plain text on purpose: this is a local demo, never a real login.
+# `roles` is what the copilot passes to hexgate as the caller's roles, and
+# `attributes` what it passes as caller attributes (ctx.* in the policy). A role
+# the policy doesn't mention gets the policy's `default` access.
+
+users:
+  ines:
+    name: Inès Laurent
+    password: lecture-seule
+    roles: [advisor]
+
+  lea:
+    name: Léa Martin
+    password: sinistre-lea
+    roles: [junior_handler]
+    attributes:
+      assigned_claims: [CLM-2041, CLM-2107, CLM-2112]
+
+  karim:
+    name: Karim Benali
+    password: accord-karim
+    roles: [senior_handler]

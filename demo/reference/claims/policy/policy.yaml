@@ -1,0 +1,33 @@
+# Hexa Assurance: claims_copilot policy.
+# Boundary = what the company allows at most, whoever asks (security-owned).
+# Each role then gets only the capabilities it imports.
+boundary:
+  tools:
+    list_claims: { mode: allow }
+    get_claim: { mode: allow }
+    read_document: { mode: allow }
+    # A change of bank details always needs a human.
+    update_bank_details: { mode: approval_required }
+    issue_payment:
+      mode: allow
+      constraints:
+        - args.amount_eur <= 50000                                # company ceiling per payment
+        - run.calls_of_this_tool < 1                              # one payment per request: no splitting
+        - every(run.tools_used, . != "update_bank_details")       # never pay in a run that changed the bank details
+    # Once the copilot has read a document sent from outside, mail stays inside the company.
+    send_email:
+      mode: allow
+      constraint: 'every(run.tools_used, . != "read_document") or endswith(args.to, "@hexa-assurance.example")'
+  admission: { mode: allow }
+agents:
+  claims_copilot:
+    roles:
+      # Anyone signed in with a role this file doesn't name: read-only.
+      default:
+        import: [ caps/claims/ingress.yaml, caps/claims/read.yaml ]
+      advisor:
+        import: [ caps/claims/ingress.yaml, caps/claims/read.yaml ]
+      junior_handler:
+        import: [ caps/claims/ingress.yaml, caps/claims/own_claims.yaml, caps/claims/email.yaml ]
+      senior_handler:
+        import: [ caps/claims/ingress.yaml, caps/claims/read.yaml, caps/claims/senior.yaml, caps/claims/email.yaml ]

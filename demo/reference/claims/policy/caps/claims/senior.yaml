@@ -1,0 +1,4 @@
+# Senior handlers work on every claim; each payment and each change of bank details needs a human's approval.
+tools:
+  update_bank_details: { mode: approval_required }
+  issue_payment: { mode: approval_required }

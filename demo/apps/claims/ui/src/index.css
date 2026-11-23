@@ -1,0 +1,299 @@
+/* Claimdesk's theme and the component classes the UI repeats or toggles by
+ * state (claim cards, tags, the badge). Layout lives in the components as
+ * Tailwind utilities. */
+@import "tailwindcss";
+
+@theme {
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --color-bg: #f5f6f8;
+  --color-panel: #ffffff;
+  --color-card: #f9fafb;
+  --color-raised: #eef0f4;
+  --color-line: #e3e6eb;
+  --color-line-soft: #eef0f3;
+  --color-line-strong: #d5dae1;
+
+  --color-ink: #14171c;
+  --color-ink-2: #2e3540;
+  --color-muted: #5b6472;
+  --color-faint: #7a8391;
+
+  --color-accent: #6e5bf0;
+  --color-accent-soft: #eeebfe;
+  --color-accent-line: #d6d0fb;
+  --color-accent-deep: #5140c9;
+  --color-accent-ink: #231b5c;
+
+  --color-ok: #1e9e57;
+  --color-ok-bg: #eaf7ef;
+  --color-ok-line: #bfe5cd;
+  --color-ok-ink: #157a42;
+
+  --color-warn: #d97706;
+  --color-warn-bg: #fff6e8;
+  --color-warn-line: #f1d2a2;
+  --color-warn-ink: #9a5200;
+  --color-warn-ink-2: #6e5530;
+
+  --color-bad: #dc3b3b;
+  --color-bad-bg: #fdefef;
+  --color-bad-line: #f2c4c4;
+  --color-bad-ink: #b42323;
+  --color-bad-ink-2: #7a3b3b;
+
+  --color-info: #2f6fdb;
+  --color-info-bg: #eaf1fd;
+  --color-info-line: #c3d6f7;
+  --color-info-ink: #1f5bbf;
+
+  --animate-blink: blink 1s infinite;
+  --animate-flash: flash 1.2s ease-out;
+
+  @keyframes blink {
+    50% {
+      opacity: 0.2;
+    }
+  }
+  @keyframes flash {
+    0% {
+      box-shadow: 0 0 0 2px var(--color-accent);
+    }
+    100% {
+      box-shadow: 0 0 0 2px transparent;
+    }
+  }
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    @apply h-full;
+  }
+  body {
+    @apply bg-bg font-sans text-sm/[1.45] text-ink antialiased;
+  }
+  a {
+    @apply text-accent;
+  }
+  input:focus-visible,
+  button:focus-visible,
+  a:focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+}
+
+@layer components {
+  /* ---------------------------------------------------------------- basics */
+  .sub {
+    @apply text-[13px] text-faint;
+  }
+  .box {
+    @apply rounded-xl border border-line bg-panel;
+  }
+  .btn {
+    @apply h-11 cursor-pointer rounded-[10px] bg-accent px-[18px] font-semibold text-white
+      hover:brightness-110 disabled:cursor-default disabled:opacity-55;
+  }
+  .btn-ghost {
+    @apply border border-line-strong bg-transparent font-medium text-ink;
+  }
+  .icon-btn {
+    @apply flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-lg text-faint
+      hover:bg-raised hover:text-ink;
+  }
+  .input {
+    @apply h-11 w-full rounded-[10px] border border-line-strong bg-panel px-3.5 text-ink;
+  }
+
+  .pill {
+    @apply rounded-md border border-line-strong bg-raised px-[7px] py-px text-[11px] font-semibold
+      whitespace-nowrap text-ink-2;
+  }
+  .role-advisor {
+    @apply text-ink-2;
+  }
+  .role-junior_handler {
+    @apply border-info-line bg-info-bg text-info-ink;
+  }
+  .role-senior_handler {
+    @apply border-warn-line bg-warn-bg text-warn-ink;
+  }
+  .role-other {
+    @apply border-accent-line bg-accent-soft text-accent-deep;
+  }
+
+  .dot {
+    @apply size-[7px] shrink-0 rounded-full bg-current;
+  }
+  .k-ok {
+    @apply text-ok;
+  }
+  .k-blocked,
+  .k-danger {
+    @apply text-bad;
+  }
+  .k-warn {
+    @apply text-warn;
+  }
+  .k-info {
+    @apply text-faint;
+  }
+
+  /* ---------------------------------------------------------------- shell */
+  .nav-link {
+    @apply flex min-h-10 items-center gap-2.5 rounded-lg px-2.5 text-muted no-underline;
+  }
+  .nav-link.active {
+    @apply bg-raised font-medium text-ink;
+  }
+  .region {
+    @apply rounded-lg border border-line-strong bg-panel px-2.5 py-1.5 text-xs text-muted;
+  }
+
+  /* ---------------------------------------------------------- claim cards */
+  .claim {
+    @apply flex flex-col gap-2.5 rounded-xl border border-line bg-panel px-4 py-3.5
+      transition-colors duration-400;
+  }
+  .claim.flagged {
+    @apply border-bad-line bg-bad-bg;
+  }
+  .claim.flash {
+    @apply animate-flash;
+  }
+  .claim .status {
+    @apply ml-auto rounded-full border border-line-strong bg-raised px-2.5 py-0.5 text-xs
+      font-semibold whitespace-nowrap text-ink-2;
+  }
+  .claim .status.paid {
+    @apply border-ok-line bg-ok-bg text-ok-ink;
+  }
+  .claim.flagged .status.paid {
+    @apply border-bad-line bg-panel text-bad-ink;
+  }
+  .claim .bank {
+    @apply flex flex-col gap-0.5 rounded-[10px] border border-line bg-card px-3 py-2;
+  }
+  .tag {
+    @apply rounded-md border px-[7px] py-px text-[11px] font-semibold whitespace-nowrap;
+  }
+  .tag.changed {
+    @apply border-warn-line bg-warn-bg text-warn-ink;
+  }
+  .tag.flag {
+    @apply border-bad-line bg-panel text-bad-ink;
+  }
+
+  /* ---------------------------------------------------------------- copilot */
+  .badge {
+    @apply ml-auto flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs
+      font-semibold whitespace-nowrap;
+  }
+  .badge.on {
+    @apply border-ok-line bg-ok-bg text-ok-ink;
+  }
+  .badge.off {
+    @apply border-warn-line bg-warn-bg text-warn-ink;
+  }
+  .badge.broken {
+    @apply border-bad-line bg-bad-bg text-bad-ink;
+  }
+
+  .suggest button {
+    @apply cursor-pointer rounded-[10px] border border-line-strong bg-card px-3 py-2.5 text-left
+      text-[13px] text-ink-2 hover:border-accent;
+  }
+  .msg-user {
+    @apply max-w-[85%] self-end rounded-[14px] rounded-br-sm bg-accent-soft px-3.5 py-2.5
+      whitespace-pre-wrap text-accent-ink;
+  }
+  .turn {
+    @apply flex max-w-[94%] flex-col gap-2;
+  }
+  .reply {
+    @apply whitespace-pre-wrap text-ink-2 empty:hidden;
+  }
+  .typing {
+    @apply flex gap-1 py-1.5;
+  }
+  .typing i {
+    @apply size-1.5 animate-blink rounded-full bg-faint;
+  }
+  .typing i:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+  .typing i:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+
+  .call {
+    @apply flex min-w-0 items-center gap-2 rounded-lg border border-line bg-card px-2.5 py-[7px]
+      text-xs text-muted;
+  }
+  .call svg {
+    @apply shrink-0;
+  }
+  .call .sig {
+    @apply min-w-0 font-mono wrap-anywhere;
+  }
+  .call .meta {
+    @apply ml-auto whitespace-nowrap text-faint;
+  }
+  .call .meta.approved {
+    @apply text-warn-ink;
+  }
+  .call .meta.failed {
+    @apply text-bad-ink;
+  }
+
+  .card {
+    @apply flex flex-col gap-2 rounded-[10px] border px-3.5 py-3;
+  }
+  .card .top {
+    @apply flex items-center gap-2;
+  }
+  .card .top b {
+    @apply text-[13px];
+  }
+  .card .tool {
+    @apply ml-auto font-mono text-xs;
+  }
+  .card code,
+  .card .why {
+    @apply text-xs;
+  }
+  .card .headline {
+    @apply font-mono text-xl font-semibold text-warn-ink;
+  }
+  .card .actions {
+    @apply flex gap-2;
+  }
+  .card.blocked {
+    @apply border-bad-line bg-bad-bg;
+  }
+  .card.blocked b {
+    @apply text-bad-ink;
+  }
+  .card.blocked .tool,
+  .card.blocked code,
+  .card.blocked .why {
+    @apply text-bad-ink-2;
+  }
+  .card.approval {
+    @apply border-warn-line bg-warn-bg;
+  }
+  .card.approval b {
+    @apply text-warn-ink;
+  }
+  .card.approval .tool,
+  .card.approval code,
+  .card.approval .why {
+    @apply text-warn-ink-2;
+  }
+  .card.error {
+    @apply border-bad-line bg-bad-bg text-xs whitespace-pre-wrap text-bad-ink;
+  }
+}
