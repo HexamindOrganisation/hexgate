@@ -29,7 +29,7 @@ from hexgate_api.features.policy_modules import service
 from hexgate_api.features.policy_modules.boundary import (
     WIDENED,
     BoundaryChange,
-    boundary_changes,
+    compare_boundaries,
 )
 from hexgate_api.schemas import PolicyFileDraft, PolicyLintOut
 
@@ -67,7 +67,7 @@ class Sample(Protocol):
 @dataclass(frozen=True)
 class ChecksResult:
     checks: list[Check]
-    # Every change boundary_changes reported, as it reported them. Empty when
+    # Every change the boundary comparison reported, as reported. Empty when
     # the boundary check did not run or raised.
     boundary_changes: list[BoundaryChange]
 
@@ -265,25 +265,33 @@ async def _dry_run(run: _Run, sample: Sample) -> tuple[str | None, str | None]:
 
 
 async def _boundary(run: _Run) -> tuple[Check, list[BoundaryChange]]:
-    """The check and every change ``boundary_changes`` reported. Fails on any
+    """The check and every change the comparison reported. Fails on any
     widened block, and when the comparison itself refuses the drafts (a first
-    ``policy.yaml``, a block that does not lower): an unchecked boundary is
-    never a pass."""
+    ``policy.yaml``, a drafted block that does not lower): an unchecked
+    boundary is never a pass. A saved block outside ``policy.yaml`` that does
+    not lower is a ``warn``: it holds no ceiling to compare."""
     from hexgate.security.modules import LinkError
 
     saved = await service._files_map(run.session, run.project_id)
     drafted = service.overlay_drafts(saved, run.drafts)
     try:
-        changes = boundary_changes(saved, drafted)
+        comparison = compare_boundaries(saved, drafted)
     except (service.InvalidModuleError, LinkError) as exc:
         return _check("boundary", "fail", str(exc)), []
     except RecursionError:  # a constraint nested past the parser's stack
         return _check("boundary", "fail", "a constraint is nested too deeply"), []
+    changes = comparison.changes
     widened = sum(change.kind == WIDENED for change in changes)
     if widened:
         detail = f"{widened} boundary change(s) widen a ceiling"
         return _check("boundary", "fail", detail), changes
     detail = f"{len(changes)} boundary change(s), none widen"
+    if comparison.uncompared:
+        items = [
+            {"file": name, "error": "saved block does not lower; no ceiling to compare"}
+            for name in comparison.uncompared
+        ]
+        return _check("boundary", "warn", detail, items), changes
     return _check("boundary", "pass", detail), changes
 
 

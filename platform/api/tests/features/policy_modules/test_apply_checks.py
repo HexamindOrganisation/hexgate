@@ -294,6 +294,36 @@ async def test_when_a_boundary_block_does_not_lower_then_boundary_fails(
     assert not result.passed
 
 
+_LOOSE = "boundary:\n  tools:\n    agent.run: { mode: allow }\n"
+
+
+@pytest.mark.usefixtures("stored")
+async def test_when_a_saved_block_outside_the_entry_does_not_lower_then_its_fix_warns(
+    session,
+) -> None:
+    # Not imported, so the editor saved it; the draft repairs it.
+    await _store(session, {"loose.yaml": _LOOSE})
+    fixed = "boundary:\n  tools:\n    refund: { mode: allow }\n"
+    result = await _run(session, {"loose.yaml": fixed})
+    boundary = _by_id(result, "boundary")
+    assert boundary.status == "warn"
+    assert [i["file"] for i in boundary.items] == ["loose.yaml"]
+    assert result.passed
+
+
+async def test_when_the_saved_entry_block_does_not_lower_then_boundary_fails(
+    session,
+) -> None:
+    await _store(
+        session,
+        {"policy.yaml": _ENTRY.replace("view:", "agent.run:"), "grants.yaml": _GRANTS},
+    )
+    result = await _run(session, {"policy.yaml": _ENTRY})
+    assert _by_id(result, "boundary").status == "fail"
+    assert "policy.yaml" in _by_id(result, "boundary").detail
+    assert not result.passed
+
+
 @pytest.mark.usefixtures("stored")
 async def test_when_a_check_finds_more_than_the_cap_then_the_detail_counts_the_rest(
     session,
