@@ -77,3 +77,19 @@ def test_when_public_url_ends_with_slash_then_from_env_refuses(monkeypatch):
 
     with pytest.raises(ValueError, match="trailing slash"):
         Settings.from_env()
+
+
+@pytest.mark.parametrize("value", ["abc", "5432x", "0", "65536", "-1"])
+def test_when_port_is_not_a_port_number_then_from_env_names_the_variable(
+    monkeypatch, value
+):
+    monkeypatch.setenv("HEXGATE_ASSISTANT_POSTGRES_PORT", value)
+
+    with pytest.raises(ValueError, match="HEXGATE_ASSISTANT_POSTGRES_PORT"):
+        Settings.from_env()
+
+
+def test_when_port_is_empty_then_from_env_uses_the_default(monkeypatch):
+    monkeypatch.setenv("HEXGATE_ASSISTANT_POSTGRES_PORT", "")
+
+    assert Settings.from_env().database_url.port == 5432

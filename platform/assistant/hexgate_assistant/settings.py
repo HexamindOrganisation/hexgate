@@ -67,6 +67,21 @@ def database_url_from_env() -> URL:
         username=os.environ.get("HEXGATE_ASSISTANT_POSTGRES_USER", "hexgate_assistant"),
         password=password,
         host=os.environ.get("HEXGATE_ASSISTANT_POSTGRES_HOST", "postgres"),
-        port=int(os.environ.get("HEXGATE_ASSISTANT_POSTGRES_PORT", "5432")),
+        port=_port_from_env("HEXGATE_ASSISTANT_POSTGRES_PORT", 5432),
         database=os.environ.get("HEXGATE_ASSISTANT_POSTGRES_DB", "hexgate_assistant"),
     )
+
+
+def _port_from_env(name: str, default: int) -> int:
+    """A TCP port from `name`; unset or empty (an unset compose key
+    interpolates to "") falls back to `default`."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        port = int(raw)
+    except ValueError:
+        port = 0
+    if not 1 <= port <= 65535:
+        raise ValueError(f"{name}={raw!r} is not a port number (1-65535).")
+    return port
