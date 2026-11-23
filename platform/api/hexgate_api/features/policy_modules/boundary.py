@@ -52,6 +52,14 @@ class BoundaryChange(BaseModel):
     after: dict[str, Any] | None
 
 
+@dataclasses.dataclass(frozen=True)
+class BoundaryComparison:
+    changes: list[BoundaryChange]
+    # Changed files outside ``policy.yaml`` whose saved side does not lower:
+    # they hold no ceiling to compare, so only their drafted side was checked.
+    uncompared: list[str]
+
+
 def boundary_changes(
     saved: Mapping[str, str], drafted: Mapping[str, str]
 ) -> list[BoundaryChange]:
@@ -66,6 +74,27 @@ def boundary_changes(
     module store or each agent's own policy, which no block here describes, so
     there is no saved side to compare.
     """
+    return _compare(saved, drafted, lenient=False).changes
+
+
+def compare_boundaries(
+    saved: Mapping[str, str], drafted: Mapping[str, str]
+) -> BoundaryComparison:
+    """:func:`boundary_changes`, except that a changed file outside
+    ``policy.yaml`` whose saved side does not lower is listed as
+    ``uncompared`` instead of raising. Such a block is never in force, so
+    nothing in force can be loosened, and a draft that repairs it must not be
+    refused for it. A drafted side that does not lower still raises, and so
+    does a saved ``policy.yaml``, whose blocks the draft would put in force
+    with nothing to compare them against."""
+    return _compare(saved, drafted, lenient=True)
+
+
+def _compare(
+    saved: Mapping[str, str], drafted: Mapping[str, str], *, lenient: bool
+) -> BoundaryComparison:
+    from hexgate.security.modules import LinkError
+
     if ENTRY_FILE in drafted and ENTRY_FILE not in saved:
         raise InvalidModuleError(
             f"this project has no {ENTRY_FILE!r}, so it does not enforce from policy "
@@ -73,11 +102,21 @@ def boundary_changes(
             "would switch every agent onto the file store"
         )
     changes: list[BoundaryChange] = []
+    uncompared: list[str] = []
     for name in sorted(saved.keys() | drafted.keys()):
         old, new = saved.get(name), drafted.get(name)
-        if old != new:
-            changes += _file_changes(name, _blocks(old, name), _blocks(new, name))
-    return changes
+        if old == new:
+            continue
+        new_blocks = _blocks(new, name)
+        try:
+            old_blocks = _blocks(old, name)
+        except LinkError:
+            if not lenient or name == ENTRY_FILE:
+                raise
+            uncompared.append(name)
+            continue
+        changes += _file_changes(name, old_blocks, new_blocks)
+    return BoundaryComparison(changes, uncompared)
 
 
 def _blocks(text: str | None, name: str) -> dict[BlockPath, Any]:
