@@ -146,9 +146,13 @@ async def _yaml(run: _Run) -> Check:
 
 
 async def _composes(run: _Run) -> Check:
-    resolved, _, lints = await service.compose_preview(
-        run.session, run.project_id, drafts=run.drafts
-    )
+    try:
+        resolved, _, lints = await service.compose_preview(
+            run.session, run.project_id, drafts=run.drafts
+        )
+    except RecursionError:  # a constraint nested past the parser's stack
+        detail = "a constraint is nested too deeply"
+        return _check("composes", "fail", detail)
     if resolved is None:
         items = [{"error": lint.message} for lint in lints]
         return _check("composes", "fail", "the project does not resolve", items)
@@ -169,6 +173,8 @@ async def _lints(run: _Run) -> Check:
         saved = {_defect(lint) for lint in saved_lints}
     new = [lint.severity == "error" and _defect(lint) not in saved for lint in lints]
     items = [_lint_item(lint, is_new) for lint, is_new in zip(lints, new, strict=True)]
+    # The new errors first, so the cap never hides what fails the check.
+    items.sort(key=lambda item: not item.get("new"))
     if any(new):
         return _check("lints", "fail", f"{sum(new)} new error lint(s)", items)
     if lints:
@@ -271,6 +277,8 @@ async def _boundary(run: _Run) -> tuple[Check, list[BoundaryChange]]:
         changes = boundary_changes(saved, drafted)
     except (service.InvalidModuleError, LinkError) as exc:
         return _check("boundary", "fail", str(exc)), []
+    except RecursionError:  # a constraint nested past the parser's stack
+        return _check("boundary", "fail", "a constraint is nested too deeply"), []
     widened = sum(change.kind == WIDENED for change in changes)
     if widened:
         detail = f"{widened} boundary change(s) widen a ceiling"

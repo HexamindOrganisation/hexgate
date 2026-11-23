@@ -818,6 +818,10 @@ def validate_compose_file(content: str, source: str = "<file>") -> None:
         raise InvalidModuleError(f"{source}: nested too deeply") from exc
     except ValueError as exc:  # a YAML timestamp that is no date (2026-02-30)
         raise InvalidModuleError(f"{source}: {exc}") from exc
+    # What the YAML loader raises for a tagged scalar it cannot read:
+    # !!timestamp "abc", !!bool "abc", !!int "".
+    except (AttributeError, KeyError, IndexError) as exc:
+        raise InvalidModuleError(f"{source}: unreadable tagged scalar") from exc
 
 
 async def project_resolves_with_file(

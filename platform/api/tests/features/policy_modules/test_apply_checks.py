@@ -203,8 +203,8 @@ async def test_when_the_draft_introduces_a_link_error_then_lints_fails(
     assert _statuses(result) == ["pass", "pass", "fail", "skipped", "skipped"]
     items = _by_id(result, "lints").items
     assert [(i["code"], i.get("new")) for i in items] == [
-        ("unknown-root", None),
         ("link-error", True),
+        ("unknown-root", None),
     ]
 
 
@@ -533,8 +533,11 @@ async def test_when_another_role_gets_a_different_unknown_arg_then_lints_fails(
         "consts:\n  cutoff: 2026-02-30\n",  # a YAML date that does not exist
         "tools:\n  refund: { mode: allow, constraint: 2001-13-45 }\n",
         "[" * 5000,  # nested past the interpreter's stack
+        'consts:\n  a: !!timestamp "abc"\n',  # AttributeError in the loader
+        'consts:\n  a: !!bool "abc"\n',  # KeyError
+        'consts:\n  a: !!int ""\n',  # IndexError
     ],
-    ids=["date const", "date constraint", "deep nesting"],
+    ids=["date const", "date constraint", "deep nesting", "timestamp", "bool", "int"],
 )
 @pytest.mark.usefixtures("stored")
 async def test_when_a_draft_breaks_the_yaml_loader_then_yaml_fails(
@@ -622,3 +625,51 @@ async def test_known_limit_when_a_new_rule_repeats_a_saved_dead_path_then_lints_
     errors = [i["code"] for i in check.items if i["severity"] == "error"]
     assert errors == ["unknown-root"]
     assert not any(i.get("new") for i in check.items)
+
+
+_DEEP = "(" * 400 + "args.amount == 1" + ")" * 400
+
+
+@pytest.mark.usefixtures("stored")
+async def test_when_a_constraint_is_nested_too_deeply_then_composes_fails(
+    session,
+) -> None:
+    deep = f"tools:\n  refund: {{ mode: allow, constraint: '{_DEEP}' }}\n"
+    result = await _run(session, {"grants.yaml": deep})
+    assert _statuses(result) == ["pass", "fail"] + ["skipped"] * 3
+    assert _by_id(result, "composes").detail == "a constraint is nested too deeply"
+
+
+@pytest.mark.usefixtures("stored")
+async def test_when_a_boundary_constraint_is_nested_too_deeply_then_boundary_fails(
+    session,
+) -> None:
+    # Not imported, so only the boundary comparison lowers it.
+    deep = (
+        f"boundary:\n  tools:\n    refund: {{ mode: allow, constraint: '{_DEEP}' }}\n"
+    )
+    result = await _run(session, {"loose.yaml": deep})
+    assert _statuses(result) == ["pass", "pass", "pass", "pass", "fail"]
+    assert _by_id(result, "boundary").detail == "a constraint is nested too deeply"
+
+
+async def test_when_saved_errors_pass_the_cap_then_the_new_error_is_still_listed(
+    session,
+) -> None:
+    # MAX_ITEMS + 1 saved error lints, each on its own path, then one more.
+    def grants(count: int) -> str:
+        rules = "".join(
+            f"  t{i}: {{ mode: allow, constraint: 'not (p{i}.x == 1)' }}\n"
+            for i in range(count)
+        )
+        return f"tools:\n{rules}"
+
+    await _store(
+        session,
+        {"policy.yaml": _bot(support="grants.yaml"), "grants.yaml": grants(51)},
+    )
+    check = await _lints_of_files(session, {"grants.yaml": grants(52)})
+    assert check.status == "fail"
+    assert check.detail.startswith("1 new error lint(s)")
+    assert check.items[0]["new"] is True
+    assert "p51" in check.items[0]["message"]
