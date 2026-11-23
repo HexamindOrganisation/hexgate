@@ -65,7 +65,7 @@ The policy is in `reference/claims/policy/`. Said aloud:
 - Nobody pays more than €50,000, makes more than one payment per request, or
   pays in a request that changed the bank details.
 - Once the copilot has read a document, it can only email addresses at
-  hexa-assurance.example.
+  hexa-assurance.example, for the rest of that request.
 
 ## The scenes
 
@@ -104,6 +104,11 @@ fresh desk without losing the policy, restart the app with
   guarantees a human saw the change and that no single request does both. A
   waiting period across requests needs a custom guard, or a rule in the
   payment system.
+- **"And if the email is asked for in the next message?"** It goes out. Each
+  chat message is a new run, and `run.tools_used` only sees the current one,
+  even though the conversation still holds the document. Covering the whole
+  conversation needs the app to pass what was read as a caller attribute
+  (`ctx.*`) and the constraint to test it.
 - **"Karim approved his own request."** Who may approve is decided by the app
   that shows the card, not by hexgate. Same as Shipyard.
 - **"Where do Léa's assigned claims come from?"** From `users.yaml` here; in a
