@@ -16,7 +16,7 @@ from pydantic_ai.usage import RunUsage
 from sqlalchemy import select
 
 from hexgate_assistant.models import AssistantMessage, AssistantSession, AssistantUsage
-from hexgate_assistant.sessions import SessionNotFound, SessionStore
+from hexgate_assistant.sessions import FORMAT_VERSION, SessionNotFound, SessionStore
 
 USER = "user-a"
 PROJECT = "project-1"
@@ -102,6 +102,54 @@ async def test_history_happy_path(store, db):
         (2, "event"),
         (3, "messages"),
     ]
+    assert {r.format_version for r in rows} == {FORMAT_VERSION}
+
+
+async def test_when_two_users_have_sessions_then_each_sees_only_its_own(store, db):
+    a = await _open(store)
+    b = await _open(store, user_id="user-b")
+    await store.append_messages(a, ANSWERED)
+    b_used = await _last_used_at(db, b.id)
+
+    await store.append_messages(b, DANGLING[:1])
+
+    assert await store.history(a) == ANSWERED
+    assert await store.history(b) == DANGLING[:1]
+    assert [r.seq for r in await _rows(db, a.id)] == [1]
+    assert [r.seq for r in await _rows(db, b.id)] == [1]
+    a_used = await _last_used_at(db, a.id)
+    await store.append_messages(b, ANSWERED[1:2])
+    assert await _last_used_at(db, a.id) == a_used
+    assert await _last_used_at(db, b.id) > b_used
+    with pytest.raises(SessionNotFound):
+        await _open(store, user_id="user-b", session_id=a.id)
+
+
+async def test_when_a_repair_cannot_be_appended_then_it_is_not_stored(
+    store, db, caplog
+):
+    # Two parallel calls, one result stored: the missing one goes into that
+    # request, which an append cannot change.
+    session = await _open(store)
+    await store.append_messages(
+        session,
+        [
+            ModelRequest(parts=[UserPromptPart("read both")]),
+            ModelResponse(
+                parts=[
+                    ToolCallPart("policy_read_file", {}, tool_call_id="a"),
+                    ToolCallPart("policy_read_file", {}, tool_call_id="b"),
+                ]
+            ),
+            ModelRequest(parts=[ToolReturnPart("policy_read_file", "x", "a")]),
+        ],
+    )
+
+    history = await store.history(session)
+
+    assert [p.outcome for p in history[-1].parts] == ["success", "interrupted"]
+    assert len(await _rows(db, session.id)) == 1
+    assert "history repaired, not stored" in caplog.text
 
 
 async def test_when_a_tool_call_has_no_result_then_history_repairs_and_stores_it(
@@ -150,6 +198,7 @@ async def test_when_a_repaired_session_goes_on_then_later_repairs_are_stored(sto
 async def test_when_a_row_was_written_by_format_version_1_then_it_loads(store, db):
     # Written by pydantic-ai 2.71.0. A bump that reads it differently must
     # come with a new FORMAT_VERSION and a conversion of the stored rows.
+    assert FORMAT_VERSION == 1
     at = datetime(2026, 11, 23, tzinfo=UTC)
     frozen = Path(__file__).with_name("stored_messages_v1.json").read_text()
     session = await _open(store)
