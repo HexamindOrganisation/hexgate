@@ -8,7 +8,7 @@
 #   ./demo/run film devops     film the demo video (FILMING.md)
 #   ./demo/run status | down
 #
-# Installs uv, Python 3.13, Node 22 and Go into demo/.tools/ (no sudo, no change
+# Installs uv, Python 3.13, Node 22, Go and OPA into demo/.tools/ (no sudo, no change
 # to your shell profile) when they're missing or too old. Docker is the one
 # system-wide install: it asks first. Running it again changes nothing.
 set -eu
@@ -105,6 +105,24 @@ for rel in json.load(sys.stdin):
   go_ok || die "Go did not install"
 fi
 ok "$(go version | cut -d' ' -f3)"
+
+# ------------------------------------------------------------ OPA (the API compiles policies with it)
+OPA_VERSION=1.21.4  # the version CI tests against (.github/workflows/tests.yml)
+opa_ok() { command -v opa >/dev/null && opa version 2>/dev/null | grep -q '^Version: [1-9]'; }
+PATH="$TOOLS/opa:$PATH"
+if ! opa_ok; then
+  say "installing OPA $OPA_VERSION (the platform compiles policies with it)"
+  # macOS on Intel has no static build.
+  OPA_FILE=opa_${OS}_${ARCH}$([ "$OS-$ARCH" = darwin-amd64 ] || echo _static)
+  OPA_URL=https://github.com/open-policy-agent/opa/releases/download/v$OPA_VERSION/$OPA_FILE
+  mkdir -p "$TOOLS/opa"
+  curl -fL --progress-bar "$OPA_URL" -o "$TOOLS/opa/opa.download"
+  OPA_SHA=$(curl -fsSL "$OPA_URL.sha256" | cut -d' ' -f1)
+  [ -n "$OPA_SHA" ] && [ "$(sha256 "$TOOLS/opa/opa.download")" = "$OPA_SHA" ] || { rm -f "$TOOLS/opa/opa.download"; die "OPA download checksum mismatch"; }
+  chmod +x "$TOOLS/opa/opa.download" && mv "$TOOLS/opa/opa.download" "$TOOLS/opa/opa"
+  opa_ok || die "OPA did not install"
+fi
+ok "opa $(opa version | sed -n 's/^Version: //p')"
 
 # ------------------------------------------------------------ Docker
 if ! command -v docker >/dev/null; then

@@ -36,7 +36,7 @@ SERVICES = ("api", "mcp", "collector", "enricher")
 
 def tool_env() -> dict[str, str]:
     """PATH with the tools demo/run installed in demo/.tools first."""
-    extra = [TOOLS / "uv", TOOLS / "node" / "bin", TOOLS / "go" / "bin"]
+    extra = [TOOLS / "uv", TOOLS / "node" / "bin", TOOLS / "go" / "bin", TOOLS / "opa"]
     path = os.pathsep.join(
         [str(p) for p in extra if p.exists()] + [os.environ.get("PATH", "")]
     )
