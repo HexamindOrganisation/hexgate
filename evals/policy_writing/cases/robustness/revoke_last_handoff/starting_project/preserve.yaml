@@ -1,0 +1,8 @@
+# Behaviour the case keeps unless it lists the same call.
+- { roles: [default, support, billing], tool: view_orders, args: { customer_id: c1 }, expect: allow }
+- { role: support, tool: send_email, args: { to: [a@acme.com], subject: s, body: b }, expect: allow }
+- { role: billing, tool: refund_order, args: { order_id: o1, amount: 1000, currency: USD }, expect: allow }
+- { role: billing, tool: refund_order, args: { order_id: o1, amount: 1001, currency: USD }, expect: deny }
+- { roles: [default, billing], tool: "agent.handoff:billing-bot", args: {}, expect: deny }
+- { roles: [default, support, billing], tool: "agent.handoff:refund-bot", args: {}, expect: deny }
+- { roles: [default, support, billing], tool: "agent.handoff:admin-bot", args: {}, expect: deny }
