@@ -23,7 +23,7 @@ import { Card } from "@/components/ui/card";
 import { type ChartBucket, StackedBars } from "@/components/ui/charts";
 import { PageHeader } from "@/components/ui/page-header";
 import { useAgentManifests } from "@/lib/agent-manifests";
-import { useProjectScoped } from "@/lib/active";
+import { useActive, useProjectScoped } from "@/lib/active";
 import {
   api,
   type AgentManifestView,
@@ -36,6 +36,8 @@ import { AGENT_LIST_CAP, agentHubPath } from "@/lib/agent-paths";
 import { denyRatePct, useAgentActivity24h } from "@/lib/audit-summary";
 import { fmtTokens, formatRelative, pluralise } from "@/lib/format";
 import { isStaleKey, STALE_KEY_DAYS } from "@/lib/keys";
+import { useOrgs } from "@/lib/orgs";
+import { useProjects } from "@/lib/projects";
 import { useUi } from "@/lib/ui";
 import { useNow } from "@/lib/use-now";
 import { cn } from "@/lib/utils";
@@ -345,17 +347,31 @@ export function HomePage() {
         ? knownDecision.value
         : undefined;
 
-  // A project with no agents is where the quickstart helps most: offer it
-  // unprompted once (closing it sets quickstartSeen); the checklist stays.
+  // A first-time user is where the quickstart helps most: offer it unprompted
+  // once (closing it sets quickstartSeen); the sidebar entry stays, and so
+  // does the checklist once there's a project. A new account
+  // has one org (the personal one sign-up creates) with no project yet, so
+  // "first time" is that, or a project with no agents at all (the "No agents
+  // yet" panel; not agents that exist but aren't registered, which the
+  // checklist covers). Only a single org: an invited user's empty personal org
+  // isn't their first run. And not scope.status "no-project", which also shows
+  // while the shell picks an existing user's default project. quickstartSeen
+  // is per browser, like any onboarding hint. Never while it's already open:
+  // creating a project from step 2 flips firstRun off and back on (the new
+  // project's agents load empty), which would send the open dialog to step 1.
   const openQuickstart = useUi((s) => s.openQuickstart);
   const quickstartSeen = useUi((s) => s.quickstartSeen);
-  // Only a truly empty project (the "No agents yet" panel), so it doesn't
-  // pop up over agents that exist but aren't registered; the checklist still
-  // covers those. quickstartSeen is per browser, like any onboarding hint.
+  const quickstartOpen = useUi((s) => s.quickstartOpen);
+  const activeOrgId = useActive((s) => s.activeOrgId);
+  const orgsQ = useOrgs();
+  const projectsQ = useProjects(activeOrgId);
+  const noProjects = orgsQ.data?.length === 1 && projectsQ.data?.length === 0;
   const noAgents = !!agentsQ.data && agents.length === 0;
+  const firstRun = noProjects || noAgents;
   useEffect(() => {
-    if (noAgents && !quickstartSeen) openQuickstart(QUICKSTART_STEP.idea);
-  }, [noAgents, quickstartSeen, openQuickstart]);
+    if (firstRun && !quickstartSeen && !quickstartOpen)
+      openQuickstart(QUICKSTART_STEP.idea);
+  }, [firstRun, quickstartSeen, quickstartOpen, openQuickstart]);
 
   // Most denied first, then busiest, capped: the full list is /agents. Stays
   // in manifest order while activity is unknown (the sort is stable).

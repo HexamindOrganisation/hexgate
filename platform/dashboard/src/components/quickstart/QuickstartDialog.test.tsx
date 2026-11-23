@@ -4,13 +4,14 @@
  * while closing the dialog (marking the quickstart seen).
  */
 
-import { screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { QUICKSTART_STEP } from "@/components/quickstart/content";
 import { QuickstartDialog } from "@/components/quickstart/QuickstartDialog";
+import { useActive } from "@/lib/active";
 import { useUi } from "@/lib/ui";
 import { renderWithProviders } from "@/test/render";
 
@@ -26,6 +27,13 @@ function renderDialog() {
   );
 }
 
+/** The dialog's code blocks as plain text (highlighting splits them into
+ * token spans, which text queries don't match across). */
+const codeText = () =>
+  [...document.querySelectorAll("pre code")]
+    .map((c) => c.textContent)
+    .join("\n");
+
 describe("QuickstartDialog", () => {
   afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
@@ -35,6 +43,37 @@ describe("QuickstartDialog", () => {
       quickstartSeen: false,
       quickstartStep: 0,
     });
+    act(() => useActive.setState({ activeOrgId: null, activeProjectId: null }));
+  });
+
+  it("asks a user without a project to create one, from step 2 on", async () => {
+    const user = userEvent.setup();
+    act(() => useActive.setState({ activeOrgId: "o1", activeProjectId: null }));
+    vi.spyOn(window, "fetch").mockResolvedValue(
+      new Response("[]", { headers: { "Content-Type": "application/json" } }),
+    );
+    renderDialog();
+    // Step 1 is the idea, no project needed.
+    expect(screen.queryByText("Create a project first.")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /next/i }));
+    expect(
+      await screen.findByText("Create a project first."),
+    ).toBeInTheDocument();
+    // The step's page needs a project, so its button waits for one.
+    expect(
+      screen.getByRole("button", { name: "Mint an API key" }),
+    ).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Create a project" }));
+    expect(
+      await screen.findByRole("heading", { name: "Create project" }),
+    ).toBeInTheDocument();
+    // Arrow keys on that dialog's buttons stay there: the quickstart keeps
+    // its step.
+    act(() => screen.getByRole("button", { name: "Cancel" }).focus());
+    await user.keyboard("{ArrowRight}");
+    expect(useUi.getState().quickstartStep).toBe(1);
   });
 
   it("tells assistive tech when a copy fails", async () => {
@@ -42,7 +81,7 @@ describe("QuickstartDialog", () => {
     useUi.setState({ quickstartStep: QUICKSTART_STEP.register });
     renderDialog();
     // The register step installs the SDK before registering.
-    expect(screen.getByText(/pip install hexgate/)).toBeInTheDocument();
+    expect(codeText()).toContain("pip install hexgate");
     vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(
       new Error("denied"),
     );
@@ -94,11 +133,11 @@ describe("QuickstartDialog", () => {
     await user.click(
       screen.getByRole("button", { name: /step 3: register and wrap/i }),
     );
-    expect(screen.getByText(/wrap_langchain_agent\(agent=graph/)).toBeTruthy();
+    expect(codeText()).toContain("wrap_langchain_agent(agent=graph");
 
     await user.click(screen.getByRole("radio", { name: "Pydantic AI" }));
-    expect(screen.getByText(/wrap_pydantic_agent\(agent=agent\)/)).toBeTruthy();
-    expect(screen.queryByText(/wrap_langchain_agent\(agent=graph/)).toBeNull();
+    expect(codeText()).toContain("wrap_pydantic_agent(agent=agent)");
+    expect(codeText()).not.toContain("wrap_langchain_agent(agent=graph");
   });
 
   it("navigates to the step's page and closes", async () => {

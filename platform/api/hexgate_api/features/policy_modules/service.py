@@ -23,7 +23,14 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.ids import new_id
-from hexgate_api.models import Agent, PolicyFile, PolicyModule, RoleBinding, utcnow
+from hexgate_api.models import (
+    Agent,
+    AssistantChange,
+    PolicyFile,
+    PolicyModule,
+    RoleBinding,
+    utcnow,
+)
 
 if TYPE_CHECKING:  # the SDK is imported lazily at run time
     from hexgate.security import PolicyLint, Verdict
@@ -62,6 +69,10 @@ class NoPolicyStoreError(Exception):
     enforce their own ``policy_yaml``, which the store's reads don't see."""
 
 
+class ChangeNotFoundError(Exception):
+    """No applied change with that id in this project (→ 404)."""
+
+
 class UnknownAgentError(Exception):
     """An agent the project neither declares nor has registered (→ 404)."""
 
@@ -90,6 +101,28 @@ class UndeclaredAgentError(UnknownRoleError):
             f'so role {role!r} was looked up under the generic "*" view, which '
             "does not define it"
         )
+
+
+async def get_change(
+    session: AsyncSession, *, project_id: str, change_id: str
+) -> AssistantChange:
+    """One applied change, scoped to its project.
+
+    Scoped by project rather than fetched by primary key: a change of another
+    project, in this org or another, must read as absent, never as a refusal
+    that confirms the id exists.
+    """
+    change = (
+        await session.exec(
+            select(AssistantChange).where(
+                AssistantChange.id == change_id,
+                AssistantChange.project_id == project_id,
+            )
+        )
+    ).first()
+    if change is None:
+        raise ChangeNotFoundError(change_id)
+    return change
 
 
 def text_hash(content: str) -> str:
