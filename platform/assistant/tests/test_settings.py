@@ -2,8 +2,15 @@ import pytest
 
 from hexgate_assistant.settings import Settings
 
-ENV = [
+# Unset and empty (compose passes `KEY=` through as "") read the same.
+EMPTY_MEANS_UNSET = [
     "HEXGATE_ASSISTANT_BIND_HOST",
+    "HEXGATE_ASSISTANT_MODEL",
+    "HEXGATE_ASSISTANT_OPENROUTER_KEY",
+    "HEXGATE_ASSISTANT_MCP_URL",
+]
+ENV = [
+    *EMPTY_MEANS_UNSET,
     "HEXGATE_PUBLIC_URL",
     "HEXGATE_ASSISTANT_RESOURCE_URL",
     "HEXGATE_ASSISTANT_API_URL",
@@ -26,6 +33,9 @@ def test_from_env_happy_path():
 
     assert settings.bind_host == "127.0.0.1"
     assert settings.port == 8090
+    assert settings.model is None
+    assert settings.openrouter_key is None
+    assert settings.mcp_url == "http://localhost:8080/mcp"
     assert settings.issuer == "http://localhost:8000"
     assert settings.resource_url == "http://localhost:8090/v1/assistant"
     assert settings.jwks_url == "http://localhost:8000/.well-known/jwks.json"
@@ -46,10 +56,16 @@ def test_when_variables_are_set_then_from_env_uses_them(monkeypatch):
     monkeypatch.setenv("HEXGATE_ASSISTANT_POSTGRES_HOST", "db")
     monkeypatch.setenv("HEXGATE_ASSISTANT_POSTGRES_PORT", "6543")
     monkeypatch.setenv("HEXGATE_ASSISTANT_POSTGRES_DB", "d")
+    monkeypatch.setenv("HEXGATE_ASSISTANT_MODEL", "openrouter:anthropic/claude-x")
+    monkeypatch.setenv("HEXGATE_ASSISTANT_OPENROUTER_KEY", "sk-or-secret")
+    monkeypatch.setenv("HEXGATE_ASSISTANT_MCP_URL", "http://mcp:8080/mcp")
 
     settings = Settings.from_env()
 
     assert settings.bind_host == "0.0.0.0"
+    assert settings.model == "openrouter:anthropic/claude-x"
+    assert settings.openrouter_key == "sk-or-secret"
+    assert settings.mcp_url == "http://mcp:8080/mcp"
     assert settings.issuer == "https://app.hexgate.ai"
     assert settings.resource_url == "https://app.hexgate.ai/v1/assistant"
     assert settings.jwks_url == "http://api:8000/.well-known/jwks.json"
@@ -93,3 +109,21 @@ def test_when_port_is_empty_then_from_env_uses_the_default(monkeypatch):
     monkeypatch.setenv("HEXGATE_ASSISTANT_POSTGRES_PORT", "")
 
     assert Settings.from_env().database_url.port == 5432
+
+
+def test_when_variables_are_empty_then_from_env_reads_them_as_unset(monkeypatch):
+    for name in EMPTY_MEANS_UNSET:
+        monkeypatch.setenv(name, "")
+
+    settings = Settings.from_env()
+
+    assert settings.bind_host == "127.0.0.1"
+    assert settings.model is None
+    assert settings.openrouter_key is None
+    assert settings.mcp_url == "http://localhost:8080/mcp"
+
+
+def test_when_settings_are_printed_then_the_openrouter_key_is_not(monkeypatch):
+    monkeypatch.setenv("HEXGATE_ASSISTANT_OPENROUTER_KEY", "sk-or-secret")
+
+    assert "sk-or-secret" not in repr(Settings.from_env())

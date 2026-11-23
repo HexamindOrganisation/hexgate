@@ -3,7 +3,7 @@
 ``HEXGATE_PUBLIC_URL``), never from the API's ``.env``."""
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy import URL
 
@@ -28,6 +28,13 @@ class Settings:
     # is not reachable from the network. The image opts in to all interfaces.
     bind_host: str = "127.0.0.1"
     port: int = PORT
+    # A Pydantic AI model string. None means no model: every turn is refused,
+    # there is no default model to fall back on.
+    model: str | None = None
+    # Secret: kept out of repr, so logging the settings never prints it.
+    openrouter_key: str | None = field(default=None, repr=False)
+    # Where `make assistant-run` finds the MCP server of `make mcp-run`.
+    mcp_url: str = "http://localhost:8080/mcp"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -37,6 +44,9 @@ class Settings:
                 f"public_url={issuer!r} ends with '/' — set "
                 "HEXGATE_PUBLIC_URL without the trailing slash."
             )
+        # For BIND_HOST, MODEL, OPENROUTER_KEY and MCP_URL an empty value
+        # counts as unset (compose passes `KEY=` through as ""); the other
+        # variables read an empty value as given.
         return cls(
             database_url=database_url_from_env(),
             issuer=issuer,
@@ -44,7 +54,10 @@ class Settings:
                 "HEXGATE_ASSISTANT_RESOURCE_URL", cls.resource_url
             ),
             api_url=os.environ.get("HEXGATE_ASSISTANT_API_URL", cls.api_url),
-            bind_host=os.environ.get("HEXGATE_ASSISTANT_BIND_HOST", cls.bind_host),
+            bind_host=os.environ.get("HEXGATE_ASSISTANT_BIND_HOST") or cls.bind_host,
+            model=os.environ.get("HEXGATE_ASSISTANT_MODEL") or None,
+            openrouter_key=os.environ.get("HEXGATE_ASSISTANT_OPENROUTER_KEY") or None,
+            mcp_url=os.environ.get("HEXGATE_ASSISTANT_MCP_URL") or cls.mcp_url,
         )
 
     @property
