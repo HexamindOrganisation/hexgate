@@ -47,7 +47,8 @@ ENV HEXGATE_ASSISTANT_BIND_HOST=0.0.0.0
 
 EXPOSE 8090
 
-# Liveness only: /v1/assistant/health checks no dependency.
+# Liveness only: /v1/assistant/health checks no dependency once served, but the
+# process exits at start-up, before serving it, when its database is unreachable.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8090/v1/assistant/health', timeout=4).status==200 else 1)"]
 

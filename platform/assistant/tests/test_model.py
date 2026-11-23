@@ -1,0 +1,163 @@
+import json
+
+import httpx2
+import pytest
+from pydantic_ai import Agent
+from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
+
+from hexgate_assistant.model import (
+    MODEL_REQUEST_ATTEMPTS,
+    PROVIDERS_BY_VENDOR,
+    build_model,
+)
+
+MODEL = "openrouter:anthropic/claude-sonnet-4.5"
+
+COMPLETION = {
+    "id": "gen-1",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "anthropic/claude-sonnet-4.5",
+    "provider": "Anthropic",
+    "choices": [
+        {
+            "index": 0,
+            "finish_reason": "stop",
+            "message": {"role": "assistant", "content": "hello"},
+        }
+    ],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+class OpenRouter:
+    """Answers each request with the next status of ``statuses``; records them."""
+
+    def __init__(self, *statuses: int):
+        self.statuses = list(statuses)
+        self.requests: list[httpx2.Request] = []
+
+    def transport(self) -> httpx2.MockTransport:
+        return httpx2.MockTransport(self.handle)
+
+    def handle(self, request: httpx2.Request) -> httpx2.Response:
+        self.requests.append(request)
+        status = self.statuses.pop(0)
+        if status == 200:
+            return httpx2.Response(200, json=COMPLETION)
+        # Retry-After 0 keeps the test fast and exercises the header path.
+        return httpx2.Response(
+            status, headers={"retry-after": "0"}, json={"error": {"message": "busy"}}
+        )
+
+
+async def ask(openrouter: OpenRouter, name: str = MODEL) -> str:
+    model = build_model(name, "sk-or-test", transport=openrouter.transport())
+    return (await Agent(model).run("hi")).output
+
+
+async def test_build_model_happy_path():
+    openrouter = OpenRouter(200)
+
+    assert await ask(openrouter) == "hello"
+
+    [request] = openrouter.requests
+    assert request.headers["authorization"] == "Bearer sk-or-test"
+    body = json.loads(request.content)
+    assert body["model"] == "anthropic/claude-sonnet-4.5"
+    assert body["provider"] == {
+        "only": ["anthropic"],
+        "allow_fallbacks": False,
+        "data_collection": "deny",
+        "zdr": True,
+    }
+
+
+@pytest.mark.parametrize("status", [429, 500, 529])
+async def test_when_openrouter_answers_a_retryable_status_then_the_request_is_retried(
+    status: int,
+):
+    openrouter = OpenRouter(status, 200)
+
+    assert await ask(openrouter) == "hello"
+    assert len(openrouter.requests) == 2
+
+
+async def test_when_every_try_is_429_then_first_try_and_3_retries_then_the_error_surfaces():
+    openrouter = OpenRouter(*[429] * (MODEL_REQUEST_ATTEMPTS + 1))
+
+    with pytest.raises(ModelHTTPError) as error:
+        await ask(openrouter)
+
+    assert error.value.status_code == 429
+    assert len(openrouter.requests) == MODEL_REQUEST_ATTEMPTS
+
+
+@pytest.mark.parametrize("status", [400, 401])
+async def test_when_openrouter_answers_a_client_error_then_it_is_not_retried(
+    status: int,
+):
+    openrouter = OpenRouter(status, 200)
+
+    with pytest.raises(ModelHTTPError) as error:
+        await ask(openrouter)
+
+    assert error.value.status_code == status
+    assert len(openrouter.requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("name", "kind"),
+    [("openai:gpt-x", OpenAIResponsesModel), ("openai-chat:llama", OpenAIChatModel)],
+)
+def test_when_the_model_is_openai_compatible_then_it_carries_no_openrouter_routing(
+    monkeypatch, name: str, kind: type
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    model = build_model(name, None)
+
+    assert type(model) is kind
+    assert "openrouter_provider" not in (model.settings or {})
+
+
+@pytest.mark.parametrize(
+    "name", ["anthropic:claude-x", "bedrock:anthropic.claude-x", "mistral:m", "test"]
+)
+def test_when_the_model_prefix_is_not_supported_then_build_model_refuses(name: str):
+    with pytest.raises(ValueError, match="openrouter:, openai:, openai-chat:"):
+        build_model(name, "sk-or-test")
+
+
+def test_when_an_openrouter_model_has_no_key_then_build_model_refuses():
+    with pytest.raises(ValueError, match="HEXGATE_ASSISTANT_OPENROUTER_KEY"):
+        build_model(MODEL, None)
+
+
+@pytest.mark.parametrize(
+    "slug", ["claude-sonnet-4.5", "/claude-sonnet-4.5", "anthropic/"]
+)
+def test_when_an_openrouter_model_is_not_vendor_slash_model_then_build_model_refuses(
+    slug: str,
+):
+    with pytest.raises(ValueError, match="vendor/model"):
+        build_model(f"openrouter:{slug}", "sk-or-test")
+
+
+@pytest.mark.parametrize("vendor", sorted(PROVIDERS_BY_VENDOR))
+async def test_when_a_vendor_is_mapped_then_the_request_goes_only_to_its_providers(
+    vendor: str,
+):
+    openrouter = OpenRouter(200)
+
+    await ask(openrouter, f"openrouter:{vendor}/some-model")
+
+    body = json.loads(openrouter.requests[0].content)
+    assert body["provider"]["only"] == PROVIDERS_BY_VENDOR[vendor]
+
+
+@pytest.mark.parametrize("vendor", ["google", "x-ai", "mistralai", "meta-llama"])
+def test_when_a_vendor_is_not_mapped_then_build_model_refuses(vendor: str):
+    with pytest.raises(ValueError, match=f"'{vendor}'.*model.py"):
+        build_model(f"openrouter:{vendor}/some-model", "sk-or-test")

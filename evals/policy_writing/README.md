@@ -325,6 +325,31 @@ bound to `0.0.0.0` may be reachable at the internal bridge's gateway IP (Docker
 Desktop's VM hides it). The proxy logs time, status, method and host:port, never
 a URL path or query; `pytest -m integration tests/evals` probes all of this.
 
+## Baseline
+
+Claude Code on every case before the skill is tuned against them; later skill
+changes report against this.
+
+- `make policy-eval CASES= EPOCHS=3 MAX_SANDBOXES=4 MODEL=claude-sonnet-5-5`
+  (run with `MODEL` unset, which resolved to `claude-sonnet-5-5` in every
+  sample's `modelUsage`; pin it, as the default may change).
+- Commit `d3ba8fe5` (clean tree), 2026-11-19, log
+  `2026-11-19T11-11-28-00-00_policy-writing_KTc6fpPvpnK7dvSRWV4Ar7.eval`
+  (`logs/` is not committed). 105 of 105 samples scored, none errored or hit
+  a limit. The sandbox has the skill but not the `docs/` pages it points at.
+
+| Cases | n | Mean ± stderr | pass^3 ± stderr |
+|---|---|---|---|
+| All | 35 | 0.810 ± 0.063 | 0.771 ± 0.072 |
+| Not held out | 28 | 0.821 ± 0.070 | 0.786 ± 0.079 |
+| Held out | 7 | 0.762 ± 0.158 | 0.714 ± 0.184 |
+
+Stderr is over cases: the log's own for *All*, the same formula on the log's
+per-case scores for the other rows. Failed every epoch: `agent_as_tool`,
+`handoff_approval`, `l2b_roles_no_meaning`, `boundary_conflict`,
+`unknown_argument` (held out); failed some: `file_paths` 2 of 3,
+`l2_roles_hierarchy` (held out) 2 of 3, `reach_in_modules` 1 of 3.
+
 ## Adding a case
 
 1. Add `cases/<category>/<name>/case.yaml`. Include the boundary values (the

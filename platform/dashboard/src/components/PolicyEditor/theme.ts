@@ -102,8 +102,12 @@ const chromeAndDecorationsTheme = EditorView.theme({
   },
 });
 
+/** The dark syntax styles (lezer tag → color), also used to color read-only
+ * code outside an editor (the quickstart dialog). */
+export const darkSyntax = recolor(DARK_VIOLET);
+
 const darkTheme = [
-  base("hsl(var(--editor))", darkChrome, recolor(DARK_VIOLET)),
+  base("hsl(var(--editor))", darkChrome, darkSyntax),
   chromeAndDecorationsTheme,
 ];
 const lightTheme = [
