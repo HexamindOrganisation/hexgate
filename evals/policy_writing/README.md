@@ -350,6 +350,57 @@ per-case scores for the other rows. Failed every epoch: `agent_as_tool`,
 `unknown_argument` (held out); failed some: `file_paths` 2 of 3,
 `l2_roles_hierarchy` (held out) 2 of 3, `reach_in_modules` 1 of 3.
 
+## Skill versions
+
+The `write-policy` skill was then tuned on the failures of the cases that are
+not held out, one commit per version, each measured on the same 35 cases as
+the baseline with `MODEL=claude-sonnet-5-5`, 3 epochs and `MAX_SANDBOXES=4`.
+Held-out cases were scored, never read. To rerun a version:
+`git checkout <commit> && make policy-eval CASES= EPOCHS=3 MAX_SANDBOXES=4 MODEL=claude-sonnet-5-5`.
+
+| Version | Commit | Change |
+|---|---|---|
+| v0 | `d3ba8fe5` | the skill before tuning (the baseline above) |
+| v1 | `ff258610` | record and keep what a policy allows today; admission and reach are opt-in, then global; never widen a boundary on a team's request; write the least-privilege reading instead of stopping on an open choice; anchor the path traversal guard on segments and test a lookalike value for every deny |
+| v2 | `ed61a299` | before any `agents:` block a handoff passes but an agent-as-tool call needs its delegation tool, so re-grant only that; a request a boundary blocks entirely changes no file |
+| v3 | `6772540a` | refuse a request the policy cannot express (a per-tool hourly count, a handoff depth, a missing tool) and offer the substitute without writing it |
+| v4 | `95ebad96` | admission and reach are two separate gates: adding `admission` does not touch reach |
+
+Full runs (mean ± stderr / pass^3 ± stderr; samples that hit a network error
+are left out: 2 in v2, 1 in v3):
+
+| Version | All (35) | Not held out (28) | Held out (7) |
+|---|---|---|---|
+| v0 | 0.810 ± 0.063 / 0.771 ± 0.072 | 0.821 ± 0.070 / 0.786 ± 0.079 | 0.762 ± 0.158 / 0.714 ± 0.184 |
+| v2 | 0.924 ± 0.043 / 0.914 ± 0.048 | 0.940 ± 0.042 / 0.929 ± 0.050 | 0.857 ± 0.143 / 0.857 ± 0.143 |
+| v3 | 0.924 ± 0.041 / 0.886 ± 0.055 | 0.940 ± 0.039 / 0.893 ± 0.060 | 0.857 ± 0.143 / 0.857 ± 0.143 |
+| v4 | 0.943 ± 0.040 / 0.943 ± 0.040 | 0.964 ± 0.036 / 0.964 ± 0.036 | 0.857 ± 0.143 / 0.857 ± 0.143 |
+
+v1 had no full run: on the six cases it targeted it passed 11 of 18 samples
+(v0: 3). Partial runs: v2 15 of 18 on the same six, v3 12 of 15 on
+`must_refuse`, v4 12 of 12 on `admission`, `admission_with_global_cap`,
+`agent_as_tool` and `handoff_approval`.
+
+v4 still fails two cases, every epoch: `reach_in_modules`, whose decision 4
+expects `default` and `support` to lose their handoff to billing-bot while
+`agent_as_tool`'s preserved calls expect the same roles, from the same
+ungated start, to keep theirs, so no answer passes both; and
+`unknown_argument` (held out), failed in every version. The median sample
+took 115 s and $0.075 at list price in v4, against 60 s and $0.061 in v0.
+
+Logs (not committed), by SHA-256:
+
+| Run | Log | SHA-256 |
+|---|---|---|
+| v0, all | `2026-11-19T11-11-28-00-00_policy-writing_KTc6fpPvpnK7dvSRWV4Ar7.eval` | `09a43747c61af3a4ac26130a27ffb41c15eea99a922ae1574c3395730bbfe949` |
+| v1, six cases | `2026-11-19T16-54-54-00-00_policy-writing_Pe3diL4Mt9zAUgAP2wJLub.eval` | `1a3069bc339e15a0833f65cb5204cc80084616441bff131772c7cddbc93d7efe` |
+| v2, six cases | `2026-11-19T17-17-03-00-00_policy-writing_849Y28oRLHZy2L5BvbByAS.eval` | `70392d199a51af344d51ae31feb63e1e69a3a457d3ea09fea9acd88c698f4500` |
+| v2, all | `2026-11-20T09-47-51-00-00_policy-writing_NL9Wid9zDM49RbxhXfimHe.eval` | `55cd9aee1dc5e79e7ba530f2c558c9148482e018db42516818c91875ceb5c1d4` |
+| v3, `must_refuse` | `2026-11-20T11-01-47-00-00_policy-writing_MwxkCrNisYVebtkV6JLt3K.eval` | `fc9f92776f4c7cdd75909ffd5876e43940840b3810c485c5852a80a2c0c4b367` |
+| v3, all | `2026-11-20T11-08-51-00-00_policy-writing_KGME8iqF7buTVPDxXioQZn.eval` | `7ca34ca327f4cabecb55061c1b56a307ccbe082de4334d2128b50596c45bbbff` |
+| v4, four cases | `2026-11-20T12-14-23-00-00_policy-writing_gVy4Cqd5Wt7Zg45cJWmR2f.eval` | `d8f53446252a26e63ffa8a669b076e99935f8b61dfe290e511ad81e75a77e34b` |
+| v4, all | `2026-11-20T12-27-54-00-00_policy-writing_kSCM64Q3anJtgVytdndaxQ.eval` | `8b716ca25de70ea33c6d824ea52d9a07b3c978b2de81df5784f4caa5af26552d` |
+
 ## Adding a case
 
 1. Add `cases/<category>/<name>/case.yaml`. Include the boundary values (the
