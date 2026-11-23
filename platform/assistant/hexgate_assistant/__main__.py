@@ -17,7 +17,7 @@ if __name__ == "__main__":
     # any client could forge the headers.
     settings = Settings.from_env()
     uvicorn.run(
-        create_app(),
+        create_app(settings),
         host=settings.bind_host,
         port=settings.port,
         proxy_headers=True,

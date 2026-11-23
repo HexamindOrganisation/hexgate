@@ -775,13 +775,54 @@ class PolicyComposesOut(BaseModel):
 
 class PolicyDiffResponse(BaseModel):
     """Only what changes. Empty lists with ``composes`` false on a side mean that
-    side does not compose, so there was nothing to compare."""
+    side does not compose, so there was nothing to compare.
+
+    Also the stored shape of ``assistant_change.effect``, read back through
+    ``ChangeRead``: those rows are kept for the project's lifetime, so a new
+    field here, or in a model nested in it, needs a default, and nothing is
+    renamed or removed."""
 
     changes: list[PolicyChangeOut] = Field(default_factory=list)
     agent_changes: list[PolicyAgentChangeOut] = Field(default_factory=list)
     gate_changes: list[PolicyGateChangeOut] = Field(default_factory=list)
     agents_affected: list[str] = Field(default_factory=list)
     composes: PolicyComposesOut
+
+
+class ChangeFileOut(BaseModel):
+    """One file of an applied change. The ``before`` side is null for a file
+    the change created."""
+
+    name: str
+    before_content: str | None
+    before_hash: str | None
+    after_content: str
+    after_hash: str
+
+
+class ChangeRead(BaseModel):
+    """One applied policy change. ``samples``, ``checks`` and
+    ``boundary_changes`` are returned as they were recorded; ``effect`` is the
+    per-role diff computed before the save, read back as a diff response."""
+
+    id: str
+    project_id: str
+    session_id: str | None
+    created_by_user_id: str | None
+    client_id: str | None
+    summary: str
+    created_at: datetime
+    files: list[ChangeFileOut]
+    samples: list[dict[str, Any]]
+    checks: list[dict[str, Any]]
+    boundary_changes: list[dict[str, Any]]
+    effect: PolicyDiffResponse
+
+    @field_validator("created_at")
+    @classmethod
+    def _assume_utc(cls, v: datetime) -> datetime:
+        # SQLite hands back a naive datetime; the column is stored as UTC.
+        return as_utc(v)
 
 
 class PolicyTestResponse(BaseModel):

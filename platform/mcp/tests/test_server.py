@@ -1,3 +1,7 @@
+import json
+import os
+from pathlib import Path
+
 import httpx
 import respx
 from starlette.testclient import TestClient
@@ -137,3 +141,39 @@ def test_when_tools_are_listed_then_only_policy_save_writes(key):
             "openWorldHint": False,
         },
     }
+
+
+# The assistant's copy of the tools it offers its model (platform/assistant
+# never imports this package).
+ASSISTANT_TOOLS = (
+    Path(__file__).resolve().parents[2] / "assistant" / "tests" / "mcp_tools.json"
+)
+
+
+@respx.mock
+def test_when_tools_are_listed_then_the_assistant_copy_matches(key):
+    """Names and argument schemas only: descriptions reach the assistant live.
+
+    On a deliberate change, regenerate the copy from platform/mcp with
+    HEXGATE_UPDATE_ASSISTANT_TOOLS=1 uv run pytest tests/test_server.py
+    It rewrites the tools already in the copy: a tool added to the
+    assistant's ALLOWLIST needs its entry (its name is enough) first.
+    """
+    respx.get(JWKS_URL).respond(json=jwks(key))
+    copy = json.loads(ASSISTANT_TOOLS.read_text(encoding="utf-8"))
+
+    tools = rpc(key.mint(), "tools/list", {})["tools"]
+
+    pinned = {t["name"]: t.get("inputSchema") for t in copy}
+    if os.environ.get("HEXGATE_UPDATE_ASSISTANT_TOOLS"):
+        keep = ("name", "description", "inputSchema")
+        fresh = [{k: t[k] for k in keep} for t in tools if t["name"] in pinned]
+        fresh.sort(key=lambda t: t["name"])
+        ASSISTANT_TOOLS.write_text(
+            json.dumps(fresh, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        return
+    live = {t["name"]: t["inputSchema"] for t in tools}
+    assert {name: live.get(name) for name in pinned} == pinned, (
+        f"{ASSISTANT_TOOLS} is stale: regenerate it (see this test's docstring)"
+    )
