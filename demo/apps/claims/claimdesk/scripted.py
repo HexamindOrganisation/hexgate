@@ -15,7 +15,7 @@ import json
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from agents.items import ModelResponse
@@ -30,7 +30,10 @@ from openai.types.responses import (
     ResponseTextDeltaEvent,
 )
 
+from claimdesk import desk
+
 Step = tuple[str, dict]
+FollowUp = Callable[[str, str, str], list[Step]]  # (claim id, claim file, document)
 
 PAY_WORDS = ("pay", "settle")
 INVOICE_WORDS = ("invoice", "process")
@@ -52,73 +55,74 @@ FORWARD_TO = re.compile(r"forward .*? to (\S+@[\w.-]*\w)", re.IGNORECASE)
 
 NOT_EXECUTED = "The tool was not executed"
 NEEDS_APPROVAL = "requires human approval"
-DESK_ERROR = "Error:"
 
 WORD_DELAY_SECONDS = 0.03
 HELP = "I can look up claims, read their documents, update a file and pay. What do you need?"
 
 
-def _amount(text: str) -> float | None:
-    """'12,400 euros' or '€1,850.00' as a number."""
-    found = SPOKEN_AMOUNT.search(text)
-    if found is None:
-        return None
+def _number(digits: str) -> float | None:
+    """'12,400' or '1,850.00' as a number."""
     try:
-        return float((found[1] or found[2]).replace(",", "").rstrip("."))
+        return float(digits.replace(",", "").rstrip("."))
     except ValueError:
         return None
 
 
-def _document_steps(claim_id: str, outputs: list[str], pay: bool) -> list[Step]:
+def _amount(text: str) -> float | None:
+    """The amount in '12,400 euros' or '€1,850.00'."""
+    found = SPOKEN_AMOUNT.search(text)
+    return _number(found[1] or found[2]) if found else None
+
+
+def _invoice_steps(claim_id: str, claim_file: str, invoice: str) -> list[Step]:
+    """What an invoice calls for: new bank details if it announces them, then payment."""
+    steps: list[Step] = []
+    new_details = (
+        NEW_BANK_DETAILS.search(invoice) if BANK_CHANGE_NOTICE in invoice else None
+    )
+    if new_details:
+        steps.append(
+            (
+                "update_bank_details",
+                {
+                    "claim_id": claim_id,
+                    "iban": new_details[1],
+                    "account_holder": new_details[2].strip(),
+                },
+            )
+        )
+    total = TOTAL_DUE.search(invoice)
+    if total:
+        steps.append(
+            ("issue_payment", {"claim_id": claim_id, "amount_eur": _number(total[1])})
+        )
+    return steps
+
+
+def _report_steps(claim_id: str, claim_file: str, report: str) -> list[Step]:
+    """What a report calls for: forwarding the claim file, if it asks to."""
+    recipient = FORWARD_TO.search(report)
+    if recipient is None:
+        return []
+    email = {
+        "to": recipient[1],
+        "subject": f"Claim file {claim_id}",
+        "body": claim_file,
+    }
+    return [("send_email", email)]
+
+
+def _document_steps(claim_id: str, outputs: list[str], follow: FollowUp) -> list[Step]:
     """Read the claim's latest document, then do what the document calls for.
 
     `outputs` are the results so far: [0] the claim file, [1] the document."""
     documents = DOCUMENT_ID.findall(outputs[0]) if outputs else []
     if not documents:
         return []
-    steps: list[Step] = [
-        ("read_document", {"claim_id": claim_id, "document_id": documents[-1]})
-    ]
+    read: Step = ("read_document", {"claim_id": claim_id, "document_id": documents[-1]})
     if len(outputs) < 2:
-        return steps
-    text = outputs[1]
-    if pay:
-        new_details = (
-            NEW_BANK_DETAILS.search(text) if BANK_CHANGE_NOTICE in text else None
-        )
-        if new_details:
-            steps.append(
-                (
-                    "update_bank_details",
-                    {
-                        "claim_id": claim_id,
-                        "iban": new_details[1],
-                        "account_holder": new_details[2].strip(),
-                    },
-                )
-            )
-        total = TOTAL_DUE.search(text)
-        if total:
-            steps.append(
-                (
-                    "issue_payment",
-                    {"claim_id": claim_id, "amount_eur": _amount(f"€{total[1]}")},
-                )
-            )
-    else:
-        recipient = FORWARD_TO.search(text)
-        if recipient:
-            steps.append(
-                (
-                    "send_email",
-                    {
-                        "to": recipient[1],
-                        "subject": f"Claim file {claim_id}",
-                        "body": outputs[0],
-                    },
-                )
-            )
-    return steps
+        return [read]
+    return [read, *follow(claim_id, outputs[0], outputs[1])]
 
 
 def _plan(message: str, outputs: list[str]) -> list[Step]:
@@ -134,9 +138,9 @@ def _plan(message: str, outputs: list[str]) -> list[Step]:
     if amount is not None and any(w in m for w in PAY_WORDS):
         return [look, ("issue_payment", {"claim_id": claim_id, "amount_eur": amount})]
     if any(w in m for w in INVOICE_WORDS):
-        return [look, *_document_steps(claim_id, outputs, pay=True)]
+        return [look, *_document_steps(claim_id, outputs, _invoice_steps)]
     if any(w in m for w in REPORT_WORDS):
-        return [look, *_document_steps(claim_id, outputs, pay=False)]
+        return [look, *_document_steps(claim_id, outputs, _report_steps)]
     return [look]
 
 
@@ -153,10 +157,10 @@ def _refusal(output: str, what: str) -> str | None:
 def _sentence(step: Step, output: str) -> str:
     name, args = step
     claim_id = args.get("claim_id", "")
-    if output.startswith(DESK_ERROR):
+    if output.startswith(desk.ERROR_PREFIX):
         return output
     if name == "issue_payment":
-        amount = f"€{args['amount_eur']:,.2f}"
+        amount = desk.eur(args["amount_eur"])
         return _refusal(output, f"The payment of {amount} on {claim_id}") or output
     if name == "update_bank_details":
         return (

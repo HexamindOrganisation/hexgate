@@ -22,7 +22,7 @@ function ClaimCard({ claim }: { claim: Claim }) {
   const paid = claim.status === "paid";
   return (
     <article
-      className={cn("claim", paid && "paid", claim.flags.length > 0 && "flagged", flash && "flash")}
+      className={cn("claim", claim.flags.length > 0 && "flagged", flash && "flash")}
       data-claim={claim.id}
     >
       <div className="flex items-center gap-2">

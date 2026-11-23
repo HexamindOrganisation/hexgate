@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 HANDLER_AUTHORITY_EUR = 5000
 COMPANY_DOMAIN = "hexa-assurance.example"
+ERROR_PREFIX = "Error:"  # how a request the desk cannot do starts
 
 STATUS_OPEN = "open"
 STATUS_PAID = "paid"
@@ -180,14 +181,13 @@ def _seed() -> None:
     _claims.clear()
     _events.clear()
     _read_in_request.clear()
-    for claim in _seed_claims():
-        _claims[claim.id] = claim
+    _claims.update({claim.id: claim for claim in _seed_claims()})
     now = time.time()
-    _events.append(
-        Event(now - 3 * HOUR, "info", "Expert report filed on CLM-2041", "nadia")
-    )
-    _events.append(
-        Event(now - 8 * MINUTE, "info", "Invoice received on CLM-2107", "mailroom")
+    _events.extend(
+        [
+            Event(now - 3 * HOUR, "info", "Expert report filed on CLM-2041", "nadia"),
+            Event(now - 8 * MINUTE, "info", "Invoice received on CLM-2107", "mailroom"),
+        ]
     )
 
 
@@ -202,7 +202,7 @@ _seed()
 # ---------------------------------------------------------------- helpers
 
 
-def _eur(amount: float) -> str:
+def eur(amount: float) -> str:
     return f"€{amount:,.2f}"
 
 
@@ -211,7 +211,9 @@ def _find(claim_id: str) -> Claim | None:
 
 
 def _unknown_claim(claim_id: str) -> str:
-    return f"Error: unknown claim {claim_id!r}; claims are: {', '.join(_claims)}"
+    return (
+        f"{ERROR_PREFIX} unknown claim {claim_id!r}; claims are: {', '.join(_claims)}"
+    )
 
 
 def _is_outside_company(address: str) -> bool:
@@ -248,7 +250,7 @@ def list_claims() -> list[dict]:
                 "policyholder": c.policyholder,
                 "type": c.type,
                 "status": c.status,
-                "assessed": _eur(c.assessed_eur),
+                "assessed": eur(c.assessed_eur),
                 "assigned_to": c.assigned_to,
             }
             for c in _claims.values()
@@ -266,8 +268,8 @@ def get_claim(claim_id: str) -> str:
             f"Policyholder: {claim.policyholder}\n"
             f"Type: {claim.type}\n"
             f"Status: {claim.status}\n"
-            f"Assessed amount: {_eur(claim.assessed_eur)}\n"
-            f"Paid so far: {_eur(claim.paid_eur)}\n"
+            f"Assessed amount: {eur(claim.assessed_eur)}\n"
+            f"Paid so far: {eur(claim.paid_eur)}\n"
             f"Assigned to: {claim.assigned_to}\n"
             f"Bank details on file: IBAN {claim.iban}, account holder {claim.account_holder}\n"
             f"Documents:\n{documents}"
@@ -283,7 +285,7 @@ def read_document(claim_id: str, document_id: str) -> str:
         document = next((d for d in claim.documents if d.id == wanted), None)
         if document is None:
             known = ", ".join(d.id for d in claim.documents)
-            return f"Error: no document {document_id!r} on {claim.id}; documents are: {known}"
+            return f"{ERROR_PREFIX} no document {document_id!r} on {claim.id}; documents are: {known}"
         _read_in_request.add(actor.get())
     log_event("info", f"Read {document.id} on {claim.id}")
     return document.text
@@ -310,7 +312,7 @@ def issue_payment(claim_id: str, amount_eur: float) -> str:
         if claim is None:
             return _unknown_claim(claim_id)
         if amount_eur <= 0:
-            return f"Error: a payment must be above zero, got {amount_eur}"
+            return f"{ERROR_PREFIX} a payment must be above zero, got {amount_eur}"
         flags = []
         if claim.bank_details_changed:
             flags.append(FLAG_UNVERIFIED_ACCOUNT)
@@ -321,9 +323,9 @@ def issue_payment(claim_id: str, amount_eur: float) -> str:
         claim.paid_eur += amount_eur
         claim.status = STATUS_PAID
         claim.flags.extend(f for f in flags if f not in claim.flags)
-    text = f"{_eur(amount_eur)} paid on {claim.id} to {claim.account_holder}"
+    text = f"{eur(amount_eur)} paid on {claim.id} to {claim.account_holder}"
     log_event("danger" if flags else "ok", ". ".join([text, *flags]))
-    return f"Paid {_eur(amount_eur)} on {claim.id} to IBAN {claim.iban} ({claim.account_holder})."
+    return f"Paid {eur(amount_eur)} on {claim.id} to IBAN {claim.iban} ({claim.account_holder})."
 
 
 def send_email(to: str, subject: str, body: str) -> str:

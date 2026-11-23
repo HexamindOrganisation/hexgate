@@ -149,9 +149,6 @@
   .nav-link.active {
     @apply bg-raised font-medium text-ink;
   }
-  .region {
-    @apply rounded-lg border border-line-strong bg-panel px-2.5 py-1.5 text-xs text-muted;
-  }
 
   /* ---------------------------------------------------------- claim cards */
   .claim {
