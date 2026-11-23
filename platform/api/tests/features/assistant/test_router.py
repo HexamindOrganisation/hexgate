@@ -234,6 +234,16 @@ async def test_when_stored_mode_is_unknown_then_403_assistant_mode_unknown(
     assert "token" not in resp.json()
 
 
+async def test_when_stored_mode_is_unknown_then_config_says_off(
+    client: TestClient, factory
+) -> None:
+    await _set_mode(factory, "read_write_v2")
+    resp = client.get(f"{P}/config", headers={"X-Dev-User": DEFAULT_USER_ID})
+    assert resp.status_code == 200
+    assert resp.json()["mode"] == "off"
+    assert resp.json()["can_write"] is False
+
+
 def test_when_no_session_and_no_origin_then_401(client: TestClient) -> None:
     """Who is calling is decided before the Origin: 401, not the Origin's 403."""
     assert client.post(f"{P}/token").status_code == 401

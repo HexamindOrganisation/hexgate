@@ -77,9 +77,12 @@ async def api_assistant_config(
 ) -> AssistantConfig:
     """Whether the dashboard shows the Assistant tab, and what it may do."""
     access = await assistant_access(session, project_id, user.id)
+    # A stored mode this code does not know shows as off, as the token route
+    # refuses it, rather than failing the response's validation with a 500.
+    known = access.mode in ("off", "read_only", "read_write")
     return AssistantConfig(
         enabled=get_settings().assistant_enabled,
-        mode=access.mode,
+        mode=access.mode if known else "off",
         can_write=access.can_write,
         verified=user.is_verified,
     )
