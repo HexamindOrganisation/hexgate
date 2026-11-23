@@ -363,7 +363,7 @@ Held-out cases were scored, never read. To rerun a version:
 | v0 | `d3ba8fe5` | the skill before tuning (the baseline above) |
 | v1 | `ff258610` | record and keep what a policy allows today; admission and reach are opt-in, then global; never widen a boundary on a team's request; write the least-privilege reading instead of stopping on an open choice; anchor the path traversal guard on segments and test a lookalike value for every deny |
 | v2 | `ed61a299` | before any `agents:` block a handoff passes but an agent-as-tool call needs its delegation tool, so re-grant only that; a request a boundary blocks entirely changes no file |
-| v3 | `6772540a` | refuse a request the policy cannot express (a per-tool hourly count, a handoff depth, a missing tool) and offer the substitute without writing it |
+| v3 | `6772540a` | the least-privilege rule covers open permissions only; refuse a request the policy cannot express (a per-tool hourly count, a handoff depth, a missing tool) and offer the substitute without writing it |
 | v4 | `95ebad96` | admission and reach are two separate gates: adding `admission` does not touch reach |
 
 Full runs (mean ± stderr / pass^3 ± stderr; samples that hit a network error
@@ -383,9 +383,9 @@ v1 had no full run: on the six cases it targeted it passed 11 of 18 samples
 
 v4 still fails two cases, every epoch: `reach_in_modules`, whose decision 4
 expects `default` and `support` to lose their handoff to billing-bot while
-`agent_as_tool`'s preserved calls expect the same roles, from the same
-ungated start, to keep theirs, so no answer passes both; and
-`unknown_argument` (held out), failed in every version. The median sample
+`agent_as_tool`'s preserved calls, on another project that also starts with
+no reach rules, expect the same roles to keep theirs, so no answer passes
+both; and `unknown_argument` (held out), failed in every run that included it. The median sample
 took 115 s and $0.075 at list price in v4, against 60 s and $0.061 in v0.
 
 Logs (not committed), by SHA-256:
