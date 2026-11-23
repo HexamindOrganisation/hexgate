@@ -21,9 +21,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("./playground", () => ({
   resetPlayground: vi.fn(),
 }));
+vi.mock("./assistant", () => ({
+  resetAssistant: vi.fn(),
+}));
 
 // Imported AFTER vi.mock so the hook picks up the spy version.
 import { useLogout, USER_QUERY_KEY } from "./auth";
+import { resetAssistant } from "./assistant";
 import { resetPlayground } from "./playground";
 
 function makeWrapper(
@@ -52,6 +56,7 @@ describe("useLogout", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.mocked(resetPlayground).mockClear();
+    vi.mocked(resetAssistant).mockClear();
   });
 
   it("calls resetPlayground on logout success", async () => {
@@ -68,6 +73,9 @@ describe("useLogout", () => {
     });
 
     expect(resetPlayground).toHaveBeenCalledOnce();
+    // The assistant's chat too; its own tests show the reset also aborts a
+    // stream still running, so nothing repopulates the store after logout.
+    expect(resetAssistant).toHaveBeenCalledOnce();
   });
 
   it("does NOT call resetPlayground when the logout request fails", async () => {
@@ -90,6 +98,7 @@ describe("useLogout", () => {
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(resetPlayground).not.toHaveBeenCalled();
+    expect(resetAssistant).not.toHaveBeenCalled();
   });
 
   it("invalidates the user query after resetting playground", async () => {

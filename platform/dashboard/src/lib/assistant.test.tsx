@@ -214,6 +214,49 @@ describe("useAssistant", () => {
     expect(result.current.state.streaming).toBe(false);
   });
 
+  it("starts a paragraph for each text message of a turn", async () => {
+    const text = (id: string, delta: string) => [
+      { type: "TEXT_MESSAGE_START", messageId: id },
+      { type: "TEXT_MESSAGE_CONTENT", messageId: id, delta },
+      { type: "TEXT_MESSAGE_END", messageId: id },
+    ];
+    stubFetch({
+      turn: () =>
+        streamResponse(
+          sse(
+            ...text("m1", "Let me read the file."),
+            { type: "TOOL_CALL_START", toolCallId: "c1", toolCallName: "r" },
+            { type: "TOOL_CALL_RESULT", toolCallId: "c1", content: "ok" },
+            ...text("m2", "Done."),
+            { type: "RUN_FINISHED" },
+          ),
+        ),
+    });
+    const { result } = renderAssistant();
+    await act(() => result.current.send("hi", EDITOR));
+    expect(result.current.state.messages[1].content).toBe(
+      "Let me read the file.\n\nDone.",
+    );
+  });
+
+  it("never retries a turn whose stream has opened", async () => {
+    const fetch = stubFetch({
+      turn: () =>
+        streamResponse(
+          sse(
+            { type: "RUN_STARTED", threadId: "s1", runId: "t1" },
+            { type: "RUN_ERROR", message: "failed", code: "provider" },
+          ),
+        ),
+    });
+    const { result } = renderAssistant();
+    await act(() => result.current.send("hi", EDITOR));
+
+    expect(calls(fetch, "/assistant/token")).toHaveLength(1);
+    expect(calls(fetch, "/turns")).toHaveLength(1);
+    expect(result.current.state.streaming).toBe(false);
+  });
+
   it.each([
     [403, /cannot work on this project/],
     [404, /no longer available/],
@@ -275,6 +318,28 @@ describe("useAssistant", () => {
       { content: "one" },
       { role: "assistant" },
     ]);
+  });
+
+  it("aborts a running stream on logout so it cannot refill the store", async () => {
+    const stream = deferredStream();
+    const fetch = stubFetch({ turn: () => stream.response });
+    const { result } = renderAssistant();
+    let sent: Promise<void> = Promise.resolve();
+    act(() => {
+      sent = result.current.send("hi", EDITOR);
+    });
+    await waitFor(() => expect(calls(fetch, "/turns")).toHaveLength(1));
+
+    const logout = renderHook(() => useLogout(), { wrapper });
+    await act(() => logout.result.current.mutateAsync());
+    const init = calls(fetch, "/turns")[0][1] as RequestInit;
+    expect(init.signal?.aborted).toBe(true);
+
+    await act(async () => {
+      stream.release(TURN);
+      await sent;
+    });
+    expect(result.current.state.messages).toEqual([]);
   });
 
   it("is empty after logout", async () => {

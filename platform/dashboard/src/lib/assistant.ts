@@ -40,6 +40,7 @@ export interface AssistantChange {
 
 export type AssistantEvent =
   | { type: "RUN_STARTED"; threadId: string }
+  | { type: "TEXT_MESSAGE_START" }
   | { type: "TEXT_MESSAGE_CONTENT"; delta: string }
   | { type: "TOOL_CALL_START"; toolCallId: string; toolCallName: string }
   | { type: "TOOL_CALL_ARGS"; toolCallId: string; delta: string }
@@ -193,6 +194,12 @@ export function applyEvent(
   switch (event.type) {
     case "RUN_STARTED":
       return { ...state, sessionId: event.threadId };
+    case "TEXT_MESSAGE_START":
+      // A turn's text comes as one message per model step (before and after
+      // each tool call); each starts its own paragraph.
+      return updateLast(state, (m) =>
+        m.content ? { ...m, content: m.content + "\n\n" } : m,
+      );
     case "TEXT_MESSAGE_CONTENT":
       return updateLast(state, (m) => ({
         ...m,
@@ -363,7 +370,8 @@ async function runTurn(
   turn: AbortController,
 ): Promise<void> {
   let res = await postTurn(projectId, body, turn.signal);
-  // An expired token: mint another, once.
+  // An expired token, refused before any stream opened: mint another, once.
+  // A turn whose stream has opened is never retried; it ends with its events.
   if (res.status === 401) res = await postTurn(projectId, body, turn.signal);
   if (!res.ok || !res.body) {
     const refusal = messageFor(
