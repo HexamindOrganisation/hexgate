@@ -24,23 +24,14 @@ from hexgate_assistant.agent import (
 from hexgate_assistant.model import build_model
 from tests.fake_mcp import FakeMCP, serve, snapshot_tools
 
-pytestmark = pytest.mark.anyio
-
 LIST_FILES = ToolCallPart("policy_list_files", {"project_id": "p1"})
 
 
-@pytest.fixture(scope="module")
-async def server():
+@pytest.fixture
+async def mcp():
+    # One server per test: it runs on the test's own event loop.
     async with serve() as state:
         yield state
-
-
-@pytest.fixture
-def mcp(server: FakeMCP) -> FakeMCP:
-    server.calls.clear()
-    server.delay = 0.0
-    server.refusal = None
-    return server
 
 
 def call_once(call: ToolCallPart, seen: list[AgentInfo] | None = None) -> FunctionModel:

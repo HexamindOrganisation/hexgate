@@ -12,8 +12,6 @@ from hexgate_assistant.model import (
     build_model,
 )
 
-pytestmark = pytest.mark.anyio
-
 MODEL = "openrouter:anthropic/claude-sonnet-4.5"
 
 COMPLETION = {
