@@ -381,6 +381,15 @@ v1 had no full run: on the six cases it targeted it passed 11 of 18 samples
 `must_refuse`, v4 12 of 12 on `admission`, `admission_with_global_cap`,
 `agent_as_tool` and `handoff_approval`.
 
+Two cases came after v4's full run, so the tables above don't count them:
+`robustness/revoke_last_tool_reach` and `robustness/revoke_last_handoff`
+revoke a policy's only reach entry. A reach gate is on only while some role
+declares it (`declares_reach` and `declares_tool_reach` in
+`hexgate/security/policy_set.py`), so deleting that entry turns the gate off
+and reopens what it closed, while `policy test` still prints DENY; an
+explicit `mode: deny` keeps it on. Their `wrong_answer/` is the deletion. v4
+passed both, 6 of 6, writing the explicit deny and saying why.
+
 v4 still fails two cases, every epoch: `reach_in_modules`, whose decision 4
 expects `default` and `support` to lose their handoff to billing-bot while
 `agent_as_tool`'s preserved calls, on another project that also starts with
@@ -400,6 +409,7 @@ Logs (not committed), by SHA-256:
 | v3, all | `2026-11-20T11-08-51-00-00_policy-writing_KGME8iqF7buTVPDxXioQZn.eval` | `7ca34ca327f4cabecb55061c1b56a307ccbe082de4334d2128b50596c45bbbff` |
 | v4, four cases | `2026-11-20T12-14-23-00-00_policy-writing_gVy4Cqd5Wt7Zg45cJWmR2f.eval` | `d8f53446252a26e63ffa8a669b076e99935f8b61dfe290e511ad81e75a77e34b` |
 | v4, all | `2026-11-20T12-27-54-00-00_policy-writing_kSCM64Q3anJtgVytdndaxQ.eval` | `8b716ca25de70ea33c6d824ea52d9a07b3c978b2de81df5784f4caa5af26552d` |
+| v4, two revoke cases | `2026-11-23T16-11-27-00-00_policy-writing_Zq7DfLoCgQHsg5zvesWCKT.eval` | `610c2d8a351523eaf3698c5f0b6739e9cc84de1449996f1c50b20bda99ae075c` |
 
 ## Adding a case
 
@@ -408,5 +418,7 @@ Logs (not committed), by SHA-256:
    role that must stay unaffected.
 2. Add `solution/`: the files to overwrite, plus `ANSWER.md` when the case
    checks the answer text. If the case is a trap, add the mistake as
-   `wrong_answer/`.
+   `wrong_answer/`. Keep the trap out of the starting project's comments: the
+   agent reads every file it is given, and a comment that names the trap
+   gives the answer away.
 3. `uv run pytest tests/evals` must stay green.
