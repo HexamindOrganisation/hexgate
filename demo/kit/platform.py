@@ -34,12 +34,15 @@ from kit.paths import (
 SERVICES = ("api", "mcp", "collector", "enricher")
 
 
+def _tool_dirs() -> list[str]:
+    """The demo/.tools folders demo/run has installed so far."""
+    extra = [TOOLS / "uv", TOOLS / "node" / "bin", TOOLS / "go" / "bin", TOOLS / "opa"]
+    return [str(p) for p in extra if p.exists()]
+
+
 def tool_env() -> dict[str, str]:
     """PATH with the tools demo/run installed in demo/.tools first."""
-    extra = [TOOLS / "uv", TOOLS / "node" / "bin", TOOLS / "go" / "bin", TOOLS / "opa"]
-    path = os.pathsep.join(
-        [str(p) for p in extra if p.exists()] + [os.environ.get("PATH", "")]
-    )
+    path = os.pathsep.join(_tool_dirs() + [os.environ.get("PATH", "")])
     env = {"PATH": path}
     if (TOOLS / "go").exists():
         env["GOROOT"] = str(TOOLS / "go")
@@ -243,6 +246,16 @@ def _check_ports() -> None:
 
 
 def up() -> None:
+    # A service keeps the PATH it started with: one started before demo/run
+    # installed a tool (opa, which the API compiles policies with) can't see
+    # it. Restart them when the installed tools changed since they started.
+    tools, tools_stamp = "\n".join(_tool_dirs()), RUN / "services.tools"
+    if any(procs.running(s) for s in SERVICES) and (
+        not tools_stamp.exists() or tools_stamp.read_text() != tools
+    ):
+        ui.step("new tools in demo/.tools: restarting the platform services")
+        for s in SERVICES:
+            procs.stop(s)
     if is_up() and all(procs.running(s) for s in SERVICES):
         ui.ok("platform already running")
         return
@@ -253,6 +266,8 @@ def up() -> None:
     dist = dashboard_dist()
     collector = collector_binary()
     env = tool_env()
+    RUN.mkdir(parents=True, exist_ok=True)
+    tools_stamp.write_text(tools)
 
     _run(
         ["make", "-s", "postgres-init", "redpanda-topics", "clickhouse-migrate"],
