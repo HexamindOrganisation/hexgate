@@ -7,6 +7,7 @@ Both sides are resolved from ``policy.yaml`` and its imports the way
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable, Mapping
 
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -256,12 +257,21 @@ async def diff_project(
     (so ``overlay_drafts`` never sees a project it would refuse):
     such a project enforces from the module store or each agent's own policy, so
     there is no saved side to compare, and a first ``policy.yaml`` replaces it."""
-    saved = await _files_map(session, project_id)
+    # One read: both sides come from the same snapshot of the store.
+    return await diff_rows(await _files_map(session, project_id), drafts)
+
+
+async def diff_rows(saved: dict[str, str], drafts: Iterable[PolicyFileDraft]) -> dict:
+    """:func:`diff_files` of ``saved`` (``{name: content}``) against it with
+    ``drafts`` applied. Both sides are built here and only the two plain maps go
+    to a worker thread: resolving a large project takes seconds, which would
+    otherwise block the event loop. Raises :class:`~service.InvalidModuleError`
+    when ``saved`` holds no ``policy.yaml``."""
     if ENTRY_FILE not in saved:
         raise InvalidModuleError(
             f"this project has no {ENTRY_FILE!r}, so it does not enforce from policy "
             f"files and there is nothing to diff; saving a first {ENTRY_FILE!r} "
             "would switch every agent onto the file store"
         )
-    # One read: both sides come from the same snapshot of the store.
-    return diff_files(saved, overlay_drafts(saved, drafts))
+    drafted = overlay_drafts(saved, drafts)
+    return await asyncio.to_thread(diff_files, saved, drafted)

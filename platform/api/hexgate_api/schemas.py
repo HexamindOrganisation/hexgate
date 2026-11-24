@@ -855,6 +855,85 @@ class ChangeRead(BaseModel):
         return as_utc(v)
 
 
+# What one apply may carry: each file's text, in UTF-8 bytes, and the counts.
+APPLY_MAX_FILE_BYTES: Final = 256 * 1024
+APPLY_MAX_FILES: Final = 10
+APPLY_MAX_SAMPLES: Final = 20
+
+
+class PolicyApplyFile(PolicyFileDraft):
+    """One whole file to save. ``base_hash`` is the ``text_hash`` the caller
+    read; null means the file must not exist yet, never "skip the check"."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    base_hash: str | None
+
+    @field_validator("content")
+    @classmethod
+    def _cap_size(cls, v: str) -> str:
+        size = len(v.encode("utf-8"))
+        if size > APPLY_MAX_FILE_BYTES:
+            raise ValueError(
+                f"a file is at most {APPLY_MAX_FILE_BYTES} bytes (got {size})"
+            )
+        return v
+
+
+class PolicyApplySample(BaseModel):
+    """A tool call and the outcome it must get with the change saved."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent: str = "*"
+    role: str
+    tool: str
+    args: dict = Field(default_factory=dict)
+    attributes: dict = Field(default_factory=dict)
+    expect: Literal["allow", "deny", "approval_required"]
+
+
+class PolicyApplyRequest(BaseModel):
+    """A policy change to check and, when every check passes, save at once.
+    Files can be added or replaced, not deleted."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    files: Annotated[
+        list[PolicyApplyFile],
+        Field(min_length=1, max_length=APPLY_MAX_FILES),
+        AfterValidator(_unique_draft_names),
+    ]
+    summary: str = Field(max_length=2000)
+    samples: list[PolicyApplySample] = Field(
+        default_factory=list, max_length=APPLY_MAX_SAMPLES
+    )
+    # The assistant's chat session, opaque here; null from other clients.
+    session_id: str | None = Field(default=None, max_length=64)
+
+
+class PolicyApplyFileOut(BaseModel):
+    """A saved file's ``text_hash`` before and after; ``before_hash`` is null
+    for a file the change created."""
+
+    name: str
+    before_hash: str | None
+    after_hash: str
+
+
+class PolicyApplyResponse(BaseModel):
+    """What an apply did. ``applied`` is true only when every check passed and
+    the change was committed; ``change_id`` is set exactly then. ``checks`` and
+    ``boundary_changes`` have the shape ``ChangeRead`` returns them in."""
+
+    applied: bool
+    change_id: str | None = None
+    checks: list[dict[str, Any]]
+    boundary_changes: list[dict[str, Any]] = Field(default_factory=list)
+    files: list[PolicyApplyFileOut] = Field(default_factory=list)
+
+
 class PolicyTestResponse(BaseModel):
     """The gate's verdict for a single evaluated tool call."""
 
