@@ -8,12 +8,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.schema import CreateIndex, CreateTable
 from starlette.testclient import TestClient
 
-from hexgate_assistant.db import (
-    SchemaOutOfDate,
-    create_tables,
-    session_factory,
-    verify_schema,
-)
+from hexgate_assistant.db import SchemaOutOfDate, create_tables, verify_schema
 from hexgate_assistant.models import (
     AssistantMessage,
     AssistantSession,
@@ -29,12 +24,6 @@ TABLES = {
     "assistant_usage",
     "assistant_turn_lock",
 }
-
-
-@pytest.fixture
-async def db(engine):
-    await create_tables(engine)
-    return session_factory(engine)
 
 
 @pytest.fixture

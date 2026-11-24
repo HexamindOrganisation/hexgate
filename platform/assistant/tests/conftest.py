@@ -14,7 +14,7 @@ from jwt.algorithms import OKPAlgorithm
 from sqlalchemy import event, make_url
 
 from hexgate_assistant.auth import ACCESS_TOKEN_TYPE, CLIENT_ID
-from hexgate_assistant.db import make_engine
+from hexgate_assistant.db import create_tables, make_engine, session_factory
 from hexgate_assistant.models import Base
 from hexgate_assistant.settings import Settings
 
@@ -112,3 +112,9 @@ async def engine(settings):
             await conn.run_sync(Base.metadata.drop_all)
     yield engine
     await engine.dispose()
+
+
+@pytest.fixture
+async def db(engine):
+    await create_tables(engine)
+    return session_factory(engine)

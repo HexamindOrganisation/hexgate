@@ -1,0 +1,71 @@
+[
+  {
+    "parts": [
+      {
+        "tool_name": "policy_read_file",
+        "args": {
+          "name": "policy.yaml"
+        },
+        "tool_call_id": "c1",
+        "tool_kind": null,
+        "id": null,
+        "provider_name": null,
+        "provider_details": null,
+        "part_kind": "tool-call"
+      }
+    ],
+    "usage": {
+      "input_tokens": 0,
+      "cache_write_tokens": 0,
+      "cache_write_1h_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "output_reasoning_tokens": 0,
+      "input_audio_tokens": 0,
+      "cache_audio_read_tokens": 0,
+      "output_audio_tokens": 0,
+      "audio_seconds": 0.0,
+      "details": {},
+      "cost": null
+    },
+    "model_name": null,
+    "model_id": null,
+    "timestamp": "2026-11-23T00:00:00Z",
+    "kind": "response",
+    "provider_name": null,
+    "provider_url": null,
+    "canonical_system": null,
+    "provider_details": null,
+    "provider_response_id": null,
+    "finish_reason": null,
+    "run_id": null,
+    "conversation_id": null,
+    "metadata": null,
+    "workspace_ref": null,
+    "history_digest": null,
+    "failed_attempts": null,
+    "state": "complete"
+  },
+  {
+    "parts": [
+      {
+        "tool_name": "policy_read_file",
+        "content": "version: 1",
+        "tool_call_id": "c1",
+        "tool_kind": null,
+        "metadata": null,
+        "timestamp": "2026-11-23T00:00:00Z",
+        "outcome": "success",
+        "retry": null,
+        "part_kind": "tool-return"
+      }
+    ],
+    "timestamp": null,
+    "instructions": null,
+    "kind": "request",
+    "run_id": null,
+    "conversation_id": null,
+    "metadata": null,
+    "state": "complete"
+  }
+]
