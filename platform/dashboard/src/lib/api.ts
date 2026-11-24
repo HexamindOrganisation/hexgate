@@ -71,7 +71,7 @@ export const authRedirect = {
  * turns every other non-2xx into an ``ApiError``. Returns the raw Response so
  * the JSON callers and the binary ones (the AI Act annex / PDF downloads)
  * go through one auth and error path. */
-async function send(
+export async function send(
   path: string,
   init?: RequestInit,
   redirectOn401 = true,

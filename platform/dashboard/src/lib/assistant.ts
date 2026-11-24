@@ -8,9 +8,10 @@
  * moving to another, or signing out, empties it.
  *
  * A turn goes to the assistant service, not the api, with a token the api
- * mints for that one message. It is sent with a raw `fetch`, never the shared
- * `request()`: that helper redirects to /sign-in on any 401, and an expired
- * assistant token says nothing about the dashboard session.
+ * mints for that one message. It goes through the shared `send()` with
+ * `redirectOn401` off: a 401 from the assistant is an expired assistant token,
+ * which says nothing about the dashboard session. The token mint keeps the
+ * redirect, since a 401 there means the session itself has expired.
  */
 
 import { useEffect } from "react";
@@ -23,7 +24,7 @@ import type {
   ChatTurn,
 } from "@/components/chat/types";
 import { useActive } from "./active";
-import { ApiError, assistantApi } from "./api";
+import { ApiError, assistantApi, send, UnauthenticatedError } from "./api";
 import { randomId } from "./utils";
 
 export type { AssistantConfig } from "./api";
@@ -99,21 +100,20 @@ export interface AssistantToolCall extends ChatToolCall {
   argsText: string;
 }
 
-export interface AssistantTurn extends ChatTurn {
+export interface PolicyAssistantTurn extends ChatTurn {
   tools: AssistantToolCall[];
   /** The change this turn saved, when it saved one. */
   change?: AssistantChange;
 }
 
 export interface AssistantMessage extends ChatMessageData {
-  turn?: AssistantTurn;
+  turn?: PolicyAssistantTurn;
 }
 
 export interface AssistantState {
   /** The assistant's session; null until the first turn starts one. */
   sessionId: string | null;
   messages: AssistantMessage[];
-  streaming: boolean;
 }
 
 /** What the policy editor holds when a message is sent. */
@@ -125,15 +125,22 @@ export interface AssistantEditor {
 const INITIAL_STATE: AssistantState = {
   sessionId: null,
   messages: [],
-  streaming: false,
 };
+
+/** Whether the chat's last turn is still being answered. */
+export function isStreaming(state: AssistantState): boolean {
+  return state.messages[state.messages.length - 1]?.turn?.streaming ?? false;
+}
 
 // ——— Pure reducer ———
 
 /** The turn being streamed is always the last message. */
 function updateLast(
   state: AssistantState,
-  update: (message: AssistantMessage, turn: AssistantTurn) => AssistantMessage,
+  update: (
+    message: AssistantMessage,
+    turn: PolicyAssistantTurn,
+  ) => AssistantMessage,
 ): AssistantState {
   const last = state.messages[state.messages.length - 1];
   if (!last?.turn) return state;
@@ -145,7 +152,7 @@ function updateLast(
 
 function updateTurn(
   state: AssistantState,
-  update: (turn: AssistantTurn) => AssistantTurn,
+  update: (turn: PolicyAssistantTurn) => PolicyAssistantTurn,
 ): AssistantState {
   return updateLast(state, (m, turn) => ({ ...m, turn: update(turn) }));
 }
@@ -174,7 +181,7 @@ function parseArgs(text: string): Record<string, unknown> {
 
 /** Ends the turn: a tool still running has failed with it. */
 function endTurn(state: AssistantState, error?: string): AssistantState {
-  const next = updateTurn(state, (turn) => ({
+  return updateTurn(state, (turn) => ({
     ...turn,
     streaming: false,
     error,
@@ -184,7 +191,6 @@ function endTurn(state: AssistantState, error?: string): AssistantState {
         : t,
     ),
   }));
-  return { ...next, streaming: false };
 }
 
 export function applyEvent(
@@ -280,9 +286,26 @@ function messageFor(code: unknown, fallback: string): string {
   return (typeof code === "string" && MESSAGES[code]) || fallback;
 }
 
-/** The message for an error thrown by a turn: a token route refusal, read
- * from its `{detail: {code}}` body, or a network failure. */
+/** The assistant refused a turn before its stream opened. */
+class TurnRefused extends Error {
+  readonly status: number;
+
+  constructor(status: number) {
+    super(`turn refused (${status})`);
+    this.status = status;
+  }
+}
+
+/** The message for an error that ended a turn: the assistant's refusal, read
+ * from its HTTP status; a token route refusal, read from its
+ * `{detail: {code}}` body; or a network failure. */
 export function errorMessage(err: unknown): string {
+  if (err instanceof TurnRefused) {
+    return messageFor(
+      String(err.status),
+      `The assistant refused the message (${err.status}).`,
+    );
+  }
   if (!(err instanceof ApiError)) return "The assistant could not be reached.";
   const code = (err.detail as { detail?: { code?: unknown } } | null)?.detail
     ?.code;
@@ -328,22 +351,30 @@ function ensureScope(orgId: string | null, projectId: string): void {
 // ——— Transport ———
 
 /** Mints this message's token and posts the turn. The token lives only in
- * this call. */
+ * this call. A refusal from the token route passes through as it is; one from
+ * the assistant becomes a `TurnRefused`. */
 async function postTurn(
   projectId: string,
   body: string,
   signal: AbortSignal,
 ): Promise<Response> {
   const { token } = await assistantApi.token(projectId);
-  return fetch(`/v1/assistant/projects/${projectId}/turns`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body,
-    signal,
-  });
+  try {
+    return await send(
+      `/v1/assistant/projects/${projectId}/turns`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body,
+        signal,
+      },
+      false,
+    );
+  } catch (err) {
+    if (err instanceof UnauthenticatedError) throw new TurnRefused(401);
+    if (err instanceof ApiError) throw new TurnRefused(err.status);
+    throw err;
+  }
 }
 
 async function readStream(
@@ -369,30 +400,31 @@ async function runTurn(
   body: string,
   turn: AbortController,
 ): Promise<void> {
-  let res = await postTurn(projectId, body, turn.signal);
-  // An expired token, refused before any stream opened: mint another, once.
-  // A turn whose stream has opened is never retried; it ends with its events.
-  if (res.status === 401) res = await postTurn(projectId, body, turn.signal);
-  if (!res.ok || !res.body) {
-    const refusal = messageFor(
-      String(res.status),
-      `The assistant refused the message (${res.status}).`,
-    );
-    updateFromTurn(turn, (s) => endTurn(s, refusal));
-    return;
+  let res: Response;
+  try {
+    res = await postTurn(projectId, body, turn.signal);
+  } catch (err) {
+    // An expired token, refused before any stream opened: mint another, once.
+    // A turn whose stream has opened is never retried; it ends with its events.
+    if (!(err instanceof TurnRefused && err.status === 401)) throw err;
+    res = await postTurn(projectId, body, turn.signal);
   }
+  if (!res.body) throw new TurnRefused(res.status);
   await readStream(res.body, turn);
   updateFromTurn(turn, (s) =>
-    s.streaming
+    isStreaming(s)
       ? endTurn(s, "The connection closed before the answer finished.")
       : s,
   );
 }
 
 /** Sends a message on the store's project. Ignored while a turn runs. */
-async function send(message: string, editor: AssistantEditor): Promise<void> {
+async function sendMessage(
+  message: string,
+  editor: AssistantEditor,
+): Promise<void> {
   const state = useStore.getState();
-  if (!scope || state.streaming) return;
+  if (!scope || isStreaming(state)) return;
   const projectId = scope.projectId;
   const turn = new AbortController();
   activeTurn = turn;
@@ -402,7 +434,6 @@ async function send(message: string, editor: AssistantEditor): Promise<void> {
     editor,
   });
   useStore.setState({
-    streaming: true,
     messages: [
       ...state.messages,
       { id: randomId(), role: "user", content: message },
@@ -442,5 +473,10 @@ export function useAssistant({ projectId }: { projectId: string }) {
   useEffect(() => {
     ensureScope(orgId, projectId);
   }, [orgId, projectId]);
-  return { state, send, newChat: clearStore };
+  return {
+    state,
+    streaming: isStreaming(state),
+    send: sendMessage,
+    newChat: clearStore,
+  };
 }

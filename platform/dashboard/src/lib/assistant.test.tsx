@@ -183,7 +183,7 @@ describe("useAssistant", () => {
 
     const { state } = result.current;
     expect(state.sessionId).toBe("s1");
-    expect(state.streaming).toBe(false);
+    expect(result.current.streaming).toBe(false);
     expect(state.messages[1].content).toBe("Lowered the cap.");
     const turn = state.messages[1].turn;
     expect(turn?.tools[0]).toMatchObject({
@@ -211,7 +211,7 @@ describe("useAssistant", () => {
     expect(result.current.state.messages[1].turn?.error).toMatch(
       /send it again/,
     );
-    expect(result.current.state.streaming).toBe(false);
+    expect(result.current.streaming).toBe(false);
   });
 
   it("starts a paragraph for each text message of a turn", async () => {
@@ -239,6 +239,23 @@ describe("useAssistant", () => {
     );
   });
 
+  it("redirects on a 401 from the token mint and never retries it", async () => {
+    const redirect = vi
+      .spyOn(authRedirect, "toSignIn")
+      .mockImplementation(() => {});
+    const fetch = stubFetch({
+      token: () => new Response(null, { status: 401 }),
+    });
+    const { result } = renderAssistant();
+    await act(() => result.current.send("hi", EDITOR));
+
+    // The dashboard session itself has expired: the usual sign-in redirect.
+    expect(redirect).toHaveBeenCalledOnce();
+    expect(calls(fetch, "/assistant/token")).toHaveLength(1);
+    expect(calls(fetch, "/turns")).toHaveLength(0);
+    expect(result.current.streaming).toBe(false);
+  });
+
   it("never retries a turn whose stream has opened", async () => {
     const fetch = stubFetch({
       turn: () =>
@@ -254,7 +271,7 @@ describe("useAssistant", () => {
 
     expect(calls(fetch, "/assistant/token")).toHaveLength(1);
     expect(calls(fetch, "/turns")).toHaveLength(1);
-    expect(result.current.state.streaming).toBe(false);
+    expect(result.current.streaming).toBe(false);
   });
 
   it.each([
@@ -300,7 +317,7 @@ describe("useAssistant", () => {
     stubFetch({ turn: () => streamResponse(sse({ type: "RUN_STARTED" })) });
     const { result } = renderAssistant();
     await act(() => result.current.send("hi", EDITOR));
-    expect(result.current.state.streaming).toBe(false);
+    expect(result.current.streaming).toBe(false);
     expect(result.current.state.messages[1].turn?.error).toMatch(/closed/);
   });
 
@@ -351,11 +368,8 @@ describe("useAssistant", () => {
     const logout = renderHook(() => useLogout(), { wrapper });
     await act(() => logout.result.current.mutateAsync());
 
-    expect(result.current.state).toEqual({
-      sessionId: null,
-      messages: [],
-      streaming: false,
-    });
+    expect(result.current.state).toEqual({ sessionId: null, messages: [] });
+    expect(result.current.streaming).toBe(false);
   });
 
   it("empties on a project switch and on an org switch", async () => {
@@ -428,6 +442,6 @@ describe("useAssistant", () => {
     });
 
     expect(result.current.state.messages[1].turn?.error).toBeUndefined();
-    expect(result.current.state.streaming).toBe(true);
+    expect(result.current.streaming).toBe(true);
   });
 });
