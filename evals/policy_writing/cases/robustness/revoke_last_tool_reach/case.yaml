@@ -1,0 +1,6 @@
+agent: front-desk
+request: Billing may no longer call refund-bot as a tool. Nothing else changes.
+note: The removed entry is the policy's only reach rule. Deleting it turns both reach gates off, so refund-bot falls back to the refund_bot tool grant and every handoff reopens; an explicit deny keeps the gates on.
+expect:
+  decisions:
+    - { role: billing, tool: "agent.tool:refund-bot", args: {}, expect: deny }
