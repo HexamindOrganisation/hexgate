@@ -83,6 +83,24 @@ class OrgUpdate(BaseModel):
     assistant_mode: Optional[AssistantMode] = None
 
 
+class AssistantToken(BaseModel):
+    """``POST /v1/projects/{project_id}/assistant/token``: one message's token."""
+
+    token: str
+    expires_at: datetime
+    # Whether the token carries policy:apply, so the assistant may save.
+    can_write: bool
+
+
+class AssistantConfig(BaseModel):
+    """``GET /v1/projects/{project_id}/assistant/config``: what the tab shows."""
+
+    enabled: bool
+    mode: AssistantMode
+    can_write: bool
+    verified: bool
+
+
 class MemberRead(BaseModel):
     """Row in ``GET /v1/orgs/{org_id}/members``.
 
