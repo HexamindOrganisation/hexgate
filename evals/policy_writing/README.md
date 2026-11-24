@@ -334,7 +334,7 @@ changes report against this.
   (run with `MODEL` unset, which resolved to `claude-sonnet-5-5` in every
   sample's `modelUsage`; pin it, as the default may change).
 - Commit `d3ba8fe5` (clean tree), 2026-11-19, log
-  `2026-11-19T11-11-28-00-00_policy_writing_sonnet-5-5_epoch_3_all_d3ba8fe5_KTc6fpPvpnK7dvSRWV4Ar7.eval`
+  `2026-11-19T11-11-28-00-00_policy-writing_sonnet-5-5-epoch-3-all-d3ba8fe5_KTc6fpPvpnK7dvSRWV4Ar7.eval`
   (`logs/` is not committed; see *Skill versions* for where the logs are kept).
   105 of 105 samples scored, none errored or hit
   a limit. The sandbox has the skill but not the `docs/` pages it points at.
@@ -401,14 +401,16 @@ took 115 s and $0.075 at list price in v4, against 60 s and $0.061 in v0.
 The logs are not committed. They are kept in the Hexamind Google Drive under
 `01 - Hexamind/04 - Projects/21 - HexGate/evals/policy_writing/version_<v>/`,
 where the `v<v>` of a row below is its `version_<v>` folder, and named
-`<date>_policy_writing_<model>_epoch_<epochs>_<target>_<commit>_<Inspect id>.eval`,
-where `<commit>` is the commit the run recorded and `<target>` is the cases
-the run covered:
+`<date>_policy-writing_<model>-epoch-<epochs>-<target>-<commit>_<Inspect id>.eval`,
+where `<model>` is the model that ran, `<commit>` the commit the run recorded
+and `<target>` the cases the run covered. Only the three separators Inspect
+expects are `_` (date, task, fields, id), so Inspect View lists each log
+with its real task and id:
 
 | `<target>` | Cases |
 |---|---|
 | `all` | all 35 cases |
-| `must_refuse` | the `must_refuse` category |
+| `must-refuse` | the `must_refuse` category |
 | `targeted6` | the six cases not held out that the baseline failed: `agent_as_tool`, `file_paths`, `handoff_approval`, `reach_in_modules`, `l2b_roles_no_meaning`, `boundary_conflict` |
 | `admission-reach4` | `admission`, `admission_with_global_cap`, `agent_as_tool`, `handoff_approval` |
 | `revoke-last2` | `revoke_last_tool_reach`, `revoke_last_handoff` |
@@ -417,15 +419,15 @@ A copy can be checked by its SHA-256:
 
 | Run | Log | SHA-256 |
 |---|---|---|
-| v0, all | `2026-11-19T11-11-28-00-00_policy_writing_sonnet-5-5_epoch_3_all_d3ba8fe5_KTc6fpPvpnK7dvSRWV4Ar7.eval` | `09a43747c61af3a4ac26130a27ffb41c15eea99a922ae1574c3395730bbfe949` |
-| v1, six cases | `2026-11-19T16-54-54-00-00_policy_writing_sonnet-5-5_epoch_3_targeted6_ff258610_Pe3diL4Mt9zAUgAP2wJLub.eval` | `1a3069bc339e15a0833f65cb5204cc80084616441bff131772c7cddbc93d7efe` |
-| v2, six cases | `2026-11-19T17-17-03-00-00_policy_writing_sonnet-5-5_epoch_3_targeted6_ed61a299_849Y28oRLHZy2L5BvbByAS.eval` | `70392d199a51af344d51ae31feb63e1e69a3a457d3ea09fea9acd88c698f4500` |
-| v2, all | `2026-11-20T09-47-51-00-00_policy_writing_sonnet-5-5_epoch_3_all_ed61a299_NL9Wid9zDM49RbxhXfimHe.eval` | `55cd9aee1dc5e79e7ba530f2c558c9148482e018db42516818c91875ceb5c1d4` |
-| v3, `must_refuse` | `2026-11-20T11-01-47-00-00_policy_writing_sonnet-5-5_epoch_3_must_refuse_6772540a_MwxkCrNisYVebtkV6JLt3K.eval` | `fc9f92776f4c7cdd75909ffd5876e43940840b3810c485c5852a80a2c0c4b367` |
-| v3, all | `2026-11-20T11-08-51-00-00_policy_writing_sonnet-5-5_epoch_3_all_6772540a_KGME8iqF7buTVPDxXioQZn.eval` | `7ca34ca327f4cabecb55061c1b56a307ccbe082de4334d2128b50596c45bbbff` |
-| v4, four cases | `2026-11-20T12-14-23-00-00_policy_writing_sonnet-5-5_epoch_3_admission-reach4_95ebad96_gVy4Cqd5Wt7Zg45cJWmR2f.eval` | `d8f53446252a26e63ffa8a669b076e99935f8b61dfe290e511ad81e75a77e34b` |
-| v4, all | `2026-11-20T12-27-54-00-00_policy_writing_sonnet-5-5_epoch_3_all_95ebad96_kSCM64Q3anJtgVytdndaxQ.eval` | `8b716ca25de70ea33c6d824ea52d9a07b3c978b2de81df5784f4caa5af26552d` |
-| v4, two revoke cases | `2026-11-23T16-11-27-00-00_policy_writing_sonnet-5-5_epoch_3_revoke-last2_dc5996d7_Zq7DfLoCgQHsg5zvesWCKT.eval` | `610c2d8a351523eaf3698c5f0b6739e9cc84de1449996f1c50b20bda99ae075c` |
+| v0, all | `2026-11-19T11-11-28-00-00_policy-writing_sonnet-5-5-epoch-3-all-d3ba8fe5_KTc6fpPvpnK7dvSRWV4Ar7.eval` | `09a43747c61af3a4ac26130a27ffb41c15eea99a922ae1574c3395730bbfe949` |
+| v1, six cases | `2026-11-19T16-54-54-00-00_policy-writing_sonnet-5-5-epoch-3-targeted6-ff258610_Pe3diL4Mt9zAUgAP2wJLub.eval` | `1a3069bc339e15a0833f65cb5204cc80084616441bff131772c7cddbc93d7efe` |
+| v2, six cases | `2026-11-19T17-17-03-00-00_policy-writing_sonnet-5-5-epoch-3-targeted6-ed61a299_849Y28oRLHZy2L5BvbByAS.eval` | `70392d199a51af344d51ae31feb63e1e69a3a457d3ea09fea9acd88c698f4500` |
+| v2, all | `2026-11-20T09-47-51-00-00_policy-writing_sonnet-5-5-epoch-3-all-ed61a299_NL9Wid9zDM49RbxhXfimHe.eval` | `55cd9aee1dc5e79e7ba530f2c558c9148482e018db42516818c91875ceb5c1d4` |
+| v3, `must_refuse` | `2026-11-20T11-01-47-00-00_policy-writing_sonnet-5-5-epoch-3-must-refuse-6772540a_MwxkCrNisYVebtkV6JLt3K.eval` | `fc9f92776f4c7cdd75909ffd5876e43940840b3810c485c5852a80a2c0c4b367` |
+| v3, all | `2026-11-20T11-08-51-00-00_policy-writing_sonnet-5-5-epoch-3-all-6772540a_KGME8iqF7buTVPDxXioQZn.eval` | `7ca34ca327f4cabecb55061c1b56a307ccbe082de4334d2128b50596c45bbbff` |
+| v4, four cases | `2026-11-20T12-14-23-00-00_policy-writing_sonnet-5-5-epoch-3-admission-reach4-95ebad96_gVy4Cqd5Wt7Zg45cJWmR2f.eval` | `d8f53446252a26e63ffa8a669b076e99935f8b61dfe290e511ad81e75a77e34b` |
+| v4, all | `2026-11-20T12-27-54-00-00_policy-writing_sonnet-5-5-epoch-3-all-95ebad96_kSCM64Q3anJtgVytdndaxQ.eval` | `8b716ca25de70ea33c6d824ea52d9a07b3c978b2de81df5784f4caa5af26552d` |
+| v4, two revoke cases | `2026-11-23T16-11-27-00-00_policy-writing_sonnet-5-5-epoch-3-revoke-last2-dc5996d7_Zq7DfLoCgQHsg5zvesWCKT.eval` | `610c2d8a351523eaf3698c5f0b6739e9cc84de1449996f1c50b20bda99ae075c` |
 
 ## Adding a case
 
