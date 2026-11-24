@@ -241,6 +241,14 @@ jobs:
           NGINX_CHECK_REQUIRED: "1"
         run: make nginx-check
 
+      # The policy assistant's secrets reach only its own services. Here
+      # because this job already checks what the box applies; the runner
+      # ships docker compose and jq.
+      - name: Deploy compose secrets
+        env:
+          HEXGATE_COMPOSE_CHECK_REQUIRED: "1"
+        run: make compose-check
+
       # A checkout path with a space must not split the stub's include.
       - name: nginx-check from a path with a space
         env:
@@ -321,6 +329,14 @@ jobs:
         run: |
           cd platform/api && uv run pytest \
             tests/core/test_migrations.py -m integration -v
+
+      # Last, because it revokes CONNECT on hexgate from PUBLIC, a change the
+      # tests above should not run under. The script itself proves the server
+      # checks passwords on this address.
+      - name: The assistant's database script
+        run: |
+          PGHOST="$(hostname -I | awk '{print $1}')" PGUSER=hexgate PGPASSWORD=ci PGDATABASE=hexgate \
+            bash platform/scripts/assistant-db-check.sh
 
   dashboard:
     name: Dashboard

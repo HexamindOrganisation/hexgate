@@ -43,6 +43,9 @@ ALL_ROLES = {ROLE_OWNER, ROLE_ADMIN, ROLE_MEMBER}
 # anyone changes it. A string, like the roles; ``schemas.AssistantMode`` lists
 # the values ``PATCH /v1/orgs/{org_id}`` accepts.
 ASSISTANT_MODE_DEFAULT = "read_write"
+# The ``client_id`` of every token the API mints for the policy assistant. No
+# client row exists: the assistant compares this string.
+ASSISTANT_CLIENT_ID = "hexgate-dashboard-assistant"
 
 # OAuth 2.1 scopes an MCP client may request (the authorization server's
 # scope registry). An unknown scope at /authorize is ``invalid_scope``, never

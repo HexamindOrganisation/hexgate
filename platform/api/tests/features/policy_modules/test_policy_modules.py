@@ -2348,10 +2348,12 @@ def test_when_a_lint_names_an_agent_then_the_wire_names_it_in_the_message_too():
     # The dashboard shows the message, not the agent field: two agents' identical
     # lints must still read apart.
     from hexgate.security import PolicyLint
-    from hexgate_api.features.policy_modules.router import _lint_out
+    from hexgate_api.schemas import PolicyLintOut
 
-    named = _lint_out(PolicyLint("dead-grant", "warning", "m", agent="bot"))
-    generic = _lint_out(PolicyLint("dead-grant", "warning", "m"))
+    named = PolicyLintOut.from_lint(
+        PolicyLint("dead-grant", "warning", "m", agent="bot")
+    )
+    generic = PolicyLintOut.from_lint(PolicyLint("dead-grant", "warning", "m"))
 
     assert (named.agent, named.message) == ("bot", "agent 'bot': m")
     assert (generic.agent, generic.message) == (None, "m")
@@ -2360,7 +2362,7 @@ def test_when_a_lint_names_an_agent_then_the_wire_names_it_in_the_message_too():
 def test_when_a_lint_message_already_names_its_agent_then_it_is_not_prefixed():
     # A named column's link-error carries the agent in its LinkError text.
     from hexgate.security import AgentBinding, check_project
-    from hexgate_api.features.policy_modules.router import _lint_out
+    from hexgate_api.schemas import PolicyLintOut
 
     roles = {
         "default": {"*": AgentBinding()},
@@ -2368,7 +2370,7 @@ def test_when_a_lint_message_already_names_its_agent_then_it_is_not_prefixed():
     }
     (lint,) = [x for x in check_project([], [], roles) if x.code == "link-error"]
 
-    out = _lint_out(lint)
+    out = PolicyLintOut.from_lint(lint)
 
     assert out.message == lint.message
     assert out.message.count("'billing_bot'") == 1

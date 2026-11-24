@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Final, Literal, Optional
@@ -80,6 +81,24 @@ class OrgUpdate(BaseModel):
         pattern=r"^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$",
     )
     assistant_mode: Optional[AssistantMode] = None
+
+
+class AssistantToken(BaseModel):
+    """``POST /v1/projects/{project_id}/assistant/token``: one message's token."""
+
+    token: str
+    expires_at: datetime
+    # Whether the token carries policy:apply, so the assistant may save.
+    can_write: bool
+
+
+class AssistantConfig(BaseModel):
+    """``GET /v1/projects/{project_id}/assistant/config``: what the tab shows."""
+
+    enabled: bool
+    mode: AssistantMode
+    can_write: bool
+    verified: bool
 
 
 class MemberRead(BaseModel):
@@ -555,6 +574,17 @@ class PolicyLintOut(BaseModel):
     tool: str | None = None
     role: str | None = None
     agent: str | None = None
+
+    @classmethod
+    def from_lint(cls, lint: Any) -> "PolicyLintOut":
+        """An SDK ``PolicyLint`` as its wire model. A named agent's lint also
+        names it in the message, which is what the dashboard shows, unless the
+        message names it already (a column's ``link-error`` from
+        ``resolve_role_map``)."""
+        out = cls(**asdict(lint))
+        if lint.agent is not None and f"agent {lint.agent!r}" not in lint.message:
+            out.message = f"agent {lint.agent!r}: {lint.message}"
+        return out
 
 
 class PolicyCheckResponse(BaseModel):

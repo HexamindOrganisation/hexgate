@@ -44,7 +44,8 @@ _API_PATH_HEADS = frozenset(
 # overlay its Approve button, and its URL carries the MCP client's state and
 # PKCE challenge, which no Referer to another site may leak. Not no-referrer:
 # under it a browser sends ``Origin: null`` on same-origin POSTs, and the
-# consent POST's dashboard-origin check refuses that (test_consent.py).
+# dashboard-origin check (deps/origin.py) on the consent and assistant-token
+# POSTs refuses that (test_consent.py, tests/features/assistant/test_router.py).
 _PAGE_HEADERS = {
     "X-Frame-Options": "DENY",
     "Content-Security-Policy": "frame-ancestors 'none'",

@@ -19,6 +19,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from hexgate_api.constants import OAUTH_SCOPE_DESCRIPTIONS
 from hexgate_api.core.db import get_session
 from hexgate_api.deps.identity import require_user
+from hexgate_api.deps.origin import require_dashboard_origin
 from hexgate_api.features.oauth.authorization import CheckedAuthorization
 from hexgate_api.features.oauth.grants import (
     issue_code,
@@ -37,35 +38,8 @@ from hexgate_api.features.oauth.schemas import (
     Grant,
 )
 from hexgate_api.models import Organization, OrganizationMember, Project, User, as_utc
-from hexgate_api.settings import get_settings
 
 router = APIRouter(prefix="/oauth", tags=["oauth"])
-
-
-def _origin(url: str) -> str | None:
-    """``url``'s origin as a browser serialises it: lowercase, no default port."""
-    parts = urlsplit(url)
-    try:
-        port = parts.port
-    except ValueError:
-        return None
-    if not parts.hostname:
-        return None
-    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
-    scheme = parts.scheme.lower()
-    if port is None or (scheme, port) in {("http", 80), ("https", 443)}:
-        return f"{scheme}://{host}"
-    return f"{scheme}://{host}:{port}"
-
-
-def _require_dashboard_origin(origin: str | None = Header(default=None)) -> None:
-    """Refuse a consent POST sent from any page but the dashboard's."""
-    expected = _origin(get_settings().dashboard_url)
-    # None on both sides (a malformed setting, Origin: null) is not a match.
-    if expected is None or origin is None or _origin(origin) != expected:
-        raise HTTPException(
-            status_code=403, detail="consent must come from the dashboard"
-        )
 
 
 def _require_json(content_type: str | None = Header(default=None)) -> None:
@@ -121,7 +95,7 @@ async def _user_projects(
     # shape (FastAPI runs it once; the handler's user is the cached result).
     dependencies=[
         Depends(require_user),
-        Depends(_require_dashboard_origin),
+        Depends(require_dashboard_origin),
         Depends(_require_json),
     ],
 )
