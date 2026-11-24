@@ -14,6 +14,8 @@ dependencies = [
     # pinned the same way platform/mcp pins them.
     "starlette>=0.40",
     "uvicorn>=0.32",
+    # lock.py shields the release of a cancelled turn's lock.
+    "anyio>=4",
     # Fetches the API's JWKS.
     "httpx>=0.27.1",
     # Verifies the API's EdDSA access tokens; [crypto] pulls in cryptography
