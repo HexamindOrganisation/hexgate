@@ -313,6 +313,16 @@ for, and its `usage.modelUsage` which one ran.
 
 At most `MAX_SANDBOXES` (default 4) samples run at once: each sandbox is a full Claude Code, and more than about four on a laptop makes every case time out. An empty `MAX_SANDBOXES=` falls back to Inspect's default.
 
+Each run's log is named
+`<created>_policy-writing_<model>-epoch-<n>-<target>-<commit>_<id>.eval`:
+`<model>` is `MODEL` without `claude-` (`default` when unset), `<target>` is
+`TARGET` if given, else `CASES` (`all` when empty), with `/` and `_` turned
+into `-` and `,` into `+`, and `<commit>` is the short commit with `-dirty`
+when the tree has changes, the same test as the log's own `eval.revision`.
+Inspect lists a log by splitting its name on `_` into created, task, and id,
+so the fields in between are joined with `-`. Name a selection of cases with
+`TARGET`, e.g. `make policy-eval CASES=must_refuse,security TARGET=refusals`.
+
 The container has no route out: its only network is internal, and a `proxy`
 sidecar (`squid.conf`) tunnels to `api.anthropic.com:443` and refuses anything
 else, so direct connections reach only `api.anthropic.com:443`. The token is
