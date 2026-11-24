@@ -19,3 +19,8 @@ const twMerge = extendTailwindMerge({
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
+
+/** A short random id for a client-side list key; not unique across tabs. */
+export function randomId(): string {
+  return Math.random().toString(36).slice(2, 10);
+}

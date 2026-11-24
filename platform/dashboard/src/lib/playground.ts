@@ -4,6 +4,7 @@ import type {
   ChatToolCall,
   ChatTurn,
 } from "@/components/chat/types";
+import { randomId } from "./utils";
 
 export type ToolCallState = "started" | "completed" | "failed";
 export type BlockType = "text" | "reasoning" | "tool_call";
@@ -644,8 +645,4 @@ function applyEvent(
     default:
       return state;
   }
-}
-
-function randomId(): string {
-  return Math.random().toString(36).slice(2, 10);
 }
