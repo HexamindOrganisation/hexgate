@@ -36,7 +36,9 @@ from hexgate_api.schemas import PolicyFileDraft, PolicyLintOut
 if TYPE_CHECKING:  # the SDK is imported lazily at run time
     from hexgate.security import PolicyLint
 
-CheckId = Literal["yaml", "composes", "lints", "dry_runs", "boundary"]
+# ``bundle`` is not run here: the caller reports it, after building the
+# bundles from the saved files (see ``apply.py``).
+CheckId = Literal["yaml", "composes", "lints", "dry_runs", "boundary", "bundle"]
 Status = Literal["pass", "warn", "fail", "skipped"]
 
 # A check lists at most this many items; its detail counts the rest.

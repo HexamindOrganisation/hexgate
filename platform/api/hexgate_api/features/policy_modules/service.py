@@ -69,6 +69,21 @@ class NoPolicyStoreError(Exception):
     enforce their own ``policy_yaml``, which the store's reads don't see."""
 
 
+class NoEntryFileError(Exception):
+    """A change applied to a project with no stored entry file (→ 409
+    ``layout``): it enforces from the module store or each agent's own policy,
+    and a first ``policy.yaml`` would switch every agent onto the file store."""
+
+
+class StaleBaseError(Exception):
+    """Files whose stored text is no longer what the caller read (→ 409
+    ``stale``). ``files`` names them, in request order."""
+
+    def __init__(self, files: list[str]) -> None:
+        super().__init__(f"changed since read: {files}")
+        self.files = files
+
+
 class ChangeNotFoundError(Exception):
     """No applied change with that id in this project (→ 404)."""
 
@@ -890,14 +905,7 @@ async def upsert_file(
     chash = _content_hash(content)
     row = await get_file(session, project_id, name)
     if row is None:
-        row = PolicyFile(
-            id=new_id(PolicyFile),
-            project_id=project_id,
-            name=name,
-            content=content,
-            content_hash=chash,
-            created_by_user_id=actor_user_id,
-        )
+        row = _new_file_row(project_id, name, content, chash, actor_user_id)
         session.add(row)
         try:
             await session.flush()
@@ -905,14 +913,7 @@ async def upsert_file(
             await session.rollback()
             row = await get_file(session, project_id, name)
             if row is None:  # the racing row was deleted between — re-create
-                row = PolicyFile(
-                    id=new_id(PolicyFile),
-                    project_id=project_id,
-                    name=name,
-                    content=content,
-                    content_hash=chash,
-                    created_by_user_id=actor_user_id,
-                )
+                row = _new_file_row(project_id, name, content, chash, actor_user_id)
                 session.add(row)
             else:
                 _apply_file_edit(row, content, chash, actor_user_id)
@@ -922,14 +923,79 @@ async def upsert_file(
     return row
 
 
+def stage_file(
+    session: AsyncSession,
+    row: PolicyFile | None,
+    *,
+    project_id: str,
+    name: str,
+    content: str,
+    actor_user_id: str,
+    change_id: str,
+) -> None:
+    """Write ``content`` to ``row``, or to a new row when ``row`` is None, as
+    part of the applied change ``change_id``. Neither flushes nor commits: the
+    caller writes the whole change in one transaction."""
+    chash = _content_hash(content)
+    if row is None:
+        row = _new_file_row(project_id, name, content, chash, actor_user_id)
+    _apply_file_edit(row, content, chash, actor_user_id, change_id)
+    session.add(row)
+
+
+def _new_file_row(
+    project_id: str, name: str, content: str, content_hash: str, actor_user_id: str
+) -> PolicyFile:
+    """A file row not stored yet, credited to its creator."""
+    return PolicyFile(
+        id=new_id(PolicyFile),
+        project_id=project_id,
+        name=name,
+        content=content,
+        content_hash=content_hash,
+        created_by_user_id=actor_user_id,
+    )
+
+
+async def rebuild_bundles(
+    session: AsyncSession, project_id: str, *, commit: bool = True
+) -> int | None:
+    """Rebuild every agent's bundle from the project's stored policy (its
+    files, its role bindings, or each agent's own policy): the number built,
+    or None when they could not be built, live bundles then untouched. An opa
+    or signing failure does not raise: ``compile_bundle`` turns it into a
+    missing bundle and ``recompile_project`` into None. What raises out of
+    ``recompile_project`` is a database or commit error, which this logs and
+    also answers None. See ``agents.service.recompile_project``.
+
+    A plain file, module or role save calls it best-effort and ignores the
+    result: the stored row is the source of truth and the bundle a derived
+    artifact, left untouched when it cannot be built (R-POL-002). A change
+    that must not land without its bundle checks for None and rolls back."""
+    from hexgate_api.core.keystore import keystore
+    from hexgate_api.features.agents.service import recompile_project
+
+    try:
+        return await recompile_project(
+            session, project_id, keystore.sign, commit=commit
+        )
+    except Exception:  # noqa: BLE001 — any build failure is "not built"
+        logger.exception("bundle rebuild failed for project %s", project_id)
+        return None
+
+
 def _apply_file_edit(
-    row: PolicyFile, content: str, content_hash: str, actor_user_id: str
+    row: PolicyFile,
+    content: str,
+    content_hash: str,
+    actor_user_id: str,
+    change_id: str | None = None,
 ) -> None:
     row.content = content
     row.content_hash = content_hash
     row.updated_at = utcnow()
     row.updated_by_user_id = actor_user_id
-    row.updated_via_change_id = None
+    row.updated_via_change_id = change_id
 
 
 async def delete_file(session: AsyncSession, *, project_id: str, name: str) -> bool:
