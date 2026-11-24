@@ -166,9 +166,21 @@ CASES ?= explicit_request/support_refund_cap
 EPOCHS ?= 3
 MODEL ?=
 MAX_SANDBOXES ?= 4
+TARGET ?=
+
+# Log name: <created>_policy-writing_<model>-epoch-<n>-<target>-<commit>_<id>.eval.
+# Inspect prefixes <created> and splits the name on "_" to list logs as
+# <created>_<task>_<...>_<id>, so the middle part joins its fields with "-".
+comma := ,
+EVAL_LOG_MODEL = $(subst _,-,$(patsubst claude-%,%,$(or $(MODEL),default)))
+EVAL_LOG_TARGET = $(subst _,-,$(subst /,-,$(subst $(comma),+,$(or $(TARGET),$(CASES),all))))
+# Same commit and dirty test as Inspect's own `eval.revision` (`git rev-parse
+# --short HEAD`, `git status --porcelain`), so the name and the header agree.
+EVAL_LOG_COMMIT = $(shell git rev-parse --short HEAD)$(shell test -z "$$(git status --porcelain)" || echo -dirty)
 
 .PHONY: policy-eval
-policy-eval: ## Run the policy-writing eval with Claude Code in Docker: CASES=<id prefixes> (one case by default, every run bills the Claude subscription), EPOCHS=<n> (default 3), MODEL=<id> (Claude Code's --model, default the subscription's), MAX_SANDBOXES=<n> (default 4, an empty MAX_SANDBOXES= falls back to Inspect's default), needs CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`; results in `inspect view --log-dir evals/policy_writing/logs`
+policy-eval: ## Run the policy-writing eval with Claude Code in Docker: CASES=<id prefixes> (one case by default, every run bills the Claude subscription), EPOCHS=<n> (default 3), MODEL=<id> (Claude Code's --model, default the subscription's), MAX_SANDBOXES=<n> (default 4, an empty MAX_SANDBOXES= falls back to Inspect's default), TARGET=<name> (the log name's target, default CASES or `all`), needs CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`; results in `inspect view --log-dir evals/policy_writing/logs`
+	INSPECT_EVAL_LOG_FILE_PATTERN='{task}_$(EVAL_LOG_MODEL)-epoch-$(EPOCHS)-$(EVAL_LOG_TARGET)-$(EVAL_LOG_COMMIT)_{id}' \
 	$(UV) python -m inspect_ai eval evals/policy_writing/task.py --model none -T agent=claude \
 	  -T cases=$(CASES) $(if $(MODEL),-T model=$(MODEL)) --epochs $(EPOCHS) --epochs-reducer mean,at_least_$(EPOCHS) \
 	  $(if $(MAX_SANDBOXES),--max-sandboxes $(MAX_SANDBOXES)) --log-dir evals/policy_writing/logs
