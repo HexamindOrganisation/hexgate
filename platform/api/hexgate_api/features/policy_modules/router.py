@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -26,6 +25,7 @@ from hexgate_api.deps.project import require_project_admin
 from hexgate_api.features.policy_modules import coverage, diff, service, similar
 from hexgate_api.models import OrganizationMember, PolicyFile, PolicyModule, User
 from hexgate_api.schemas import (
+    ChangeRead,
     PolicyCheckRequest,
     PolicyCheckResponse,
     PolicyCoverageResponse,
@@ -51,13 +51,6 @@ from hexgate_api.schemas import (
 
 if TYPE_CHECKING:  # the SDK is imported lazily at run time
     from hexgate.security import PolicyLint
-
-# SDK Verdict.outcome enum name → the wire string the editor expects.
-_OUTCOME_WIRE = {
-    "ALLOW": "allow",
-    "DENY": "deny",
-    "NEEDS_APPROVAL": "approval_required",
-}
 
 router = APIRouter()
 
@@ -483,16 +476,6 @@ async def api_delete_policy_file(
     return Response(status_code=204)
 
 
-def _lint_out(lint: PolicyLint) -> PolicyLintOut:
-    """An SDK ``PolicyLint`` as its wire model. A named agent's lint also names
-    it in the message, which is what the dashboard shows, unless the message
-    names it already (a column's ``link-error`` from ``resolve_role_map``)."""
-    out = PolicyLintOut(**asdict(lint))
-    if lint.agent is not None and f"agent {lint.agent!r}" not in lint.message:
-        out.message = f"agent {lint.agent!r}: {lint.message}"
-    return out
-
-
 @router.post(
     "/projects/{project_id}/policy/preview",
     openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
@@ -513,7 +496,7 @@ async def api_preview_policy(
     return PolicyPreviewResponse(
         resolved=resolved,
         matrix=PolicyMatrixResponse(**matrix) if matrix else None,
-        lints=[_lint_out(x) for x in lints],
+        lints=[PolicyLintOut.from_lint(x) for x in lints],
     )
 
 
@@ -604,7 +587,7 @@ async def api_check_policy_drafts(
 
 
 def _check_response(lints: list[PolicyLint]) -> PolicyCheckResponse:
-    out = [_lint_out(x) for x in lints]
+    out = [PolicyLintOut.from_lint(x) for x in lints]
     ok = not any(lint.severity == "error" for lint in out)
     return PolicyCheckResponse(ok=ok, lints=out)
 
@@ -759,6 +742,29 @@ async def api_diff_policy(
     return PolicyDiffResponse(**out)
 
 
+@router.get(
+    "/projects/{project_id}/policy/changes/{change_id}",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
+    tags=["policy"],
+)
+async def api_read_policy_change(
+    project_id: str,
+    change_id: str,
+    _user: User = Depends(require_org_member),
+    session: AsyncSession = Depends(get_session),
+) -> ChangeRead:
+    """One applied policy change: its files before and after, the checks it
+    passed and its effect per role. 404 for an unknown id and for a change of
+    another project alike (``service.get_change``)."""
+    try:
+        change = await service.get_change(
+            session, project_id=project_id, change_id=change_id
+        )
+    except service.ChangeNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="change not found") from exc
+    return ChangeRead.model_validate(change, from_attributes=True)
+
+
 @router.post(
     "/projects/{project_id}/policy/test",
     openapi_extra={OAUTH_SCOPE_KEY: "policy:read"},
@@ -791,22 +797,12 @@ async def api_test_policy(
         ) from exc
     except service.DraftWithoutEntryError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except service.UndeclaredAgentError as exc:
-        role, agent, declared = exc.args
-        raise HTTPException(
-            status_code=404,
-            detail=f"agent {agent!r} is not declared in the policy (declared: "
-            f"{declared}), so role {role!r} was looked up under the generic "
-            '"*" view, which does not define it',
-        ) from exc
     except service.UnknownRoleError as exc:
-        raise HTTPException(
-            status_code=404, detail=f"role {exc.args[0]!r} not defined"
-        ) from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     verdict = dry_run.verdict
     return PolicyTestResponse(
-        outcome=_OUTCOME_WIRE.get(verdict.outcome.name, verdict.outcome.name.lower()),
+        outcome=service.verdict_outcome(verdict),
         reason=verdict.reason,
         violations=[str(v) for v in (verdict.violations or [])],
         # Verdict.hint is a machine-readable dict (file-scope path hint); the wire

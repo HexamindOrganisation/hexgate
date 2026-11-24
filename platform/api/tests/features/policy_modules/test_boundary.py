@@ -14,7 +14,10 @@ from hexgate.security.compose.grammar import (
 from hexgate.security.modules import LinkError
 
 from hexgate_api.features.policy_modules import boundary
-from hexgate_api.features.policy_modules.boundary import boundary_changes
+from hexgate_api.features.policy_modules.boundary import (
+    boundary_changes,
+    compare_boundaries,
+)
 from hexgate_api.features.policy_modules.seed_data import SEED_POLICY_FILES
 from hexgate_api.features.policy_modules.service import InvalidModuleError
 
@@ -556,3 +559,36 @@ def test_when_block_does_not_lower_then_link_error(block: str, side: str) -> Non
     saved, drafted = (bad, good) if side == "saved" else (good, bad)
     with pytest.raises(LinkError, match="policy.yaml"):
         boundary_changes(saved, drafted)
+
+
+_RESERVED = "boundary:\n  tools:\n    agent.run: { mode: allow }\n"
+_FINE = "boundary:\n  tools:\n    refund: { mode: allow }\n"
+
+
+def test_when_a_saved_block_outside_the_entry_does_not_lower_then_uncompared() -> None:
+    saved = {**_tool("{}"), "loose.yaml": _RESERVED}
+    comparison = compare_boundaries(saved, {**saved, "loose.yaml": _FINE})
+    assert comparison.uncompared == ["loose.yaml"]
+    assert comparison.changes == []
+
+
+def test_when_the_saved_entry_block_does_not_lower_then_link_error() -> None:
+    with pytest.raises(LinkError, match="policy.yaml"):
+        compare_boundaries(
+            _entry("  tools:\n    agent.run: { mode: allow }\n"), _tool("{}")
+        )
+
+
+def test_when_both_sides_do_not_lower_then_the_drafted_side_raises() -> None:
+    saved = {**_tool("{}"), "loose.yaml": _RESERVED}
+    with pytest.raises(LinkError, match="loose.yaml"):
+        compare_boundaries(saved, {**saved, "loose.yaml": _RESERVED + "    x: {}\n"})
+
+
+def test_when_a_saved_block_outside_the_entry_does_not_lower_then_boundary_changes_raises() -> (
+    None
+):
+    # Only compare_boundaries lets a saved block go uncompared.
+    saved = {**_tool("{}"), "loose.yaml": _RESERVED}
+    with pytest.raises(LinkError, match="loose.yaml"):
+        boundary_changes(saved, {**saved, "loose.yaml": _FINE})

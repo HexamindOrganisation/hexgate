@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Final, Literal, Optional
@@ -80,6 +81,24 @@ class OrgUpdate(BaseModel):
         pattern=r"^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$",
     )
     assistant_mode: Optional[AssistantMode] = None
+
+
+class AssistantToken(BaseModel):
+    """``POST /v1/projects/{project_id}/assistant/token``: one message's token."""
+
+    token: str
+    expires_at: datetime
+    # Whether the token carries policy:apply, so the assistant may save.
+    can_write: bool
+
+
+class AssistantConfig(BaseModel):
+    """``GET /v1/projects/{project_id}/assistant/config``: what the tab shows."""
+
+    enabled: bool
+    mode: AssistantMode
+    can_write: bool
+    verified: bool
 
 
 class MemberRead(BaseModel):
@@ -556,6 +575,17 @@ class PolicyLintOut(BaseModel):
     role: str | None = None
     agent: str | None = None
 
+    @classmethod
+    def from_lint(cls, lint: Any) -> "PolicyLintOut":
+        """An SDK ``PolicyLint`` as its wire model. A named agent's lint also
+        names it in the message, which is what the dashboard shows, unless the
+        message names it already (a column's ``link-error`` from
+        ``resolve_role_map``)."""
+        out = cls(**asdict(lint))
+        if lint.agent is not None and f"agent {lint.agent!r}" not in lint.message:
+            out.message = f"agent {lint.agent!r}: {lint.message}"
+        return out
+
 
 class PolicyCheckResponse(BaseModel):
     """Lints over the resolved project, diagnostics-as-data (always 200)."""
@@ -775,13 +805,54 @@ class PolicyComposesOut(BaseModel):
 
 class PolicyDiffResponse(BaseModel):
     """Only what changes. Empty lists with ``composes`` false on a side mean that
-    side does not compose, so there was nothing to compare."""
+    side does not compose, so there was nothing to compare.
+
+    Also the stored shape of ``assistant_change.effect``, read back through
+    ``ChangeRead``: those rows are kept for the project's lifetime, so a new
+    field here, or in a model nested in it, needs a default, and nothing is
+    renamed or removed."""
 
     changes: list[PolicyChangeOut] = Field(default_factory=list)
     agent_changes: list[PolicyAgentChangeOut] = Field(default_factory=list)
     gate_changes: list[PolicyGateChangeOut] = Field(default_factory=list)
     agents_affected: list[str] = Field(default_factory=list)
     composes: PolicyComposesOut
+
+
+class ChangeFileOut(BaseModel):
+    """One file of an applied change. The ``before`` side is null for a file
+    the change created."""
+
+    name: str
+    before_content: str | None
+    before_hash: str | None
+    after_content: str
+    after_hash: str
+
+
+class ChangeRead(BaseModel):
+    """One applied policy change. ``samples``, ``checks`` and
+    ``boundary_changes`` are returned as they were recorded; ``effect`` is the
+    per-role diff computed before the save, read back as a diff response."""
+
+    id: str
+    project_id: str
+    session_id: str | None
+    created_by_user_id: str | None
+    client_id: str | None
+    summary: str
+    created_at: datetime
+    files: list[ChangeFileOut]
+    samples: list[dict[str, Any]]
+    checks: list[dict[str, Any]]
+    boundary_changes: list[dict[str, Any]]
+    effect: PolicyDiffResponse
+
+    @field_validator("created_at")
+    @classmethod
+    def _assume_utc(cls, v: datetime) -> datetime:
+        # SQLite hands back a naive datetime; the column is stored as UTC.
+        return as_utc(v)
 
 
 class PolicyTestResponse(BaseModel):

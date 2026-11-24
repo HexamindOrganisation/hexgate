@@ -23,7 +23,14 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from hexgate_api.core.ids import new_id
-from hexgate_api.models import Agent, PolicyFile, PolicyModule, RoleBinding, utcnow
+from hexgate_api.models import (
+    Agent,
+    AssistantChange,
+    PolicyFile,
+    PolicyModule,
+    RoleBinding,
+    utcnow,
+)
 
 if TYPE_CHECKING:  # the SDK is imported lazily at run time
     from hexgate.security import PolicyLint, Verdict
@@ -62,6 +69,10 @@ class NoPolicyStoreError(Exception):
     enforce their own ``policy_yaml``, which the store's reads don't see."""
 
 
+class ChangeNotFoundError(Exception):
+    """No applied change with that id in this project (→ 404)."""
+
+
 class UnknownAgentError(Exception):
     """An agent the project neither declares nor has registered (→ 404)."""
 
@@ -74,11 +85,44 @@ class UnknownRoleError(Exception):
     unrelated missing key — which should surface as a 500, not a phantom 404.
     """
 
+    def __str__(self) -> str:
+        return f"role {self.args[0]!r} not defined"
+
 
 class UndeclaredAgentError(UnknownRoleError):
     """An unknown role looked up for an agent the policy does not declare: the
     agent resolved under the generic ``"*"`` view, so a mistyped agent, not the
     role, is the likelier cause. ``args``: the role, the agent, the declared."""
+
+    def __str__(self) -> str:
+        role, agent, declared = self.args
+        return (
+            f"agent {agent!r} is not declared in the policy (declared: {declared}), "
+            f'so role {role!r} was looked up under the generic "*" view, which '
+            "does not define it"
+        )
+
+
+async def get_change(
+    session: AsyncSession, *, project_id: str, change_id: str
+) -> AssistantChange:
+    """One applied change, scoped to its project.
+
+    Scoped by project rather than fetched by primary key: a change of another
+    project, in this org or another, must read as absent, never as a refusal
+    that confirms the id exists.
+    """
+    change = (
+        await session.exec(
+            select(AssistantChange).where(
+                AssistantChange.id == change_id,
+                AssistantChange.project_id == project_id,
+            )
+        )
+    ).first()
+    if change is None:
+        raise ChangeNotFoundError(change_id)
+    return change
 
 
 def text_hash(content: str) -> str:
@@ -791,17 +835,26 @@ async def compose_resolve(
     return _resolve_files(await _files_map(session, project_id), agent)
 
 
-def validate_compose_file(content: str) -> None:
+def validate_compose_file(content: str, source: str = "<file>") -> None:
     """Structural check: the file parses as a compose document (raises
-    :class:`InvalidModuleError` → HTTP 422). Checked before resolution so a
-    malformed file returns 422, not the 409 an unresolvable-but-valid file gets."""
+    :class:`InvalidModuleError` → HTTP 422, its message prefixed with ``source``).
+    Checked before resolution so a malformed file returns 422, not the 409 an
+    unresolvable-but-valid file gets."""
     from hexgate.security.compose import parse_entry
     from hexgate.security.modules import LinkError
 
     try:
-        parse_entry(content, source="<file>")
+        parse_entry(content, source=source)
     except LinkError as exc:
         raise InvalidModuleError(str(exc)) from exc
+    except RecursionError as exc:  # YAML nested past the interpreter's stack
+        raise InvalidModuleError(f"{source}: nested too deeply") from exc
+    except ValueError as exc:  # a YAML timestamp that is no date (2026-02-30)
+        raise InvalidModuleError(f"{source}: {exc}") from exc
+    # What the YAML loader raises for a tagged scalar it cannot read:
+    # !!timestamp "abc", !!bool "abc", !!int "".
+    except (AttributeError, KeyError, IndexError) as exc:
+        raise InvalidModuleError(f"{source}: unreadable tagged scalar") from exc
 
 
 async def project_resolves_with_file(
@@ -974,15 +1027,16 @@ def _compose_lints(resolved: dict, manifests: dict) -> list[PolicyLint]:
     file, which the resolved form no longer tells apart.
 
     A named agent's lint is tagged with the agent and dropped only when the
-    ``"*"`` view already reported it (a top-level rule every agent shares), so two
-    named agents with the same defect each report it."""
+    ``"*"`` view already reported it at the same severity (a top-level rule every
+    agent shares), so two named agents with the same defect each report it, and
+    an agent's error is kept beside a ``"*"`` warning of the same text."""
     from dataclasses import replace
 
     from hexgate.security import analyze_policy
     from hexgate.security.analyzer import SEVERITY_RANK
 
     def key(lint) -> tuple:
-        return (lint.code, lint.message, lint.tool, lint.role)
+        return (lint.code, lint.severity, lint.message, lint.tool, lint.role)
 
     generic = analyze_policy(resolved[DEFAULT_AGENT].policy_set, source=ENTRY_FILE)
     shared = {key(lint) for lint in generic}
@@ -1210,6 +1264,21 @@ class DryRun:
     verdict: Verdict
     agent_declared: bool
     declared_agents: list[str]
+
+
+# SDK Verdict.outcome enum name → the wire string the editor expects.
+_OUTCOME_WIRE = {
+    "ALLOW": "allow",
+    "DENY": "deny",
+    "NEEDS_APPROVAL": "approval_required",
+}
+
+
+def verdict_outcome(verdict: Verdict) -> str:
+    """A verdict's outcome as its wire string: ``allow``, ``deny`` or
+    ``approval_required``."""
+    name = verdict.outcome.name
+    return _OUTCOME_WIRE.get(name, name.lower())
 
 
 def _named_agents(declared: Iterable[str], registered: Iterable[str]) -> list[str]:

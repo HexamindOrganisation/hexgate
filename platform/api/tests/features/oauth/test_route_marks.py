@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 
 import pytest
+import pytest_asyncio
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
@@ -28,6 +29,7 @@ from hexgate_api.constants import (
 )
 from hexgate_api.deps.identity import require_user
 from hexgate_api.main import app
+from hexgate_api.models import AssistantChange
 from tests.features.oauth.conftest import mint
 
 _P = "/v1/projects/{project_id}"
@@ -49,6 +51,7 @@ REGISTRY = {
     ("POST", f"{_P}/policy/diff"): _READ,
     ("GET", f"{_P}/policy/risk-facts"): _READ,
     ("POST", f"{_P}/policy/test"): _READ,
+    ("GET", f"{_P}/policy/changes/{{change_id}}"): _READ,
     ("PUT", f"{_P}/policy-files/{{name:path}}"): {OAUTH_SCOPE_KEY: "policy:write"},
     ("GET", f"{_P}/audit/decisions"): {OAUTH_SCOPE_KEY: "audit:read"},
     ("GET", f"{_P}/agents/manifest"): {OAUTH_SCOPE_KEY: "agents:read"},
@@ -59,7 +62,14 @@ REGISTRY = {
 
 _SCOPE_REFUSED = "token scope does not cover this route"
 _PATH_PARAM = re.compile(r"\{(\w+)(?::\w+)?\}")
-_PARAM_VALUES = {"project_id": DEFAULT_PROJECT_ID, "org_id": DEFAULT_ORG_ID}
+# A change stored in the default project (the ``seeded_change`` fixture): its
+# route answers 404 for any other id, which the marked-route test would fail.
+_CHANGE_ID = "chg_route_marks"
+_PARAM_VALUES = {
+    "project_id": DEFAULT_PROJECT_ID,
+    "org_id": DEFAULT_ORG_ID,
+    "change_id": _CHANGE_ID,
+}
 
 
 def _endpoints() -> list[tuple[str, APIRoute]]:
@@ -105,6 +115,24 @@ UNMARKED_OTHER = _params(
 )
 
 
+@pytest_asyncio.fixture
+async def seeded_change(session_factory) -> None:
+    async with session_factory() as session:
+        session.add(
+            AssistantChange(
+                id=_CHANGE_ID,
+                project_id=DEFAULT_PROJECT_ID,
+                summary="seeded",
+                files=[],
+                samples=[],
+                checks=[],
+                boundary_changes=[],
+                effect={"composes": {"before": True, "after": True}},
+            )
+        )
+        await session.commit()
+
+
 @pytest.fixture
 def token() -> str:
     return mint(scopes=sorted(OAUTH_SCOPES))
@@ -139,6 +167,7 @@ def test_when_route_is_marked_then_it_names_registered_scopes_and_a_project(
 
 
 @pytest.mark.parametrize(("method", "route"), MARKED)
+@pytest.mark.usefixtures("seeded_change")
 def test_when_route_is_marked_then_require_user_accepts_the_token(
     client: TestClient, token: str, method, route
 ) -> None:
