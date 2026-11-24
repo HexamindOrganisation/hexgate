@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Final, Literal, Optional
@@ -573,6 +574,17 @@ class PolicyLintOut(BaseModel):
     tool: str | None = None
     role: str | None = None
     agent: str | None = None
+
+    @classmethod
+    def from_lint(cls, lint: Any) -> "PolicyLintOut":
+        """An SDK ``PolicyLint`` as its wire model. A named agent's lint also
+        names it in the message, which is what the dashboard shows, unless the
+        message names it already (a column's ``link-error`` from
+        ``resolve_role_map``)."""
+        out = cls(**asdict(lint))
+        if lint.agent is not None and f"agent {lint.agent!r}" not in lint.message:
+            out.message = f"agent {lint.agent!r}: {lint.message}"
+        return out
 
 
 class PolicyCheckResponse(BaseModel):
