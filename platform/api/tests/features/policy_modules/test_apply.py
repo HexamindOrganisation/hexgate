@@ -3,6 +3,8 @@ saved in one commit or not at all."""
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from pydantic import ValidationError
 from sqlmodel import select
@@ -327,6 +329,31 @@ async def test_when_the_commit_fails_then_it_raises_and_nothing_is_written(
         await session.commit()  # the caller's next write
 
     await _assert_nothing_written(session_factory)
+
+
+@pytest.mark.usefixtures("project")
+async def test_when_two_applies_read_the_same_base_then_one_is_stale(
+    session_factory,
+) -> None:
+    """Both read ``_GRANTS``; the project lock makes the second see the first's
+    commit, so it is stale instead of overwriting it."""
+    first = _NEW_GRANTS
+    second = _NEW_GRANTS.replace("<= 200", "<= 300")
+
+    outcomes = await asyncio.gather(
+        _apply(session_factory, _request(("grants.yaml", first, _h(_GRANTS)))),
+        _apply(session_factory, _request(("grants.yaml", second, _h(_GRANTS)))),
+        return_exceptions=True,
+    )
+
+    stale = [o for o in outcomes if isinstance(o, service.StaleBaseError)]
+    applied = [o for o in outcomes if not isinstance(o, BaseException)]
+    assert len(stale) == 1 and len(applied) == 1, outcomes
+    assert applied[0].applied
+    files, changes, _ = await _stored(session_factory)
+    [won] = [f.after_hash for f in applied[0].files]
+    assert _h(files["grants.yaml"].content) == won
+    assert len(changes) == 1
 
 
 async def test_when_the_project_has_no_policy_yaml_then_the_layout_error(

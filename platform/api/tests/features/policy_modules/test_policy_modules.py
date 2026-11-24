@@ -1054,6 +1054,38 @@ def test_put_and_list_policy_files(client):
     assert names == ["caps/read.yaml", "policy.yaml"]
 
 
+def test_when_a_file_is_created_by_a_racing_request_then_the_put_updates_it(
+    client, monkeypatch
+):
+    """The file PUT reads no row, but another request stores one before its
+    insert: the insert hits the unique name, and the PUT falls back to an
+    update of that row instead of failing."""
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    _put_file(client, pid, "caps.yaml", "tools: { b: { mode: allow } }\n")
+    real_get_file = svc.get_file
+    calls = []
+
+    async def get_file(session, project_id, name):
+        if name == "caps.yaml":
+            calls.append(name)
+            # The PUT's own read (1st) sees the row; upsert_file's (2nd) does
+            # not, as if the racing create had not committed yet.
+            if len(calls) == 2:
+                return None
+        return await real_get_file(session, project_id, name)
+
+    monkeypatch.setattr(svc, "get_file", get_file)
+
+    r = _put_file(client, pid, "caps.yaml", "tools: { c: { mode: allow } }\n")
+
+    assert r.status_code == 200, r.text
+    assert len(calls) == 3  # the fallback re-read the stored row
+    files = client.get(f"/v1/projects/{pid}/policy-files").json()
+    [caps] = [f for f in files if f["name"] == "caps.yaml"]
+    assert caps["content"] == "tools: { c: { mode: allow } }\n"
+
+
 def test_resolve_via_entry_file(client):
     pid = _project(client)
     _put_file(

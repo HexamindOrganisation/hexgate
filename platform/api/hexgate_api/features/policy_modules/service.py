@@ -905,14 +905,7 @@ async def upsert_file(
     chash = _content_hash(content)
     row = await get_file(session, project_id, name)
     if row is None:
-        row = PolicyFile(
-            id=new_id(PolicyFile),
-            project_id=project_id,
-            name=name,
-            content=content,
-            content_hash=chash,
-            created_by_user_id=actor_user_id,
-        )
+        row = _new_file_row(project_id, name, content, chash, actor_user_id)
         session.add(row)
         try:
             await session.flush()
@@ -920,14 +913,7 @@ async def upsert_file(
             await session.rollback()
             row = await get_file(session, project_id, name)
             if row is None:  # the racing row was deleted between — re-create
-                row = PolicyFile(
-                    id=new_id(PolicyFile),
-                    project_id=project_id,
-                    name=name,
-                    content=content,
-                    content_hash=chash,
-                    created_by_user_id=actor_user_id,
-                )
+                row = _new_file_row(project_id, name, content, chash, actor_user_id)
                 session.add(row)
             else:
                 _apply_file_edit(row, content, chash, actor_user_id)
@@ -950,24 +936,40 @@ def stage_file(
     """Write ``content`` to ``row``, or to a new row when ``row`` is None, as
     part of the applied change ``change_id``. Neither flushes nor commits: the
     caller writes the whole change in one transaction."""
+    chash = _content_hash(content)
     if row is None:
-        row = PolicyFile(
-            id=new_id(PolicyFile),
-            project_id=project_id,
-            name=name,
-            created_by_user_id=actor_user_id,
-        )
-    _apply_file_edit(row, content, _content_hash(content), actor_user_id, change_id)
+        row = _new_file_row(project_id, name, content, chash, actor_user_id)
+    _apply_file_edit(row, content, chash, actor_user_id, change_id)
     session.add(row)
+
+
+def _new_file_row(
+    project_id: str, name: str, content: str, content_hash: str, actor_user_id: str
+) -> PolicyFile:
+    """A file row not stored yet, credited to its creator."""
+    return PolicyFile(
+        id=new_id(PolicyFile),
+        project_id=project_id,
+        name=name,
+        content=content,
+        content_hash=content_hash,
+        created_by_user_id=actor_user_id,
+    )
 
 
 async def rebuild_bundles(
     session: AsyncSession, project_id: str, *, commit: bool = True
 ) -> int | None:
-    """Rebuild every agent's bundle from the stored files: the number built,
+    """Rebuild every agent's bundle from the project's stored policy (its
+    files, its role bindings, or each agent's own policy): the number built,
     or None when they could not be built (live bundles then untouched),
     including when the build raises (opa, signing). See
-    ``agents.service.recompile_project``."""
+    ``agents.service.recompile_project``.
+
+    A plain file, module or role save calls it best-effort and ignores the
+    result: the stored row is the source of truth and the bundle a derived
+    artifact, left untouched when it cannot be built (R-POL-002). A change
+    that must not land without its bundle checks for None and rolls back."""
     from hexgate_api.core.keystore import keystore
     from hexgate_api.features.agents.service import recompile_project
 
