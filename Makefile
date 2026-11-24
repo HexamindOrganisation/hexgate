@@ -92,7 +92,7 @@ fmt-check: ## Check formatting without writing changes
 check: lint fmt-check test ## Python CI parity: lint + fmt-check + test (no coverage overhead)
 
 .PHONY: check-all
-check-all: lint fmt-check coverage platform-api-check dashboard-lint dashboard-typecheck dashboard-fmt-check collector-check mcp-check assistant-check nginx-check ## Full stack: lint + fmt + tests with coverage on all four surfaces, plus the MCP server's and the assistant's lint + tests and the box's nginx includes
+check-all: lint fmt-check coverage platform-api-check dashboard-lint dashboard-typecheck dashboard-fmt-check collector-check mcp-check assistant-check nginx-check compose-check ## Full stack: lint + fmt + tests with coverage on all four surfaces, plus the MCP server's and the assistant's lint + tests, the box's nginx includes and the deploy compose's secrets
 	# Dashboard tests via the coverage script (vitest --coverage); same
 	# entry point CI uses so a green `check-all` proves the surfaces
 	# Codecov sees are the same surfaces a contributor saw locally.
@@ -125,9 +125,26 @@ mcp-check: ## Lint + format check + test on the MCP server
 
 # -------- Assistant (platform/assistant, its own uv project) --------
 
+# The assistant's own login on local Postgres, with its own committed dev
+# password (never the main one, even here). Override on the command line.
+ASSISTANT_POSTGRES_HOST ?= localhost
+ASSISTANT_POSTGRES_PORT ?= 5433
+ASSISTANT_POSTGRES_PASSWORD ?= hexgate-assistant-dev-password
+
+.PHONY: assistant-db-init
+assistant-db-init: postgres-up ## Create the assistant's login and database on local Postgres (idempotent)
+	@# The file the deploy stack's assistant-db-init runs; password via env.
+	@HEXGATE_ASSISTANT_POSTGRES_PASSWORD='$(ASSISTANT_POSTGRES_PASSWORD)' \
+		docker exec -i -e HEXGATE_ASSISTANT_POSTGRES_PASSWORD hexgate-postgres \
+		psql -q -v ON_ERROR_STOP=1 -U hexgate -d hexgate < platform/postgres/assistant_db.sql
+
 .PHONY: assistant-run
-assistant-run: ## Run the assistant on :8090
-	cd platform/assistant && uv run python -m hexgate_assistant
+assistant-run: assistant-db-init ## Run the assistant on :8090 against its database on local Postgres
+	@cd platform/assistant && \
+		HEXGATE_ASSISTANT_POSTGRES_HOST='$(ASSISTANT_POSTGRES_HOST)' \
+		HEXGATE_ASSISTANT_POSTGRES_PORT='$(ASSISTANT_POSTGRES_PORT)' \
+		HEXGATE_ASSISTANT_POSTGRES_PASSWORD='$(ASSISTANT_POSTGRES_PASSWORD)' \
+		uv run python -m hexgate_assistant
 
 .PHONY: assistant-test
 assistant-test: ## Run the assistant test suite
@@ -473,24 +490,42 @@ dashboard-typecheck: ## Typecheck dashboard TypeScript
 #
 # STAGE selects the env: project hexgate-<stage> + platform/.env.<stage>, each an
 # isolated stack. Defaults to staging so prod must be named explicitly. Ports come
-# from HEXGATE_HTTP_PORT in the env file. Full runbook: platform/DEPLOY.md.
+# from HEXGATE_HTTP_PORT in the env file. The second env file holds the policy
+# assistant's secrets (DEPLOY.md section 3). platform/scripts/lib/stage.sh repeats this
+# command line; keep the two in step. Full runbook: platform/DEPLOY.md.
 STAGE ?= staging
-DEPLOY_COMPOSE = docker compose -p hexgate-$(STAGE) --env-file platform/.env.$(STAGE) -f platform/docker-compose.deploy.yml
+DEPLOY_COMPOSE = docker compose -p hexgate-$(STAGE) --env-file platform/.env.$(STAGE) --env-file platform/.env.$(STAGE).assistant -f platform/docker-compose.deploy.yml
 
 .PHONY: nginx-check
 nginx-check: ## nginx -t on the box's per-stage includes (platform/nginx), and prod/staging drift (needs nginx)
 	bash platform/nginx/check.sh
 
-# The env file is pulled from Scaleway (secret /hexgate/<stage>), not hand-copied.
+.PHONY: compose-check
+compose-check: ## The assistant's secrets reach only its services in the deploy compose (needs docker compose, jq)
+	bash platform/scripts/compose-secrets-check.sh
+
+# The env files are pulled from Scaleway (secrets /hexgate/<stage> and
+# /hexgate/<stage>-assistant), not hand-copied.
 .PHONY: platform-env-pull
-platform-env-pull: ## Pull platform/.env.<stage> from Scaleway: make platform-env-pull STAGE=prod
+platform-env-pull: ## Pull platform/.env.<stage> and .env.<stage>.assistant from Scaleway: make platform-env-pull STAGE=prod
 	@bash platform/scripts/env-secret.sh $(STAGE)
+	@bash platform/scripts/env-split-check.sh platform/.env.$(STAGE)
 
 # Auto-pull only a missing env file; an existing one is left untouched
-# (`make platform-env-pull` to force a refresh).
+# (`make platform-env-pull` to force a refresh). A secret that cannot be
+# pulled stops the target here.
 .PHONY: _require-stage-env
 _require-stage-env:
-	@test -f platform/.env.$(STAGE) || $(MAKE) platform-env-pull STAGE=$(STAGE)
+	@test -f platform/.env.$(STAGE) || bash platform/scripts/env-secret.sh $(STAGE) main
+	@test -f platform/.env.$(STAGE).assistant || bash platform/scripts/env-secret.sh $(STAGE) assistant
+
+# The targets that start or change containers also refuse an assistant secret
+# in the main file, where the api would load it, before the upgrade stops
+# anything. platform-down and platform-logs do not: an operator must be able
+# to stop the stack or read its logs without first fixing a secret.
+.PHONY: _require-stage-env-split
+_require-stage-env-split: _require-stage-env
+	@bash platform/scripts/env-split-check.sh platform/.env.$(STAGE)
 
 # The two writers whose sessions hold the locks platform-migrate needs.
 # collector and redpanda are deliberately absent: they stay up so OTLP keeps
@@ -499,11 +534,12 @@ _require-stage-env:
 DEPLOY_WRITERS = api enricher
 
 # A target rather than a raw compose line in the runbook. This is the FIRST
-# command of every upgrade, and _require-stage-env is the only thing that pulls
-# a missing .env.<stage> — a hand-written `docker compose --env-file` here dies
+# command of every upgrade, and its prerequisite _require-stage-env is the only
+# thing that pulls a missing .env.<stage> or .env.<stage>.assistant — a
+# hand-written `docker compose --env-file` here dies
 # with `couldn't find env file` before platform-migrate would have fetched it.
 .PHONY: platform-stop-writers
-platform-stop-writers: _require-stage-env ## Stop api + enricher ahead of a migrate: make platform-stop-writers STAGE=prod
+platform-stop-writers: _require-stage-env-split ## Stop api + enricher ahead of a migrate: make platform-stop-writers STAGE=prod
 	$(DEPLOY_COMPOSE) stop $(DEPLOY_WRITERS)
 
 # Runs BEFORE platform-up on any release that adds a column: init_db() is
@@ -529,7 +565,7 @@ platform-stop-writers: _require-stage-env ## Stop api + enricher ahead of a migr
 # lock_timeout, so stop `api` and `enricher` first (keep `collector` and
 # `redpanda` up, so OTLP keeps buffering) or expect the run to give up.
 .PHONY: platform-migrate
-platform-migrate: _require-stage-env ## Apply platform/{postgres,clickhouse}/migrations/*.sql to a deploy stack: make platform-migrate STAGE=prod
+platform-migrate: _require-stage-env-split ## Apply platform/{postgres,clickhouse}/migrations/*.sql to a deploy stack: make platform-migrate STAGE=prod
 	$(DEPLOY_COMPOSE) up -d --wait postgres clickhouse
 	@bash platform/scripts/migrate.sh $(STAGE)
 
@@ -540,7 +576,7 @@ platform-migrate: _require-stage-env ## Apply platform/{postgres,clickhouse}/mig
 # the views and by the backfill, for good. `ps` without -a lists only running
 # (and restarting) containers.
 .PHONY: platform-backfill
-platform-backfill: _require-stage-env ## One-time backfill, writers stopped: make platform-backfill STAGE=prod FILE=0005_usage_minute
+platform-backfill: _require-stage-env-split ## One-time backfill, writers stopped: make platform-backfill STAGE=prod FILE=0005_usage_minute
 	@test -n "$(FILE)" || (echo "Set FILE=<name>, e.g. make platform-backfill STAGE=prod FILE=0005_usage_minute" && exit 1)
 	@running="$$($(DEPLOY_COMPOSE) ps --services $(DEPLOY_WRITERS))" || exit 1; \
 		test -z "$$running" || (echo "Refusing to backfill while these writers run:" $$running "-- make platform-stop-writers STAGE=$(STAGE) first" && exit 1)
@@ -548,7 +584,11 @@ platform-backfill: _require-stage-env ## One-time backfill, writers stopped: mak
 	@bash platform/scripts/backfill.sh $(STAGE) platform/clickhouse/backfills/$(FILE).sql
 
 .PHONY: platform-up
-platform-up: _require-stage-env ## Build + (re)start a deploy stack: make platform-up STAGE=prod (default staging)
+platform-up: _require-stage-env-split ## Build + (re)start a deploy stack: make platform-up STAGE=prod (default staging)
+	@# Compose starts a finished one-shot again only when its config changes,
+	@# so an edit to assistant_db.sql (a bind mount) would never reach a stage.
+	@# A failure stops here, before any container is replaced.
+	$(DEPLOY_COMPOSE) run --rm assistant-db-init
 	$(DEPLOY_COMPOSE) up -d --build
 
 .PHONY: platform-down
