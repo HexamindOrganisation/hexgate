@@ -1,0 +1,6 @@
+agent: front-desk
+request: Support may no longer hand the conversation off to billing-bot. Nothing else changes.
+note: The removed entry is the policy's only reach rule. Deleting it turns the handoff gate off and every handoff reopens; an explicit deny keeps the gate on.
+expect:
+  decisions:
+    - { role: support, tool: "agent.handoff:billing-bot", args: {}, expect: deny }
