@@ -69,6 +69,21 @@ class NoPolicyStoreError(Exception):
     enforce their own ``policy_yaml``, which the store's reads don't see."""
 
 
+class NoEntryFileError(Exception):
+    """A change applied to a project with no stored entry file (→ 409
+    ``layout``): it enforces from the module store or each agent's own policy,
+    and a first ``policy.yaml`` would switch every agent onto the file store."""
+
+
+class StaleBaseError(Exception):
+    """Files whose stored text is no longer what the caller read (→ 409
+    ``stale``). ``files`` names them, in request order."""
+
+    def __init__(self, files: list[str]) -> None:
+        super().__init__(f"changed since read: {files}")
+        self.files = files
+
+
 class ChangeNotFoundError(Exception):
     """No applied change with that id in this project (→ 404)."""
 
@@ -922,14 +937,61 @@ async def upsert_file(
     return row
 
 
+def stage_file(
+    session: AsyncSession,
+    row: PolicyFile | None,
+    *,
+    project_id: str,
+    name: str,
+    content: str,
+    actor_user_id: str,
+    change_id: str,
+) -> None:
+    """Write ``content`` to ``row``, or to a new row when ``row`` is None, as
+    part of the applied change ``change_id``. Neither flushes nor commits: the
+    caller writes the whole change in one transaction."""
+    if row is None:
+        row = PolicyFile(
+            id=new_id(PolicyFile),
+            project_id=project_id,
+            name=name,
+            created_by_user_id=actor_user_id,
+        )
+    _apply_file_edit(row, content, _content_hash(content), actor_user_id, change_id)
+    session.add(row)
+
+
+async def rebuild_bundles(
+    session: AsyncSession, project_id: str, *, commit: bool = True
+) -> int | None:
+    """Rebuild every agent's bundle from the stored files: the number built,
+    or None when they could not be built (live bundles then untouched),
+    including when the build raises (opa, signing). See
+    ``agents.service.recompile_project``."""
+    from hexgate_api.core.keystore import keystore
+    from hexgate_api.features.agents.service import recompile_project
+
+    try:
+        return await recompile_project(
+            session, project_id, keystore.sign, commit=commit
+        )
+    except Exception:  # noqa: BLE001 — any build failure is "not built"
+        logger.exception("bundle rebuild failed for project %s", project_id)
+        return None
+
+
 def _apply_file_edit(
-    row: PolicyFile, content: str, content_hash: str, actor_user_id: str
+    row: PolicyFile,
+    content: str,
+    content_hash: str,
+    actor_user_id: str,
+    change_id: str | None = None,
 ) -> None:
     row.content = content
     row.content_hash = content_hash
     row.updated_at = utcnow()
     row.updated_by_user_id = actor_user_id
-    row.updated_via_change_id = None
+    row.updated_via_change_id = change_id
 
 
 async def delete_file(session: AsyncSession, *, project_id: str, name: str) -> bool:

@@ -112,15 +112,7 @@ async def _rebuild_or_none(session: AsyncSession, project_id: str) -> bool:
     build) vs. no bundle could be built. Used by the classic→modular flip, which
     rolls back on a False; ``None`` from ``recompile_project`` means "couldn't
     build", ``0``/``>0`` means "nothing to do / built" — both are fine."""
-    from hexgate_api.core.keystore import keystore
-    from hexgate_api.features.agents.service import recompile_project
-
-    try:
-        built = await recompile_project(session, project_id, keystore.sign)
-    except Exception:  # noqa: BLE001 — any compile failure is "can't build"
-        logger.exception("modular flip recompile failed for project %s", project_id)
-        return False
-    return built is not None
+    return await service.rebuild_bundles(session, project_id) is not None
 
 
 # --- module CRUD -------------------------------------------------------------
@@ -308,17 +300,7 @@ async def api_set_policy_roles(
             # bundles that are now wrong. Require a freshly-built modular bundle;
             # if none can be built (e.g. opa unavailable) roll back rather than
             # leave is_modular True with stale classic WASM in force.
-            from hexgate_api.core.keystore import keystore
-            from hexgate_api.features.agents.service import recompile_project
-
-            try:
-                built = await recompile_project(session, project_id, keystore.sign)
-            except Exception:  # noqa: BLE001 — any compile failure is "can't build"
-                logger.exception(
-                    "modular flip recompile failed for project %s", project_id
-                )
-                built = None
-            if built is None:
+            if await service.rebuild_bundles(session, project_id) is None:
                 # The restore is still this caller's write, not a
                 # resurrection of whoever wrote `before`.
                 await service.set_roles(

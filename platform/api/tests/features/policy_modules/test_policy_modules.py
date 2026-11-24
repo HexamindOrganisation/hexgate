@@ -581,9 +581,9 @@ def test_identical_role_put_skips_recompile(client: TestClient, monkeypatch) -> 
     calls = {"n": 0}
     real = asvc.recompile_project
 
-    async def spy(session, project_id, sign):
+    async def spy(session, project_id, sign, **kwargs):
         calls["n"] += 1
-        return await real(session, project_id, sign)
+        return await real(session, project_id, sign, **kwargs)
 
     monkeypatch.setattr(asvc, "recompile_project", spy)
 
@@ -606,9 +606,9 @@ def test_reordered_role_put_skips_recompile(client: TestClient, monkeypatch) -> 
     calls = {"n": 0}
     real = asvc.recompile_project
 
-    async def spy(session, project_id, sign):
+    async def spy(session, project_id, sign, **kwargs):
         calls["n"] += 1
-        return await real(session, project_id, sign)
+        return await real(session, project_id, sign, **kwargs)
 
     monkeypatch.setattr(asvc, "recompile_project", spy)
 
@@ -770,9 +770,9 @@ def test_identical_module_put_skips_recompile(client: TestClient, monkeypatch) -
     calls = {"n": 0}
     real = asvc.recompile_project
 
-    async def spy(session, project_id, sign):
+    async def spy(session, project_id, sign, **kwargs):
         calls["n"] += 1
-        return await real(session, project_id, sign)
+        return await real(session, project_id, sign, **kwargs)
 
     monkeypatch.setattr(asvc, "recompile_project", spy)
 
