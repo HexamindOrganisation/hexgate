@@ -53,6 +53,15 @@ class Settings(BaseSettings):
     # Also accept http client ids on a loopback host. Dev and tests only.
     oauth_allow_insecure_client_ids: bool = False
 
+    # The dashboard's policy assistant. Off by default: the token route then
+    # answers 404 (after its session, membership and Origin checks) and the
+    # config route reports enabled: false, so a stage runs the assistant's
+    # container dark until this is set. assistant_resource_url is
+    # the first audience of the token the API mints for it, which the
+    # assistant pins; in deploy both services read it from one compose value.
+    assistant_enabled: bool = False
+    assistant_resource_url: str = "http://localhost:8090/v1/assistant"
+
     @model_validator(mode="after")
     def _refuse_public_url_trailing_slash(self) -> "Settings":
         # The metadata's issuer must equal the token's `iss` character for
