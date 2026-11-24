@@ -391,8 +391,11 @@ revoke a policy's only reach entry. A reach gate is on only while some role
 declares it (`declares_reach` and `declares_tool_reach` in
 `hexgate/security/policy_set.py`), so deleting that entry turns the gate off
 and reopens what it closed, while `policy test` still prints DENY; an
-explicit `mode: deny` keeps it on. Their `wrong_answer/` is the deletion. v4
-passed both, 6 of 6, writing the explicit deny and saying why.
+explicit `mode: deny` keeps it on. Their `wrong_answer/` is the deletion, and
+their `preserve.yaml` holds the shared project's preserved calls, so an
+answer that revokes correctly but breaks another call fails too. v4 passed
+both, 6 of 6, writing the explicit deny and saying why; it did so first with
+shorter preserve files, then again with the full ones.
 
 v4 still fails two cases, every epoch: `reach_in_modules`, whose decision 4
 expects `default` and `support` to lose their handoff to billing-bot while
@@ -432,7 +435,8 @@ A copy can be checked by its SHA-256:
 | v3, all | `2026-11-20T11-08-51-00-00_policy-writing_sonnet-5-5-epoch-3-all-6772540a_KGME8iqF7buTVPDxXioQZn.eval` | `7ca34ca327f4cabecb55061c1b56a307ccbe082de4334d2128b50596c45bbbff` |
 | v4, four cases | `2026-11-20T12-14-23-00-00_policy-writing_sonnet-5-5-epoch-3-admission-reach4-95ebad96_gVy4Cqd5Wt7Zg45cJWmR2f.eval` | `d8f53446252a26e63ffa8a669b076e99935f8b61dfe290e511ad81e75a77e34b` |
 | v4, all | `2026-11-20T12-27-54-00-00_policy-writing_sonnet-5-5-epoch-3-all-95ebad96_kSCM64Q3anJtgVytdndaxQ.eval` | `8b716ca25de70ea33c6d824ea52d9a07b3c978b2de81df5784f4caa5af26552d` |
-| v4, two revoke cases | `2026-11-23T16-11-27-00-00_policy-writing_sonnet-5-5-epoch-3-revoke-last2-dc5996d7_Zq7DfLoCgQHsg5zvesWCKT.eval` | `610c2d8a351523eaf3698c5f0b6739e9cc84de1449996f1c50b20bda99ae075c` |
+| v4, two revoke cases, shorter preserve files | `2026-11-23T16-11-27-00-00_policy-writing_sonnet-5-5-epoch-3-revoke-last2-dc5996d7_Zq7DfLoCgQHsg5zvesWCKT.eval` | `610c2d8a351523eaf3698c5f0b6739e9cc84de1449996f1c50b20bda99ae075c` |
+| v4, two revoke cases | `2026-11-24T11-12-46-00-00_policy-writing_sonnet-5-5-epoch-3-revoke-last2-8ad48caa_Ub2NZ9L42A98Ha5RZYYivx.eval` | `2c082c8e88847f885e112782c692cc7121de458faa5be18e5d072bc4e3b7794d` |
 
 ## Adding a case
 
