@@ -355,8 +355,9 @@ per-case scores for the other rows. Failed every epoch: `agent_as_tool`,
 
 The `write-policy` skill was then tuned on the failures of the cases that are
 not held out, one commit per version, with `MODEL=claude-sonnet-5-5`, 3
-epochs and `MAX_SANDBOXES=4`: v2, v3 and v4 had a full run on the same 35
-cases as the baseline, v1 only a run on the cases it targeted. Held-out cases
+epochs and `MAX_SANDBOXES=4`: v2, v3, v4 and v5 had a full run on the same 35
+cases as the baseline (v5's also covered the two revoke cases below), v1 only
+a run on the cases it targeted. Held-out cases
 were scored, never read. To rerun a version:
 `git checkout <commit> && make policy-eval CASES= EPOCHS=3 MAX_SANDBOXES=4 MODEL=claude-sonnet-5-5`.
 If these commits are ever squashed away on main, they stay reachable with
@@ -369,6 +370,7 @@ If these commits are ever squashed away on main, they stay reachable with
 | v2 | `ed61a299` | before any `agents:` block a handoff passes but an agent-as-tool call needs its delegation tool, so re-grant only that; a request a boundary blocks entirely changes no file |
 | v3 | `6772540a` | the least-privilege rule covers open permissions only; refuse a request the policy cannot express (a per-tool hourly count, a handoff depth, a missing tool) and offer the substitute without writing it |
 | v4 | `95ebad96` | admission and reach are two separate gates: adding `admission` does not touch reach |
+| v5 | `072433d7` | handoff reach is on while any `agents:` entry exists, agent-as-tool reach only while a `via: tool` entry does; once it is on, the delegation tool's own `tools:` rule no longer applies, and while it is off a permissive `default_policy` lets any role call the delegation tool; revoke reach with `mode: deny`, not by deleting the entry |
 
 Full runs (mean ± stderr / pass^3 ± stderr; samples that hit a network error
 are left out: 2 in v2, 1 in v3):
@@ -379,11 +381,17 @@ are left out: 2 in v2, 1 in v3):
 | v2 | 0.924 ± 0.043 / 0.914 ± 0.048 | 0.940 ± 0.042 / 0.929 ± 0.050 | 0.857 ± 0.143 / 0.857 ± 0.143 |
 | v3 | 0.924 ± 0.041 / 0.886 ± 0.055 | 0.940 ± 0.039 / 0.893 ± 0.060 | 0.857 ± 0.143 / 0.857 ± 0.143 |
 | v4 | 0.943 ± 0.040 / 0.943 ± 0.040 | 0.964 ± 0.036 / 0.964 ± 0.036 | 0.857 ± 0.143 / 0.857 ± 0.143 |
+| v5 | 0.943 ± 0.040 / 0.943 ± 0.040 | 0.964 ± 0.036 / 0.964 ± 0.036 | 0.857 ± 0.143 / 0.857 ± 0.143 |
+
+v5 scored every one of the 35 cases exactly as v4 did, and passed the two
+revoke cases 6 of 6, so 105 of 111 samples over its 37 cases (0.946 mean and
+pass^3).
 
 v1 had no full run: on the six cases it targeted it passed 11 of 18 samples
 (v0: 3). Partial runs: v2 15 of 18 on the same six, v3 12 of 15 on
 `must_refuse`, v4 12 of 12 on `admission`, `admission_with_global_cap`,
-`agent_as_tool` and `handoff_approval`.
+`agent_as_tool` and `handoff_approval`, v5 18 of 18 on those four and the two
+revoke cases.
 
 Two cases came after v4's full run, so the tables above don't count them:
 `robustness/revoke_last_tool_reach` and `robustness/revoke_last_handoff`
@@ -395,16 +403,17 @@ explicit `mode: deny` keeps it on. Their `wrong_answer/` is the deletion, and
 their `preserve.yaml` holds the shared project's preserved calls, so an
 answer that revokes correctly but breaks another call fails too. v4 passed
 both, 6 of 6, writing the explicit deny and saying why; it did so first with
-shorter preserve files, then again with the full ones.
+shorter preserve files, then again with the full ones. v5 also passed both,
+6 of 6, in its full run.
 
-v4 still fails two cases, every epoch: `reach_in_modules`, whose decision 4
+v4 and v5 still fail two cases, every epoch: `reach_in_modules`, whose decision 4
 expects `default` and `support` to lose their handoff to billing-bot while
 `agent_as_tool`'s preserved calls, on another project that also starts with
 no reach rules, expect the same roles to keep theirs: each case can be passed
 on its own, but no single consistent rule about untouched handoffs passes
 both; and `unknown_argument` (held out), failed in every run that included
-it. The median sample took 115 s and $0.075 at list price in v4, against 60 s
-and $0.061 in v0.
+it. The median sample took 115 s and $0.075 at list price in v4, 114 s and
+$0.078 in v5, against 60 s and $0.061 in v0.
 
 The logs are not committed. They are kept in the Hexamind Google Drive under
 `01 - Hexamind/04 - Projects/21 - HexGate/evals/policy_writing/version_<v>/`,
@@ -417,11 +426,12 @@ with its real task and id:
 
 | `<target>` | Cases |
 |---|---|
-| `all` | all 35 cases |
+| `all` | every case at that commit: 35, or 37 once the two revoke cases exist |
 | `must-refuse` | the `must_refuse` category |
 | `targeted6` | the six cases not held out that the baseline failed: `agent_as_tool`, `file_paths`, `handoff_approval`, `reach_in_modules`, `l2b_roles_no_meaning`, `boundary_conflict` |
 | `admission-reach4` | `admission`, `admission_with_global_cap`, `agent_as_tool`, `handoff_approval` |
 | `revoke-last2` | `revoke_last_tool_reach`, `revoke_last_handoff` |
+| `admission-reach-revoke6` | the four of `admission-reach4` and the two of `revoke-last2` |
 
 A copy can be checked by its SHA-256:
 
@@ -437,6 +447,8 @@ A copy can be checked by its SHA-256:
 | v4, all | `2026-11-20T12-27-54-00-00_policy-writing_sonnet-5-5-epoch-3-all-95ebad96_kSCM64Q3anJtgVytdndaxQ.eval` | `8b716ca25de70ea33c6d824ea52d9a07b3c978b2de81df5784f4caa5af26552d` |
 | v4, two revoke cases, shorter preserve files | `2026-11-23T16-11-27-00-00_policy-writing_sonnet-5-5-epoch-3-revoke-last2-dc5996d7_Zq7DfLoCgQHsg5zvesWCKT.eval` | `610c2d8a351523eaf3698c5f0b6739e9cc84de1449996f1c50b20bda99ae075c` |
 | v4, two revoke cases | `2026-11-24T11-12-46-00-00_policy-writing_sonnet-5-5-epoch-3-revoke-last2-8ad48caa_Ub2NZ9L42A98Ha5RZYYivx.eval` | `2c082c8e88847f885e112782c692cc7121de458faa5be18e5d072bc4e3b7794d` |
+| v5, six cases | `2026-11-24T11-27-04-00-00_policy-writing_sonnet-5-5-epoch-3-admission-reach-revoke6-072433d7_oUrmoHqdeNRgwT6GniHZbJ.eval` | `96808ae03bc751a60286d3624c2c6baf2ec3e8c463b52e0b9699473a768aab1e` |
+| v5, all | `2026-11-24T11-45-08-00-00_policy-writing_sonnet-5-5-epoch-3-all-072433d7_5rbJq6fYubTs7fvjvLvP72.eval` | `254eac933b9ce95ac575d6051c731a48f596ae864c7b3bf5d8288c0a011e600e` |
 
 ## Adding a case
 
