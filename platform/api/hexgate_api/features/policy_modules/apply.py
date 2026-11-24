@@ -30,9 +30,11 @@ from hexgate_api.features.policy_modules import service
 from hexgate_api.features.policy_modules.apply_checks import (
     Check,
     ChecksResult,
+    _first_fail,
+    _skipped,
     run_checks,
 )
-from hexgate_api.features.policy_modules.diff import diff_files
+from hexgate_api.features.policy_modules.diff import diff_rows
 from hexgate_api.models import AssistantChange, PolicyFile
 from hexgate_api.schemas import (
     PolicyApplyFileOut,
@@ -63,9 +65,8 @@ async def apply_change(
         _check_bases(rows, request)
         result = await run_checks(session, project_id, request.files, request.samples)
         if not result.passed:
-            failed = next(c.id for c in result.checks if c.status == "fail")
-            bundle = Check(id="bundle", status="skipped", detail=f"{failed} failed")
-            return _refused(result, bundle)
+            failed = _first_fail(result.checks)
+            return _refused(result, _skipped("bundle", failed))
         return await _save(session, project_id, request, rows, result, actor, client_id)
 
 
@@ -100,9 +101,8 @@ async def _save(
 ) -> PolicyApplyResponse:
     """Steps 4 to 7. Any failure on the way rolls the session back, so a row
     written here never outlives a bundle that was not built."""
-    # diff_project's body, on the rows already read under the lock.
     saved = {name: row.content for name, row in rows.items()}
-    effect = diff_files(saved, service.overlay_drafts(saved, request.files))
+    effect = await diff_rows(saved, request.files)
     files = [_file_record(rows, f.name, f.content) for f in request.files]
     change = AssistantChange(
         id=new_id(AssistantChange),

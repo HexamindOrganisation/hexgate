@@ -962,9 +962,11 @@ async def rebuild_bundles(
 ) -> int | None:
     """Rebuild every agent's bundle from the project's stored policy (its
     files, its role bindings, or each agent's own policy): the number built,
-    or None when they could not be built (live bundles then untouched),
-    including when the build raises (opa, signing). See
-    ``agents.service.recompile_project``.
+    or None when they could not be built, live bundles then untouched. An opa
+    or signing failure does not raise: ``compile_bundle`` turns it into a
+    missing bundle and ``recompile_project`` into None. What raises out of
+    ``recompile_project`` is a database or commit error, which this logs and
+    also answers None. See ``agents.service.recompile_project``.
 
     A plain file, module or role save calls it best-effort and ignores the
     result: the stored row is the source of truth and the bundle a derived

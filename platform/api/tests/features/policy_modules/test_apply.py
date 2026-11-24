@@ -9,11 +9,11 @@ import pytest
 from pydantic import ValidationError
 from sqlmodel import select
 
-from hexgate_api.constants import DEFAULT_PROJECT_ID, DEFAULT_USER_ID
+from hexgate_api.constants import DEFAULT_ORG_ID, DEFAULT_PROJECT_ID, DEFAULT_USER_ID
 from hexgate_api.features.agents import service as agents_service
 from hexgate_api.features.policy_modules import service
 from hexgate_api.features.policy_modules.apply import apply_change
-from hexgate_api.models import Agent, AssistantChange, PolicyFile
+from hexgate_api.models import Agent, AssistantChange, PolicyFile, Project
 from hexgate_api.schemas import (
     APPLY_MAX_FILE_BYTES,
     AgentManifest,
@@ -312,20 +312,20 @@ async def test_when_an_agent_bundle_cannot_be_built_then_nothing_is_written(
 
 @pytest.mark.usefixtures("project")
 async def test_when_the_commit_fails_then_it_raises_and_nothing_is_written(
-    session_factory, monkeypatch
+    session_factory,
 ) -> None:
     from sqlmodel.ext.asyncio.session import AsyncSession
 
     async def failing_commit(self):
         raise RuntimeError("connection lost")
 
-    monkeypatch.setattr(AsyncSession, "commit", failing_commit)
-
     request = _request(("grants.yaml", _NEW_GRANTS, _h(_GRANTS)))
     async with session_factory() as session:
-        with pytest.raises(RuntimeError):
-            await apply_change(session, PID, request, ACTOR, CLIENT)
-        monkeypatch.undo()
+        # Scoped, so the compile_bundle stub of ``compiled`` stays in place.
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(AsyncSession, "commit", failing_commit)
+            with pytest.raises(RuntimeError):
+                await apply_change(session, PID, request, ACTOR, CLIENT)
         await session.commit()  # the caller's next write
 
     await _assert_nothing_written(session_factory)
@@ -354,6 +354,29 @@ async def test_when_two_applies_read_the_same_base_then_one_is_stale(
     [won] = [f.after_hash for f in applied[0].files]
     assert _h(files["grants.yaml"].content) == won
     assert len(changes) == 1
+
+
+async def test_when_the_project_has_no_agents_then_the_change_is_applied(
+    session_factory,
+) -> None:
+    """Nothing to build is not a failed build: the files are saved."""
+    pid = "prj_no_agents"
+    async with session_factory() as session:
+        session.add(Project(id=pid, org_id=DEFAULT_ORG_ID, name="no agents"))
+        for name, content in {"policy.yaml": _ENTRY, "grants.yaml": _GRANTS}.items():
+            await service.upsert_file(
+                session, project_id=pid, name=name, content=content, actor_user_id=ACTOR
+            )
+    request = _request(("grants.yaml", _NEW_GRANTS, _h(_GRANTS)), samples=())
+
+    async with session_factory() as session:
+        out = await apply_change(session, pid, request, ACTOR, CLIENT)
+
+    assert out.applied
+    assert out.checks[-1]["detail"] == "0 agent bundle(s) built"
+    async with session_factory() as session:
+        stored = await service.get_file(session, pid, "grants.yaml")
+        assert stored.updated_via_change_id == out.change_id
 
 
 async def test_when_the_project_has_no_policy_yaml_then_the_layout_error(
