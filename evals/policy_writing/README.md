@@ -354,10 +354,13 @@ per-case scores for the other rows. Failed every epoch: `agent_as_tool`,
 ## Skill versions
 
 The `write-policy` skill was then tuned on the failures of the cases that are
-not held out, one commit per version, each measured on the same 35 cases as
-the baseline with `MODEL=claude-sonnet-5-5`, 3 epochs and `MAX_SANDBOXES=4`.
-Held-out cases were scored, never read. To rerun a version:
+not held out, one commit per version, with `MODEL=claude-sonnet-5-5`, 3
+epochs and `MAX_SANDBOXES=4`: v2, v3 and v4 had a full run on the same 35
+cases as the baseline, v1 only a run on the cases it targeted. Held-out cases
+were scored, never read. To rerun a version:
 `git checkout <commit> && make policy-eval CASES= EPOCHS=3 MAX_SANDBOXES=4 MODEL=claude-sonnet-5-5`.
+If these commits are ever squashed away on main, they stay reachable with
+`git fetch origin pull/506/head`.
 
 | Version | Commit | Change |
 |---|---|---|
@@ -394,9 +397,11 @@ passed both, 6 of 6, writing the explicit deny and saying why.
 v4 still fails two cases, every epoch: `reach_in_modules`, whose decision 4
 expects `default` and `support` to lose their handoff to billing-bot while
 `agent_as_tool`'s preserved calls, on another project that also starts with
-no reach rules, expect the same roles to keep theirs, so no answer passes
-both; and `unknown_argument` (held out), failed in every run that included it. The median sample
-took 115 s and $0.075 at list price in v4, against 60 s and $0.061 in v0.
+no reach rules, expect the same roles to keep theirs: each case can be passed
+on its own, but no single consistent rule about untouched handoffs passes
+both; and `unknown_argument` (held out), failed in every run that included
+it. The median sample took 115 s and $0.075 at list price in v4, against 60 s
+and $0.061 in v0.
 
 The logs are not committed. They are kept in the Hexamind Google Drive under
 `01 - Hexamind/04 - Projects/21 - HexGate/evals/policy_writing/version_<v>/`,
