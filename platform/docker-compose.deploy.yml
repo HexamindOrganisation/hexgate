@@ -3,25 +3,31 @@
 # The api serves both /v1 and the dashboard SPA same-origin (no separate edge).
 # Run once per env as a distinct Compose PROJECT, which isolates its network +
 # volumes:
-#   make platform-up STAGE=prod      # -p hexgate-prod    --env-file platform/.env.prod
-#   make platform-up STAGE=staging   # -p hexgate-staging --env-file platform/.env.staging
+#   make platform-up STAGE=prod      # -p hexgate-prod    --env-file platform/.env.prod{,.assistant}
+#   make platform-up STAGE=staging   # -p hexgate-staging --env-file platform/.env.staging{,.assistant}
 #
-# Three services bind host ports, all loopback-only: the api (HEXGATE_HTTP_PORT:
+# Four services bind host ports, all loopback-only: the api (HEXGATE_HTTP_PORT:
 # 7000 prod / 7200 staging), the collector's OTLP/HTTP receiver
-# (HEXGATE_OTLP_PORT: 7001 / 7201) and the MCP server (HEXGATE_MCP_PORT:
-# 7002 / 7202). The box's existing reverse proxy owns
+# (HEXGATE_OTLP_PORT: 7001 / 7201), the MCP server (HEXGATE_MCP_PORT:
+# 7002 / 7202) and the policy assistant (HEXGATE_ASSISTANT_PORT: 7003 / 7203).
+# The box's existing reverse proxy owns
 # 80/443 + TLS and routes to them by hostname and path (see platform/DEPLOY.md).
-# Secrets/per-deploy values live in .env.<env>.
+# Secrets/per-deploy values live in .env.<env>, except the policy assistant's,
+# which live in .env.<env>.assistant (a second --env-file, see the Makefile):
+# the api, api-init and enricher load all of .env.<env>, and those secrets
+# belong to the assistant alone.
 
-# The OAuth token issuer and the MCP resource URL. One definition, merged into
-# both the api and mcp environments, so the two services cannot disagree: a
+# The OAuth token issuer and the resource URLs. One definition, merged into
+# the api, mcp and assistant environments, so the services cannot disagree: a
 # token minted with one `iss` or `aud` is refused by a verifier holding the
-# other. The resource URL is derived, not a second secret: nginx serves /mcp
-# on the api hostname, so it can only be HEXGATE_PUBLIC_URL + /mcp. Both
-# services refuse a trailing slash on HEXGATE_PUBLIC_URL at boot.
+# other. The resource URLs are derived, not more secrets: nginx serves /mcp
+# and /v1/assistant/ on the api hostname, so each can only be
+# HEXGATE_PUBLIC_URL + its path. The api and mcp refuse a trailing slash on
+# HEXGATE_PUBLIC_URL at boot.
 x-oauth-urls: &oauth-urls
   HEXGATE_PUBLIC_URL: ${HEXGATE_PUBLIC_URL:?HEXGATE_PUBLIC_URL missing - add it to the /hexgate/<stage> secret, then make platform-env-pull STAGE=<stage> (DEPLOY.md section 6)}
   HEXGATE_MCP_RESOURCE_URL: ${HEXGATE_PUBLIC_URL:?HEXGATE_PUBLIC_URL missing - add it to the /hexgate/<stage> secret, then make platform-env-pull STAGE=<stage> (DEPLOY.md section 6)}/mcp
+  HEXGATE_ASSISTANT_RESOURCE_URL: ${HEXGATE_PUBLIC_URL:?HEXGATE_PUBLIC_URL missing - add it to the /hexgate/<stage> secret, then make platform-env-pull STAGE=<stage> (DEPLOY.md section 6)}/v1/assistant
 
 services:
   postgres:
@@ -108,7 +114,11 @@ services:
       # X-Forwarded-Proto. Trusting every peer is safe only because the port
       # is published on 127.0.0.1: nothing but the box's proxy can connect.
       FORWARDED_ALLOW_IPS: "*"
-      # The OAuth token `iss` and audiences, shared with the mcp service.
+      # Will gate the Assistant tab and its tokens; off unless the secret says
+      # otherwise, though the container runs on every stage.
+      HEXGATE_ASSISTANT_ENABLED: ${HEXGATE_ASSISTANT_ENABLED:-false}
+      # The OAuth token `iss` and audiences, shared with the mcp and assistant
+      # services.
       <<: *oauth-urls
     volumes:
       - hexgate-keys:/keys
@@ -384,6 +394,75 @@ services:
       api:
         condition: service_healthy
     # Liveness from the image's HEALTHCHECK (/health).
+
+  assistant:
+    # The policy assistant: it holds the model key and its own database
+    # (chat sessions, usage), and reaches policies only through the mcp
+    # service with the caller's token, never the main database.
+    image: ${REGISTRY:-hexgate-local}/hexgate-assistant:${TAG:-latest}
+    build:
+      context: ..
+      dockerfile: platform/assistant/Dockerfile
+    platform: linux/amd64
+    restart: unless-stopped
+    ports:
+      # Loopback only, same contract as the api: the box's reverse proxy routes
+      # /v1/assistant/ on the api hostname here.
+      - "127.0.0.1:${HEXGATE_ASSISTANT_PORT:?HEXGATE_ASSISTANT_PORT missing - add it to the /hexgate/<stage> secret, then make platform-env-pull STAGE=<stage> (DEPLOY.md section 6)}:8090"
+    # No env_file: the stage's file holds the main database password, which
+    # this service must never see. Everything it needs is named here. The
+    # image sets HEXGATE_ASSISTANT_BIND_HOST to all interfaces; leave it.
+    environment:
+      # The JWKS fetch and the tool calls stay on the compose network.
+      HEXGATE_ASSISTANT_API_URL: http://api:8000
+      HEXGATE_ASSISTANT_MCP_URL: http://mcp:8080/mcp
+      # Its own login, created by assistant-db-init. Database and user are
+      # both hexgate_assistant, the names assistant_db.sql creates.
+      HEXGATE_ASSISTANT_POSTGRES_HOST: postgres
+      HEXGATE_ASSISTANT_POSTGRES_PORT: "5432"
+      HEXGATE_ASSISTANT_POSTGRES_PASSWORD: ${HEXGATE_ASSISTANT_POSTGRES_PASSWORD:?HEXGATE_ASSISTANT_POSTGRES_PASSWORD missing - add it to the /hexgate/<stage>-assistant secret, then make platform-env-pull STAGE=<stage> (DEPLOY.md section 6)}
+      # Optional until the stage is enabled (no model: no chat turn runs).
+      # No value: passed only when the stage's file sets it, never as empty.
+      HEXGATE_ASSISTANT_MODEL:
+      HEXGATE_ASSISTANT_OPENROUTER_KEY:
+      # Same reasoning as the api service: loopback-published, proxy-only.
+      FORWARDED_ALLOW_IPS: "*"
+      <<: *oauth-urls
+    # No hexgate-keys volume: tokens are checked against the api's public key,
+    # fetched from /.well-known/jwks.json.
+    depends_on:
+      # The JWKS comes from the api, so the first token check needs it up.
+      api:
+        condition: service_healthy
+      # The database and login must exist before the first connection.
+      assistant-db-init:
+        condition: service_completed_successfully
+    # Liveness from the image's HEALTHCHECK, which cannot see the published
+    # port or the route: DEPLOY.md section 4 curls both.
+
+  assistant-db-init:
+    # One-shot, run by every `make platform-up` (compose alone would start it
+    # again only when its config changes): creates the assistant's login and
+    # database if missing and sets the login's password
+    # (platform/postgres/assistant_db.sql).
+    # Not an init script in the postgres service: the stages' pg-data volumes
+    # already exist, and /docker-entrypoint-initdb.d runs only on an empty one.
+    image: postgres:16
+    restart: "no"
+    command: ["psql", "-q", "-v", "ON_ERROR_STOP=1", "-f", "/init/assistant_db.sql"]
+    environment:
+      # psql connects as the superuser; the script reads the assistant's
+      # password with \getenv, so neither is on a command line.
+      PGHOST: postgres
+      PGUSER: hexgate
+      PGDATABASE: hexgate
+      PGPASSWORD: ${HEXGATE_POSTGRES_PASSWORD:?set HEXGATE_POSTGRES_PASSWORD in .env.<env>}
+      HEXGATE_ASSISTANT_POSTGRES_PASSWORD: ${HEXGATE_ASSISTANT_POSTGRES_PASSWORD:?HEXGATE_ASSISTANT_POSTGRES_PASSWORD missing - add it to the /hexgate/<stage>-assistant secret, then make platform-env-pull STAGE=<stage> (DEPLOY.md section 6)}
+    volumes:
+      - ./postgres/assistant_db.sql:/init/assistant_db.sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   pg-data:
