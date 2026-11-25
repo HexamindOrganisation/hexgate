@@ -272,7 +272,7 @@ async def answer_approval(approval_id: str, request: Request) -> dict:
 
 
 def _classify(output: str) -> tuple[str, str]:
-    """(status, reason) of a tool result: ok, blocked or rejected."""
+    """(status, reason) of a tool result: ok, blocked, rejected or error."""
     text = str(output)
     if text.startswith("[") and "The tool was not executed" in text:
         status = "rejected" if "requires human approval" in text else "blocked"
@@ -287,6 +287,8 @@ def _classify(output: str) -> tuple[str, str]:
         return status, reason
     if text.startswith("An error occurred while running the tool"):
         return "error", text.split("Error:", 1)[-1].strip()
+    if text.startswith(desk.ERROR_PREFIX):
+        return "error", text.removeprefix(desk.ERROR_PREFIX).strip()
     return "ok", ""
 
 
@@ -387,7 +389,7 @@ async def chat(request: Request) -> StreamingResponse:
                         )
                         status, reason = _classify(item.output)
                         name, args = tool_names.get(call_id, ("tool", {}))
-                        if status != "ok":
+                        if status in ("blocked", "rejected"):
                             pretty = ", ".join(_brief(v) for v in args.values())
                             desk.log_event(
                                 "blocked", f"Blocked: {name}({pretty})", user.username
