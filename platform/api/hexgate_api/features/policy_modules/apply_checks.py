@@ -13,10 +13,15 @@ drafts laid over them:
 The first ``fail`` stops the run: every later check is reported ``skipped``, so
 a check that did not run can never read as ``pass``. Nothing is written; the
 caller saves only when :attr:`ChecksResult.passed` is true.
+
+Every compose parse and resolve runs in a worker thread, given only the files' text:
+on a large project they take seconds, which would otherwise stall every other
+request on the event loop.
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
@@ -136,15 +141,21 @@ def _check(
 
 
 async def _yaml(run: _Run) -> Check:
+    items = await asyncio.to_thread(_parse_errors, run.drafts)
+    if items:
+        return _check("yaml", "fail", f"{len(items)} file(s) do not parse", items)
+    return _check("yaml", "pass", f"{len(run.drafts)} file(s) parse")
+
+
+def _parse_errors(drafts: list[PolicyFileDraft]) -> list[dict[str, str]]:
+    """The drafts that do not parse as a policy document, with the error."""
     items = []
-    for draft in run.drafts:
+    for draft in drafts:
         try:
             service.validate_compose_file(draft.content, source=draft.name)
         except service.InvalidModuleError as exc:
             items.append({"file": draft.name, "error": str(exc)})
-    if items:
-        return _check("yaml", "fail", f"{len(items)} file(s) do not parse", items)
-    return _check("yaml", "pass", f"{len(run.drafts)} file(s) parse")
+    return items
 
 
 async def _composes(run: _Run) -> Check:
@@ -277,7 +288,7 @@ async def _boundary(run: _Run) -> tuple[Check, list[BoundaryChange]]:
     saved = await service._files_map(run.session, run.project_id)
     drafted = service.overlay_drafts(saved, run.drafts)
     try:
-        comparison = compare_boundaries(saved, drafted)
+        comparison = await asyncio.to_thread(compare_boundaries, saved, drafted)
     except (service.InvalidModuleError, LinkError) as exc:
         return _check("boundary", "fail", str(exc)), []
     except RecursionError:  # a constraint nested past the parser's stack

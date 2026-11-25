@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 
 import pytest
-from hexgate.security import PolicyLint
+from hexgate.security import PolicyLint, compose
 
 from hexgate_api.features.agents import service as agents_service
 from hexgate_api.features.policy_modules import service
@@ -703,3 +704,45 @@ async def test_when_saved_errors_pass_the_cap_then_the_new_error_is_still_listed
     assert check.detail.startswith("1 new error lint(s)")
     assert check.items[0]["new"] is True
     assert "p51" in check.items[0]["message"]
+
+
+# The SDK's compose entry points: every parse and resolve run_checks makes goes
+# through one of them, wherever the platform calls it from.
+_BLOCKING = ["parse_entry", "resolve_text", "resolve_entry"]
+
+
+@pytest.fixture
+def blocking_threads(monkeypatch) -> list[tuple[str, int]]:
+    """``(name, thread id)`` of every call to a :data:`_BLOCKING` function."""
+    calls: list[tuple[str, int]] = []
+    for name in _BLOCKING:
+
+        def record(*args, _real=getattr(compose, name), _name=name, **kwargs):
+            calls.append((_name, threading.get_ident()))
+            return _real(*args, **kwargs)
+
+        monkeypatch.setattr(compose, name, record)
+    return calls
+
+
+@pytest.mark.usefixtures("stored")
+async def test_when_every_check_runs_then_no_parse_or_resolve_runs_on_the_loop(
+    session, blocking_threads
+) -> None:
+    result = await _run(session, {"grants.yaml": _GRANTS + "  view: { mode: allow }\n"})
+    assert result.passed
+    loop_thread = threading.get_ident()
+    assert {name for name, _ in blocking_threads} == set(_BLOCKING)
+    assert [n for n, t in blocking_threads if t == loop_thread] == []
+
+
+@pytest.mark.usefixtures("stored", "guarded_bot")
+async def test_when_lints_reads_the_saved_files_then_their_resolve_runs_off_the_loop(
+    session, blocking_threads
+) -> None:
+    result = await _run(session, {"policy.yaml": _ENTRY_GUARD_TYPO})
+    assert _by_id(result, "lints").status == "fail"
+    # "*" and bot, for the drafted project, then for the saved one in check_auto.
+    resolves = [t for n, t in blocking_threads if n == "resolve_text"]
+    assert len(resolves) == 4
+    assert threading.get_ident() not in resolves

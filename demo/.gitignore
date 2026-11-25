@@ -8,5 +8,6 @@ apps/*/.env
 apps/*/.venv/
 apps/*/ui/node_modules/
 apps/devops/shipyard/web/
+apps/claims/claimdesk/web/
 film/node_modules/
 apps/*/ui/*.tsbuildinfo

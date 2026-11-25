@@ -1,0 +1,4 @@
+tools:
+  list_claims: { mode: allow }
+  get_claim: { mode: allow }
+  read_document: { mode: allow }

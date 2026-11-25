@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import shutil
+import threading
 
 import pytest
 import yaml
@@ -323,6 +324,45 @@ async def test_resolved_policy_yaml_is_inline_roles_shape(session_factory):
     doc = yaml.safe_load(text)
     assert set(doc["roles"]) == {"default", "billing"}
     assert "view_orders" in doc["roles"]["billing"]["tools"]
+
+
+async def test_when_a_tier_project_is_dry_run_then_its_resolve_runs_off_the_loop(
+    session_factory, monkeypatch
+):
+    import hexgate.security as sdk
+
+    threads: list[int] = []
+    real = sdk.resolve_for_project
+
+    def record(*args, **kwargs):
+        threads.append(threading.get_ident())
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(sdk, "resolve_for_project", record)
+    async with session_factory() as s:
+        proj, _ = await _fresh_project_with_agent(s)
+        await svc.upsert_module(
+            s,
+            project_id=proj.id,
+            tier="capability",
+            path="read_only",
+            content=READ_ONLY,
+            actor_user_id=ACTOR,
+        )
+        await svc.set_roles(
+            s,
+            project_id=proj.id,
+            roles={"billing": ["read_only"]},
+            created_by_user_id=ACTOR,
+        )
+        threads.clear()  # the writes above resolve too, on the loop
+        dry_run = await svc.test_policy(
+            s, proj.id, role="billing", tool="view_orders", args={}
+        )
+
+    assert svc.verdict_outcome(dry_run.verdict) == "allow"
+    assert len(threads) == 1
+    assert threads[0] != threading.get_ident()
 
 
 async def test_bundle_for_agent_routes_by_mode(session_factory, monkeypatch):
