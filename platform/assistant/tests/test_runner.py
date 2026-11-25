@@ -156,8 +156,16 @@ async def platform(settings, mcp: FakeMCP, key, model: FunctionModel | None):
             yield client, app.state.turns
 
 
+# Every turn here ends within seconds; a turn whose stream never ends must
+# fail its test, not hang the run.
+TURN_TEST_SECONDS = 30
+
+
 async def post(client: httpx.AsyncClient, **body) -> httpx.Response:
-    return await client.post(TURNS, json={"session_id": None, "message": "hi", **body})
+    async with asyncio.timeout(TURN_TEST_SECONDS):
+        return await client.post(
+            TURNS, json={"session_id": None, "message": "hi", **body}
+        )
 
 
 async def settle(turns: runner.Turns) -> None:
@@ -168,8 +176,9 @@ async def settle(turns: runner.Turns) -> None:
 
 async def turn(client: httpx.AsyncClient, turns: runner.Turns, **body) -> list[dict]:
     """One whole turn: its events, once its task has ended."""
-    response = await post(client, **body)
-    await settle(turns)
+    async with asyncio.timeout(TURN_TEST_SECONDS):
+        response = await post(client, **body)
+        await settle(turns)
     assert response.status_code == 200, response.text
     return parse(response.text)
 
