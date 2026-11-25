@@ -29,7 +29,7 @@ from hexgate_assistant import agent as agent_module
 from hexgate_assistant import runner
 from hexgate_assistant.agent import INSTRUCTIONS
 from hexgate_assistant.auth import AssistantToken, JwksTokenVerifier
-from hexgate_assistant.context import Editor, estimate_tokens
+from hexgate_assistant.context import TRUNCATED_MARKER, Editor, estimate_tokens
 from hexgate_assistant.jwks import JwksCache
 from hexgate_assistant.models import (
     AssistantMessage,
@@ -370,6 +370,22 @@ async def test_when_mcp_cannot_be_reached_then_502_and_the_lock_is_released(
     assert await rows(db, AssistantTurnLock) == []
     # Refused before a session was made: no empty chat is left behind.
     assert await rows(db, AssistantSession) == []
+
+
+async def test_when_the_file_list_is_cut_then_502_and_the_log_says_why(
+    settings, mcp, key, db, caplog
+):
+    mcp.results["policy_list_files"] = FILES[:40] + TRUNCATED_MARKER
+    async with platform(settings, mcp, key, scripted(text)) as (client, _):
+        response = await post(client)
+
+    assert response.status_code == 502
+    (line,) = [
+        r.getMessage() for r in caplog.records if "reads failed" in r.getMessage()
+    ]
+    assert "more policy files" in line
+    assert "JSONDecodeError" not in line
+    assert await rows(db, AssistantTurnLock) == []
 
 
 # ——— The stream ———

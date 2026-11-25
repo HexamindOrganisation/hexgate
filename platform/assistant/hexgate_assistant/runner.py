@@ -251,6 +251,8 @@ async def _read_project(
             project_id,
             _describe(exc),
         )
+        if isinstance(exc, ProjectUnreadable):
+            raise
         raise ProjectUnreadable(type(exc).__name__) from exc
 
 
@@ -267,10 +269,12 @@ async def _tool_tokens(mcp: MCPToolset[None]) -> int:
 
 
 def _describe(exc: BaseException) -> str:
-    """The innermost errors of `exc`, by class and message, cut short."""
+    """The innermost errors of `exc`, by class and message, cut short. A
+    :class:`ProjectUnreadable` already says why in its message, so the chain
+    stops there."""
     if isinstance(exc, BaseExceptionGroup):
         return "; ".join(_describe(e) for e in exc.exceptions)
-    if exc.__cause__ is not None:
+    if exc.__cause__ is not None and not isinstance(exc, ProjectUnreadable):
         return _describe(exc.__cause__)
     return f"{type(exc).__name__}: {str(exc)[:200]}"
 
