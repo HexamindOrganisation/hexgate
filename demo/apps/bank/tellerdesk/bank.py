@@ -290,8 +290,10 @@ def is_customer(customer_id: str) -> bool:
 def session_attributes(customer_id: str) -> dict:
     """What the policy knows about the customer file open in the page.
 
-    Each IBAN and account id comes in the spellings the bank accepts, so a
-    model that drops the spaces or changes case still matches. An unknown customer gives empty values: nothing matches."""
+    Each account id comes with '-', ' ' or '_' as separator, in upper or lower
+    case, and each IBAN as stored and without spaces. The bank accepts more
+    spellings than these; a call written another way is refused, so the check
+    fails closed. An unknown customer gives empty values: nothing matches."""
     customer = _customers.get(customer_id)
     if customer is None:
         return {

@@ -150,9 +150,12 @@ fresh bank without losing the policy, restart the app with
 - **"Nadia could have approved."** She could: who may approve is decided by
   the app that shows the card, not by hexgate. The card shows her that the
   IBAN is not registered, which is why she says no.
-- **"What if the model writes the IBAN another way?"** The context carries
-  each registered IBAN with and without spaces, and the tool description says
-  to pass the IBAN as given. A third spelling is refused: it fails closed.
+- **"What if the model writes the IBAN or the account id another way?"** The
+  context carries each registered IBAN with and without spaces, and each
+  account id with `-`, space or `_` in upper or lower case; the tool
+  description says to pass the IBAN as given. Any other spelling (`Acc-1042`,
+  a lower-case IBAN) is refused even though the bank would accept it: it fails
+  closed.
 - **The red card for Camille reads**
   `(args.amount_eur <= 1000) and (any(ctx.session_beneficiaries, . == args.to_iban))`:
   the platform folds the capability's two constraints into one.
