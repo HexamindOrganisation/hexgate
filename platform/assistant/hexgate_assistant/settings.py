@@ -35,6 +35,8 @@ class Settings:
     openrouter_key: str | None = field(default=None, repr=False)
     # Where `make assistant-run` finds the MCP server of `make mcp-run`.
     mcp_url: str = "http://localhost:8080/mcp"
+    # The conversation's token cap, besides the model's own input window.
+    context_tokens: int = 64_000
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -58,6 +60,13 @@ class Settings:
             model=os.environ.get("HEXGATE_ASSISTANT_MODEL") or None,
             openrouter_key=os.environ.get("HEXGATE_ASSISTANT_OPENROUTER_KEY") or None,
             mcp_url=os.environ.get("HEXGATE_ASSISTANT_MCP_URL") or cls.mcp_url,
+            context_tokens=_int_from_env(
+                "HEXGATE_ASSISTANT_CONTEXT_TOKENS",
+                cls.context_tokens,
+                low=1,
+                high=10_000_000,
+                what="a positive number of tokens",
+            ),
         )
 
     @property
@@ -86,15 +95,21 @@ def database_url_from_env() -> URL:
 
 
 def _port_from_env(name: str, default: int) -> int:
-    """A TCP port from `name`; unset or empty (an unset compose key
-    interpolates to "") falls back to `default`."""
+    return _int_from_env(
+        name, default, low=1, high=65535, what="a port number (1-65535)"
+    )
+
+
+def _int_from_env(name: str, default: int, *, low: int, high: int, what: str) -> int:
+    """A whole number from `name` within `low`..`high`; unset or empty (an
+    unset compose key interpolates to "") falls back to `default`."""
     raw = os.environ.get(name, "").strip()
     if not raw:
         return default
     try:
-        port = int(raw)
+        value = int(raw)
     except ValueError:
-        port = 0
-    if not 1 <= port <= 65535:
-        raise ValueError(f"{name}={raw!r} is not a port number (1-65535).")
-    return port
+        value = low - 1
+    if not low <= value <= high:
+        raise ValueError(f"{name}={raw!r} is not {what}.")
+    return value
