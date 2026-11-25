@@ -4,4 +4,10 @@
 !LICENSE
 !uv.lock
 !hexgate
+!docs/policy
+!docs/concepts/user-scope.mdx
+!docs/concepts/egress.mdx
+!docs/concepts/agent-level-enforcement.mdx
+!docs/cli/policy.mdx
+!docs/adr/R-USAGE-001-cross-run-usage-is-soft-and-fails-open.md
 **/__pycache__
