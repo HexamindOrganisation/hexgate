@@ -70,8 +70,8 @@ The policy is in `reference/claims/policy/`. Said aloud:
   bank details needs a human's approval.
 - Nobody pays more than €50,000, makes more than one payment per request, or
   pays in a request that changed the bank details.
-- Once the copilot has read a document, it can only email addresses at
-  hexa-assurance.example, for the rest of that request.
+- Once the copilot has read a document, it can only email a single address
+  at hexa-assurance.example, for the rest of that request.
 
 ## The scenes
 

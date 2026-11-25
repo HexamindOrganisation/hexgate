@@ -14,11 +14,11 @@ boundary:
         - args.amount_eur <= 50000                                # company ceiling per payment
         - run.calls_of_this_tool < 1                              # one payment per request: no splitting
         - every(run.tools_used, . != "update_bank_details")       # never pay in a run that changed the bank details
-    # Once the copilot has read a document sent from outside, mail stays inside the company.
+    # Once the copilot has read a document sent from outside, mail goes to one company address only.
     # Within one request only: a later chat message starts a new run.
     send_email:
       mode: allow
-      constraint: 'every(run.tools_used, . != "read_document") or endswith(args.to, "@hexa-assurance.example")'
+      constraint: 'every(run.tools_used, . != "read_document") or matches(args.to, "(?i)^[^,;\\s@]+@hexa-assurance\\.example$")'
   admission: { mode: allow }
 agents:
   claims_copilot:

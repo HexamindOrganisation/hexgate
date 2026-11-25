@@ -10,12 +10,14 @@ The state lives in this module and survives reloads of agent.py.
 from __future__ import annotations
 
 import contextvars
+import re
 import threading
 import time
 from dataclasses import dataclass, field
 
 HANDLER_AUTHORITY_EUR = 5000
 COMPANY_DOMAIN = "hexa-assurance.example"
+COMPANY_ADDRESS = re.compile(rf"[^,;\s@]+@{re.escape(COMPANY_DOMAIN)}", re.IGNORECASE)
 ERROR_PREFIX = "Error:"  # how a request the desk cannot do starts
 
 STATUS_OPEN = "open"
@@ -227,7 +229,7 @@ def _unknown_claim(claim_id: str) -> str:
 
 
 def _is_outside_company(address: str) -> bool:
-    return not address.strip().lower().endswith(f"@{COMPANY_DOMAIN}")
+    return COMPANY_ADDRESS.fullmatch(address.strip()) is None
 
 
 def log_event(kind: str, text: str, who: str | None = None) -> None:
