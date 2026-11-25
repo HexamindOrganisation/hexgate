@@ -54,6 +54,9 @@ async def test_code_exchange_happy_path(consent_client: TestClient, engine) -> N
     assert claims.projects == {DEFAULT_PROJECT_ID}
     assert claims.exp - claims.iat == 600
     assert jwt.get_unverified_header(body["access_token"])["typ"] == "at+jwt"
+    # Only the assistant's token names an org.
+    payload = jwt.decode(body["access_token"], options={"verify_signature": False})
+    assert "org" not in payload
     (refresh,) = await rows(engine, OAuthRefreshToken)
     assert refresh.token_hash != body["refresh_token"]  # only the hash is stored
     assert refresh.family_id == refresh.id
