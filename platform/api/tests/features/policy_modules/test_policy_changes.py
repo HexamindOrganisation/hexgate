@@ -17,22 +17,18 @@ from hexgate_api.constants import (
     DEFAULT_ORG_ID,
     DEFAULT_PROJECT_ID,
     DEFAULT_USER_ID,
-    ROLE_MEMBER,
 )
 from hexgate_api.features.policy_modules.diff import diff_files
 from hexgate_api.models import (
     AssistantChange,
     Organization,
-    OrganizationMember,
     Project,
-    User,
 )
 from hexgate_api.schemas import PolicyDiffResponse
 
 OTHER_ORG_ID = "org_other"
 OTHER_PROJECT_ID = "prj_other_org"
 SIBLING_PROJECT_ID = "prj_sibling"
-MEMBER_ID = "usr_member"
 
 _COMPOSES = {"before": True, "after": True}
 # The effect as the writer stores it: the diff of two file maps, dumped. This
@@ -256,24 +252,12 @@ def test_when_asked_through_the_owning_project_of_another_org_then_403(
     assert r.status_code == 403, r.text
 
 
-async def _add_member(session_factory) -> None:
-    async with session_factory() as s:
-        s.add(User(id=MEMBER_ID, email="member@example.test"))
-        s.add(
-            OrganizationMember(
-                user_id=MEMBER_ID, org_id=DEFAULT_ORG_ID, role=ROLE_MEMBER
-            )
-        )
-        await s.commit()
-
-
 def test_when_the_caller_is_a_plain_org_member_then_the_change_is_read(
-    client: TestClient, session_factory
+    client: TestClient, session_factory, add_member: str
 ) -> None:
     """Reading a change is a read: any member of the org, not only its admins."""
     asyncio.run(_seed(session_factory, "chg_mine", DEFAULT_PROJECT_ID))
-    asyncio.run(_add_member(session_factory))
 
-    r = _get(client, DEFAULT_PROJECT_ID, "chg_mine", user=MEMBER_ID)
+    r = _get(client, DEFAULT_PROJECT_ID, "chg_mine", user=add_member)
 
     assert r.status_code == 200, r.text

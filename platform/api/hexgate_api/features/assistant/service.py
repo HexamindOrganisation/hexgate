@@ -43,8 +43,14 @@ async def assistant_access(
             .where(Project.id == project_id, OrganizationMember.user_id == user_id)
         )
     ).one()  # require_org_member has found this membership
-    can_write = role in {ROLE_OWNER, ROLE_ADMIN} and mode == "read_write"
+    can_write = role in {ROLE_OWNER, ROLE_ADMIN} and mode_lets_write(mode)
     return AssistantAccess(mode=mode, can_write=can_write)
+
+
+def mode_lets_write(mode: str) -> bool:
+    """Whether an org in ``mode`` lets its assistant change policy files. Any
+    mode this code does not know is read-only."""
+    return mode == "read_write"
 
 
 def mint_assistant_token(
