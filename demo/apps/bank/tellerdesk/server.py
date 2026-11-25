@@ -439,7 +439,8 @@ async def chat(request: Request) -> StreamingResponse:
                                 "output": str(item.output)[:SHOWN_OUTPUT_CHARS],
                             }
                         )
-            _histories[token] = result.to_input_list()
+            if open_customer_of(token) == customer_id:
+                _histories[token] = result.to_input_list()
         except Exception as exc:
             log.warning("assistant run failed: %s", exc)
             traceback.print_exc()
