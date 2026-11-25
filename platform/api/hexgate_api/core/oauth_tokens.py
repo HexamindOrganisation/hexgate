@@ -40,7 +40,8 @@ class InvalidAccessTokenError(Exception):
 
 
 class AccessTokenClaims(BaseModel):
-    """The verified claims of an access token, the whole set. Validating a
+    """The verified claims of an access token, every one the API reads (the
+    ``org`` claim, which only the assistant reads, is dropped). Validating a
     decoded payload against it refuses any claim of the wrong type, so a bad
     shape is a 401, never a 500 or a set of characters. PyJWT has already
     checked the values of iss, aud, exp and iat."""
@@ -77,6 +78,7 @@ def mint_access_token(
     issuer: str,
     audience: str | list[str],
     now: int | None = None,
+    org: str | None = None,
 ) -> str:
     """Return a signed access token valid for ``ACCESS_TOKEN_TTL_SECONDS``.
 
@@ -84,7 +86,9 @@ def mint_access_token(
     means the caller lost the grant's projects, so it is refused rather than
     minted dead; so is a bare csv string, which would iterate as characters.
     ``audience`` may list several resources: a token the MCP server forwards
-    to the API names both.
+    to the API names both. The ``org`` claim is present only when ``org`` is
+    passed: the assistant's token names its project's org, an OAuth grant's
+    token has no ``org``.
     """
     if isinstance(projects, str) or isinstance(scopes, str):
         raise TypeError("pass projects and scopes as lists, not a csv string")
@@ -103,6 +107,8 @@ def mint_access_token(
         "exp": iat + ACCESS_TOKEN_TTL_SECONDS,
         "jti": secrets.token_urlsafe(16),
     }
+    if org is not None:
+        claims["org"] = org
     return _sign_compact(claims)
 
 
