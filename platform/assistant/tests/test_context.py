@@ -1,3 +1,4 @@
+import json
 from datetime import date
 from pathlib import Path
 
@@ -11,12 +12,14 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RequestUsage
 
 from hexgate_assistant.context import (
+    TRUNCATED_MARKER,
     WHOLE_RESULT_BYTES,
     WHOLE_RESULT_TOOLS,
     BudgetGuard,
     ContextFull,
     Editor,
     ProjectState,
+    ProjectUnreadable,
     cap_tool_result,
     context_budget,
     context_tokens,
@@ -25,6 +28,7 @@ from hexgate_assistant.context import (
     keep_ends,
     latest_change_text,
     project_card,
+    read_project,
     user_message,
 )
 
@@ -172,12 +176,88 @@ def test_when_a_whole_result_tool_answers_under_64_kib_then_it_is_kept_whole(too
     assert cap_tool_result(tool, text) == text
 
 
-def test_when_a_policy_file_is_over_64_kib_then_none_of_it_is_given():
-    capped = cap_tool_result("policy_read_file", "z" * (WHOLE_RESULT_BYTES + 1))
+def record(content: str) -> str:
+    """A policy_read_file result, as the MCP server writes it."""
+    return json.dumps(
+        {
+            "name": "caps/big.yaml",
+            "content": content,
+            "content_hash": "a" * 64,
+            "text_hash": "b" * 64,
+            "updated_at": "2026-11-25T10:00:00Z",
+        },
+        ensure_ascii=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param("z" * WHOLE_RESULT_BYTES, id="ascii"),
+        pytest.param("é" * (WHOLE_RESULT_BYTES // 2), id="two-byte"),
+        # Every line's newline and quotes escaped: the record runs well past
+        # 64 KiB while the file itself does not.
+        pytest.param(('k: "v"\n' * 10000)[:WHOLE_RESULT_BYTES], id="escapes"),
+    ],
+)
+def test_when_a_policy_file_is_at_64_kib_then_it_is_given_whole(content):
+    assert len(content.encode()) == WHOLE_RESULT_BYTES
+
+    assert cap_tool_result("policy_read_file", record(content)) == record(content)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param("z" * (WHOLE_RESULT_BYTES + 1), id="ascii"),
+        pytest.param("é" * (WHOLE_RESULT_BYTES // 2) + "z", id="two-byte"),
+    ],
+)
+def test_when_a_policy_file_is_over_64_kib_then_none_of_it_is_given(content):
+    capped = cap_tool_result("policy_read_file", record(content))
 
     assert capped == (
         "file too large for the assistant (over 64 KiB: 64 KiB); edit it in the editor"
     )
+
+
+def test_when_a_policy_file_result_was_cut_by_the_server_then_it_is_refused():
+    cut = record("z" * 300 * 1024)[: 256 * 1024] + TRUNCATED_MARKER
+
+    assert cap_tool_result("policy_read_file", cut).startswith("file too large")
+
+
+class Listing:
+    """An MCP session answering the turn-start reads with fixed texts."""
+
+    def __init__(self, files: str) -> None:
+        self.files = files
+
+    async def direct_call_tool(self, tool: str, args: dict) -> str:
+        if tool == "policy_list_files":
+            return self.files
+        return json.dumps({"roles": [], "declared_agents": []})
+
+
+async def test_when_the_file_list_was_cut_by_the_server_then_the_project_is_unreadable():
+    whole = json.dumps(
+        {"files": [{"name": f"f{i}", "text_hash": "h"} for i in range(9)]}
+    )
+    cut = whole[:60] + TRUNCATED_MARKER
+
+    with pytest.raises(ProjectUnreadable, match="more policy files and modules"):
+        await read_project(Listing(cut), "p1")
+
+
+async def test_read_project_happy_path():
+    files = json.dumps(
+        {"files": [{"name": "policy.yaml", "text_hash": "h1"}], "modules": []}
+    )
+
+    project = await read_project(Listing(files), "p1")
+
+    assert project.snapshot == {"policy.yaml": "h1"}
+    assert project.layout == "compose"
 
 
 def test_when_a_reference_section_is_over_64_kib_then_it_is_cut_as_any_result():

@@ -75,12 +75,13 @@ WHOLE_RESULT_BYTES = 64 * 1024
 
 def cap_tool_result(tool: str, text: str) -> str:
     """A tool result as the model receives it."""
-    size = len(text.encode())
+    size = _whole_result_size(tool, text)
     if tool in WHOLE_RESULT_TOOLS and size <= WHOLE_RESULT_BYTES:
         return text
     if tool == "policy_read_file":
         return (
-            f"file too large for the assistant (over 64 KiB: {size // 1024} KiB); "
+            f"file too large for the assistant (over "
+            f"{WHOLE_RESULT_BYTES // 1024} KiB: {size // 1024} KiB); "
             "edit it in the editor"
         )
     return keep_ends(
@@ -89,6 +90,22 @@ def cap_tool_result(tool: str, text: str) -> str:
         "\n[… {cut} bytes cut from the middle of this result: call the tool "
         "again with a narrower request to read them …]\n",
     )
+
+
+def _whole_result_size(tool: str, text: str) -> int:
+    """The bytes the 64 KiB rule is about: a policy file's own text, not the
+    JSON record that carries it (its hashes, its date, every newline and
+    quote escaped), which runs larger; any other result as it stands."""
+    if tool == "policy_read_file":
+        try:
+            content = json.loads(text)["content"]
+        except (ValueError, KeyError, TypeError):
+            # Not a whole record (the server cut it): measured as it stands.
+            pass
+        else:
+            if isinstance(content, str):
+                return len(content.encode())
+    return len(text.encode())
 
 
 # ——— The context budget ———
@@ -171,7 +188,7 @@ async def read_project(mcp: MCPToolset[Any], project_id: str) -> ProjectState:
     listed, (roles, agents) = await asyncio.gather(
         _call(mcp, "policy_list_files", args), _read_graph(mcp, args)
     )
-    listed = json.loads(listed)
+    listed = _file_list(listed)
     snapshot = {f["name"]: f["text_hash"] for f in listed["files"]}
     if "policy.yaml" in snapshot:
         layout = "compose"
@@ -180,6 +197,27 @@ async def read_project(mcp: MCPToolset[Any], project_id: str) -> ProjectState:
     else:
         layout = "empty"
     return ProjectState(snapshot=snapshot, layout=layout, roles=roles, agents=agents)
+
+
+# How the MCP server ends a result it cut short at its size cap (its
+# tools/__init__.py; copied, since this package never imports hexgate_mcp).
+# A file list cut there is no longer JSON.
+TRUNCATED_MARKER = '\n{"truncated": true}'
+
+
+def _file_list(text: str) -> dict[str, Any]:
+    """The parsed `policy_list_files` result. Raises :class:`ProjectUnreadable`
+    when the server cut it short: a partial list would leave files out of the
+    snapshot every write is checked against."""
+    try:
+        return json.loads(text)
+    except ValueError as exc:
+        if text.endswith(TRUNCATED_MARKER):
+            raise ProjectUnreadable(
+                "the project has more policy files and modules than the "
+                "platform lists in one answer"
+            ) from exc
+        raise ProjectUnreadable("the platform's policy file list is not JSON") from exc
 
 
 async def _read_graph(
