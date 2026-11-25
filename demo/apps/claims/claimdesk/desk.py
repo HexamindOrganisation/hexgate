@@ -19,6 +19,8 @@ HANDLER_AUTHORITY_EUR = 5000
 COMPANY_DOMAIN = "hexa-assurance.example"
 COMPANY_ADDRESS = re.compile(rf"[^,;\s@]+@{re.escape(COMPANY_DOMAIN)}", re.IGNORECASE)
 ERROR_PREFIX = "Error:"  # how a request the desk cannot do starts
+ID_SEPARATORS = re.compile(r"[\s_]+")
+TITLE_SEPARATORS = re.compile(r"[_-]+")
 
 STATUS_OPEN = "open"
 STATUS_PAID = "paid"
@@ -214,11 +216,13 @@ def _find(claim_id: str) -> Claim | None:
 
 def _find_document(claim: Claim, reference: str) -> Document | None:
     """By id (DOC-2), or by what a model calls it from its title ("expert_report")."""
-    wanted = str(reference).strip().lower().replace("_", " ")
-    by_id = next((d for d in claim.documents if d.id.lower() == wanted), None)
+    wanted = str(reference).strip().lower()
+    as_id = ID_SEPARATORS.sub("-", wanted)
+    by_id = next((d for d in claim.documents if d.id.lower() == as_id), None)
     if by_id is not None:
         return by_id
-    by_title = [d for d in claim.documents if wanted and wanted in d.title.lower()]
+    as_title = TITLE_SEPARATORS.sub(" ", wanted)
+    by_title = [d for d in claim.documents if as_title and as_title in d.title.lower()]
     return by_title[0] if len(by_title) == 1 else None
 
 
