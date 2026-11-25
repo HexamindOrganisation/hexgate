@@ -314,6 +314,8 @@ export function Copilot({
   status,
   customerId,
   beneficiaries,
+  busy,
+  onBusyChange,
 }: {
   me: Me | null;
   status: Pick<Me, "protected" | "error" | "model"> | null;
@@ -321,10 +323,12 @@ export function Copilot({
   customerId: string;
   /** The open customer's registered IBANs, normalized. */
   beneficiaries: string[];
+  /** A run is in flight; owned by the page so the file selector can lock while it lasts. */
+  busy: boolean;
+  onBusyChange: (busy: boolean) => void;
 }) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
   const thread = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
 
@@ -348,7 +352,7 @@ export function Copilot({
 
   async function send(message: string) {
     if (busy || !message.trim()) return;
-    setBusy(true);
+    onBusyChange(true);
     setEntries((prev) => [
       ...prev,
       { kind: "user", text: message },
@@ -370,7 +374,7 @@ export function Copilot({
       });
     } finally {
       updateTurn((turn) => ({ ...turn, typing: false }));
-      setBusy(false);
+      onBusyChange(false);
       input.current?.focus();
     }
   }

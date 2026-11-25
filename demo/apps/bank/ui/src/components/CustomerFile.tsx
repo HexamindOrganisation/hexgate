@@ -4,6 +4,7 @@ import type { ActivityEvent, BankAccount, Customer, Message } from "@/lib/api";
 import { cn, eur } from "@/lib/utils";
 
 const FLASH_MS = 1200;
+const LOCKED_HINT = "Wait for the assistant to finish before opening another file";
 
 /** One account. Flashes when its balance, state or tags change. */
 function AccountCard({ account }: { account: BankAccount }) {
@@ -66,6 +67,7 @@ export function CustomerFile({
   customers,
   openId,
   onOpen,
+  locked,
   inbox,
   events,
   movedOut,
@@ -73,6 +75,8 @@ export function CustomerFile({
   customers: Customer[];
   openId: string;
   onOpen: (customerId: string) => void;
+  /** The assistant is running on this file: switching now would strand the run. */
+  locked: boolean;
   inbox: Message[];
   events: ActivityEvent[];
   movedOut: number;
@@ -89,6 +93,8 @@ export function CustomerFile({
             id="customer"
             className="input h-10 w-auto min-w-[240px] text-[15px] font-semibold"
             value={openId}
+            disabled={locked}
+            title={locked ? LOCKED_HINT : undefined}
             onChange={(e) => onOpen(e.target.value)}
           >
             {customers.map((c) => (

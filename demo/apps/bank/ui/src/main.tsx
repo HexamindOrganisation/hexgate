@@ -12,6 +12,7 @@ import { Sidebar } from "@/components/Sidebar";
 function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [state, setState] = useState<AppState | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     void getJson<Me>("/api/me").then(setMe);
@@ -57,11 +58,19 @@ function App() {
           customers={customers}
           openId={openId}
           onOpen={openFile}
+          locked={busy}
           inbox={state?.inbox ?? []}
           events={state?.events ?? []}
           movedOut={state?.moved_out_eur ?? 0}
         />
-        <Copilot me={me} status={state ?? me} customerId={openId} beneficiaries={beneficiaries} />
+        <Copilot
+          me={me}
+          status={state ?? me}
+          customerId={openId}
+          beneficiaries={beneficiaries}
+          busy={busy}
+          onBusyChange={setBusy}
+        />
       </div>
     </div>
   );
