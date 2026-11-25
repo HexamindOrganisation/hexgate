@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import "./index.css";
@@ -13,6 +13,14 @@ function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [state, setState] = useState<AppState | null>(null);
   const [busy, setBusy] = useState(false);
+  const stateSeq = useRef(0);
+
+  // Only the latest fetch may write: a poll sent before a file switch can land after it.
+  async function refreshState() {
+    const seq = ++stateSeq.current;
+    const next = await getJson<AppState>("/api/state");
+    if (seq === stateSeq.current) setState(next);
+  }
 
   useEffect(() => {
     void getJson<Me>("/api/me").then(setMe);
@@ -24,7 +32,7 @@ function App() {
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
-        setState(await getJson<AppState>("/api/state"));
+        await refreshState();
       } catch {
         // server restarting (agent.py reload): try again
       }
@@ -39,7 +47,7 @@ function App() {
 
   async function openFile(customerId: string) {
     await postJson("/api/session", { customer_id: customerId });
-    setState(await getJson<AppState>("/api/state"));
+    await refreshState();
   }
 
   const customers = state?.customers ?? [];
