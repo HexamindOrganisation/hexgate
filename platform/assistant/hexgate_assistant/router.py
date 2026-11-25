@@ -59,8 +59,8 @@ async def post_turn(request: Request) -> Response:
         return _refusal(409, "busy")
     except SessionNotFound:
         raise HTTPException(404, "session not found") from None
-    except ProjectUnreadable as exc:
-        logger.warning("turn of %s: project unreadable: %s", token.subject, exc)
+    except ProjectUnreadable:
+        # Logged, with its cause, where the reads failed.
         raise HTTPException(502, "the platform could not be reached") from None
     return StreamingResponse(
         runner.stream(started),

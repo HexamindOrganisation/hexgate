@@ -1,7 +1,6 @@
 """The assistant's HTTP app: its liveness route and the turn route, over the
 database its turns use, whose tables are created at start-up."""
 
-import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -31,9 +30,9 @@ from hexgate_assistant.settings import Settings
 # A stop, in this order, within the 10 s Docker allows (compose sets no
 # stop_grace_period): open streams get GRACEFUL_SECONDS before they are cut,
 # which is what lets the shutdown below start; then the turns still running
-# get SHUTDOWN_SECONDS to store what they got to and release their locks.
-# Past Docker's 10 s the process is killed and a lock waits out its stale
-# time instead.
+# get SHUTDOWN_SECONDS to store what they got to (runner.STORE_SECONDS) and
+# release their locks: about 8 s with the process's own exit. Past Docker's
+# 10 s the process is killed and a lock waits out its stale time instead.
 GRACEFUL_SECONDS = 3
 SHUTDOWN_SECONDS = 5
 
@@ -68,7 +67,8 @@ def create_app(settings: Settings, *, model: Model | None = None) -> Starlette:
                 try:
                     yield
                 finally:
-                    await _stop(app.state.turns)
+                    if app.state.turns is not None:
+                        await app.state.turns.stop(SHUTDOWN_SECONDS)
         finally:
             await engine.dispose()
 
@@ -92,14 +92,3 @@ def _turns(
         mcp_url=settings.mcp_url,
         budget=context_budget(model.context_window, settings.context_tokens),
     )
-
-
-async def _stop(turns: Turns | None) -> None:
-    """Cancel the turns still running, once each, and give them a moment to
-    store and release."""
-    if turns is None or not turns.running:
-        return
-    running = list(turns.running)
-    for task in running:
-        task.cancel()
-    await asyncio.wait(running, timeout=SHUTDOWN_SECONDS)

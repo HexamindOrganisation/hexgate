@@ -12,16 +12,18 @@ import asyncio
 import hashlib
 import logging
 import uuid
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
+import anyio
 from pydantic_ai import Agent, capture_run_messages
 from pydantic_ai.capabilities import ProcessHistory
 from pydantic_ai.exceptions import (
     ModelAPIError,
     ModelContextWindowExceededError,
+    ModelRequestTimeout,
     OutputTokenLimitExceeded,
     RunTimedOut,
     UnexpectedModelBehavior,
@@ -68,6 +70,9 @@ logger = logging.getLogger(__name__)
 # proxy nor the browser takes a long model request (up to 120 s) for a dead
 # stream.
 PING_SECONDS = 15
+# How long a turn waits for its messages and usage to be stored, whatever
+# ends it: inside the shutdown's own wait (server.SHUTDOWN_SECONDS).
+STORE_SECONDS = 4
 # A new session's title: the start of its first message.
 TITLE_CHARS = 80
 APPLY_SCOPE = "policy:apply"
@@ -103,6 +108,15 @@ class Turns:
 
     def __post_init__(self) -> None:
         self.store = SessionStore(self.db)
+
+    async def stop(self, seconds: float) -> None:
+        """Cancel the turns still running, once each, and wait at most
+        `seconds` for them to store and release."""
+        running = list(self.running)
+        for task in running:
+            task.cancel()
+        if running:
+            await asyncio.wait(running, timeout=seconds)
 
     @property
     def prefix_tokens(self) -> int:
@@ -175,7 +189,7 @@ async def _turn(
             queue: Events = asyncio.Queue()
             ready.set_result(queue)
             try:
-                run = _Run(turns, token, session, turn_id, queue)
+                run = _Run(turns, token, project_id, session, turn_id, queue)
                 await run.execute(history, prompt, project.snapshot, started_at)
             finally:
                 queue.put_nowait(None)
@@ -221,7 +235,24 @@ async def _read_project(
                 turns.reference = await read_reference(mcp)
             return await read_project(mcp, project_id)
     except Exception as exc:
+        # Which failure (a 401 or 403 from MCP, a connection refused), never
+        # the token; the answer stays 502 whichever it is.
+        logger.warning(
+            "turn-start reads failed (sub %s, project %s): %s",
+            token.subject,
+            project_id,
+            _describe(exc),
+        )
         raise ProjectUnreadable(type(exc).__name__) from exc
+
+
+def _describe(exc: BaseException) -> str:
+    """The innermost errors of `exc`, by class and message, cut short."""
+    if isinstance(exc, BaseExceptionGroup):
+        return "; ".join(_describe(e) for e in exc.exceptions)
+    if exc.__cause__ is not None:
+        return _describe(exc.__cause__)
+    return f"{type(exc).__name__}: {str(exc)[:200]}"
 
 
 class _Run:
@@ -231,12 +262,14 @@ class _Run:
         self,
         turns: Turns,
         token: AssistantToken,
+        project_id: str,
         session: AssistantSession,
         turn_id: str,
         queue: Events,
     ) -> None:
         self._turns = turns
         self._token = token
+        self._project_id = project_id
         self._session = session
         self._turn_id = turn_id
         self._queue = queue
@@ -272,13 +305,32 @@ class _Run:
                 )
                 final = events.run_finished(thread_id, self._turn_id)
             except Exception as exc:
-                final = events.run_error(*_error(exc))
+                final = events.run_error(*self._ended_by(exc))
             finally:
                 # Stored however the run ended, a shutdown's cancellation
                 # included, and before the stream ends, so a message sent
                 # the moment it ends finds this turn in its history.
-                await self._store(_new_messages(captured[len(history) :]))
+                await _shielded(
+                    self._store(_new_messages(captured[len(history) :])),
+                    STORE_SECONDS,
+                    f"turn {self._turn_id}: store",
+                )
         self._send(final)
+
+    def _ended_by(self, exc: Exception) -> tuple[str | None, str]:
+        """The run error for `exc`, logged once: which turn, whose, why."""
+        code, message = _error(exc)
+        where = (self._turn_id, self._token.subject, self._project_id)
+        if code is None:
+            logger.error("turn %s (sub %s, project %s) failed", *where, exc_info=exc)
+        else:
+            logger.warning(
+                "turn %s (sub %s, project %s) ended: %s (%s)",
+                *where,
+                code,
+                type(exc).__name__,
+            )
+        return code, message
 
     async def _forward(
         self, ctx: RunContext[TurnDeps], stream: AsyncIterator[AgentStreamEvent]
@@ -292,6 +344,7 @@ class _Run:
         if not new:
             return
         model = self._turns.agent.model
+        assert isinstance(model, Model)
         try:
             await self._turns.store.append_messages(
                 self._session, without_instructions(new)
@@ -299,7 +352,7 @@ class _Run:
             await self._turns.store.record_usage(
                 self._session,
                 org_id=self._token.org,
-                model=model.model_name if isinstance(model, Model) else str(model),
+                model=model.model_name,
                 usage=self._usage,
                 # Priced by the budget's own change; until then, unpriced.
                 cost_micros=0,
@@ -314,9 +367,11 @@ class _Run:
 
 def _new_messages(new: list[ModelMessage]) -> list[ModelMessage]:
     """What the run added to the session. A run that got no answer from the
-    model (its first request refused, over budget or failed) adds nothing:
-    the session then stops growing."""
-    return new if any(isinstance(m, ModelResponse) for m in new) else []
+    model (its first request refused, over budget or failed, which Pydantic
+    AI records as a response with no parts) adds nothing: the session then
+    stops growing."""
+    answered = any(isinstance(m, ModelResponse) and m.parts for m in new)
+    return new if answered else []
 
 
 # The run error code and message for each way a run can end early.
@@ -331,6 +386,9 @@ _ERRORS: tuple[tuple[type[BaseException], str, str], ...] = (
         "limit_reached",
         "This answer reached its length limit.",
     ),
+    # Before ModelAPIError, which it subclasses: one request past its own
+    # deadline, every retry included.
+    (ModelRequestTimeout, "timeout", "The answer took too long and was stopped."),
     (ModelAPIError, "provider", "The model provider failed."),
     (
         UnexpectedModelBehavior,
@@ -344,5 +402,37 @@ def _error(exc: BaseException) -> tuple[str | None, str]:
     for kind, code, message in _ERRORS:
         if isinstance(exc, kind):
             return code, message
-    logger.error("turn failed", exc_info=exc)
     return None, "The assistant failed."
+
+
+async def _shielded(work: Awaitable[None], seconds: float, what: str) -> None:
+    """Run `work` in a task of its own and wait for it at most `seconds`,
+    whatever cancels the caller in the meantime (a shutdown's
+    ``task.cancel()``, or Starlette's anyio scope): a cancellation is held
+    until the wait ends, then raised. A task still running then is left to
+    finish, and logged."""
+    task = asyncio.ensure_future(work)
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    cancelled: asyncio.CancelledError | None = None
+    while not task.done():
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            logger.warning("%s still running after %s s", what, seconds)
+            break
+        try:
+            with anyio.move_on_after(remaining, shield=True):
+                await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            cancelled = exc
+        except Exception:
+            break
+    if cancelled is not None:
+        raise cancelled
+
+
+# Work still running after its caller stopped waiting; held so the event
+# loop keeps it.
+_background: set[asyncio.Future[None]] = set()

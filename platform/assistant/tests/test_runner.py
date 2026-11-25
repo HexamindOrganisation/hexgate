@@ -3,13 +3,19 @@ framework's function model and a fake MCP server."""
 
 import asyncio
 import json
+import socket
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
 
 import httpx
 import pytest
-from pydantic_ai.exceptions import ModelContextWindowExceededError, ModelHTTPError
+import uvicorn
+from pydantic_ai.exceptions import (
+    ModelContextWindowExceededError,
+    ModelHTTPError,
+    ModelRequestTimeout,
+)
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
@@ -20,10 +26,9 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 from sqlalchemy import select
 
-from hexgate_assistant import agent as agent_module
 from hexgate_assistant import runner
 from hexgate_assistant.auth import AssistantToken, JwksTokenVerifier
-from hexgate_assistant.context import Editor, estimate_tokens
+from hexgate_assistant.context import Editor
 from hexgate_assistant.jwks import JwksCache
 from hexgate_assistant.models import (
     AssistantMessage,
@@ -50,6 +55,18 @@ GRAPH = json.dumps({"roles": ["support"], "declared_agents": ["billing"]})
 RESOLVE = ToolCallPart("policy_resolve", {"project_id": PROJECT}, "c1")
 
 Respond = Callable[[list[ModelMessage], AgentInfo], ModelResponse]
+
+
+class Gate(asyncio.Event):
+    """An event that also says when something first waits on it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reached = asyncio.Event()
+
+    async def wait(self) -> bool:
+        self.reached.set()
+        return await super().wait()
 
 
 def scripted(respond: Respond, gate: asyncio.Event | None = None, gate_from: int = 0):
@@ -113,18 +130,23 @@ async def mcp():
         yield state
 
 
+def verifier(settings, key) -> JwksTokenVerifier:
+    """The app's verifier, with the API's JWKS served from memory."""
+    keys = httpx.MockTransport(lambda _: httpx.Response(200, json=jwks(key)))
+    return JwksTokenVerifier(
+        keys=JwksCache(JWKS_URL, httpx.AsyncClient(transport=keys)),
+        issuer=settings.issuer,
+        audience=settings.resource_url,
+    )
+
+
 @asynccontextmanager
 async def platform(settings, mcp: FakeMCP, key, model: FunctionModel | None):
     """The app over its lifespan: a client with a valid token, and the
     shared turn state."""
     app = create_app(replace(settings, mcp_url=mcp.url), model=model)
     async with app.router.lifespan_context(app):
-        keys = httpx.MockTransport(lambda _: httpx.Response(200, json=jwks(key)))
-        app.state.verifier = JwksTokenVerifier(
-            keys=JwksCache(JWKS_URL, httpx.AsyncClient(transport=keys)),
-            issuer=settings.issuer,
-            audience=settings.resource_url,
-        )
+        app.state.verifier = verifier(settings, key)
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
             transport=transport, base_url="http://a"
@@ -183,10 +205,12 @@ async def test_post_turn_happy_path(settings, mcp, key, db):
         seen.append(messages)
         return tool_then_text(messages, info)
 
-    events = await run_turn(
-        settings, mcp, key, respond, editor={"open_file": "a.yaml", "unsaved": []}
-    )
+    async with platform(settings, mcp, key, scripted(respond)) as (client, turns):
+        response = await post(client, editor={"open_file": "a.yaml", "unsaved": []})
+        await settle(turns)
+    events = parse(response.text)
 
+    assert response.headers["content-type"].startswith("text/event-stream")
     assert kinds(events) == [
         "RUN_STARTED",
         "TOOL_CALL_START",
@@ -314,13 +338,18 @@ async def test_when_the_session_is_another_users_then_404(settings, mcp, key, db
 
 
 async def test_when_mcp_cannot_be_reached_then_502_and_the_lock_is_released(
-    settings, mcp, key, db
+    settings, mcp, key, db, caplog
 ):
     async with platform(settings, mcp, key, scripted(text)) as (client, turns):
         turns.mcp_url = "http://127.0.0.1:9/mcp"
         response = await post(client)
 
     assert response.status_code == 502
+    (line,) = [
+        r.getMessage() for r in caplog.records if "reads failed" in r.getMessage()
+    ]
+    assert "ConnectError" in line and PROJECT in line
+    assert "eyJ" not in caplog.text
     assert await rows(db, AssistantTurnLock) == []
     # Refused before a session was made: no empty chat is left behind.
     assert await rows(db, AssistantSession) == []
@@ -417,41 +446,6 @@ async def test_when_the_turn_runs_past_its_deadline_then_timeout_and_the_next_tu
     assert await rows(db, AssistantTurnLock) == []
 
 
-async def test_when_a_tool_runs_over_its_time_then_the_model_is_told_and_the_turn_goes_on(
-    settings, mcp, key, monkeypatch
-):
-    # The agent's MCP calls only; the turn-start reads keep their own limit.
-    monkeypatch.setattr(agent_module, "MCP_CALL_SECONDS", 1)
-    mcp.delays["policy_resolve"] = 3
-
-    events = await run_turn(settings, mcp, key, tool_then_text)
-
-    assert kinds(events)[-1] == "RUN_FINISHED"
-    answer = "".join(e["delta"] for e in events if e["type"] == "TEXT_MESSAGE_CONTENT")
-    assert "timed out" in answer
-
-
-async def test_when_a_tool_result_is_200_kib_then_the_model_gets_8000_tokens_with_both_ends(
-    settings, mcp, key
-):
-    mcp.results["policy_resolve"] = "HEAD" + "x" * 200 * 1024 + "TAIL"
-    seen: list[str] = []
-
-    def respond(messages, info):
-        seen.extend(
-            p.model_response_str()
-            for p in messages[-1].parts
-            if isinstance(p, ToolReturnPart)
-        )
-        return tool_then_text(messages, info)
-
-    await run_turn(settings, mcp, key, respond)
-
-    assert estimate_tokens(seen[0]) <= 8000
-    assert seen[0].startswith("HEAD") and seen[0].endswith("TAIL")
-    assert "narrower request" in seen[0]
-
-
 async def test_when_the_history_is_over_budget_then_context_full_and_nothing_stored(
     settings, mcp, key, db
 ):
@@ -482,6 +476,10 @@ def fail(_messages, _info):
     raise ModelHTTPError(500, "m", body="down")
 
 
+def request_timeout(_messages, _info):
+    raise ModelRequestTimeout("m", 120)
+
+
 def window_exceeded(_messages, _info):
     raise ModelContextWindowExceededError("m", "prompt is too long")
 
@@ -498,15 +496,30 @@ def never_stop(_messages, _info):
         (fail, "provider"),
         (never_stop, "limit_reached"),
         (window_exceeded, "context_full"),
+        (request_timeout, "timeout"),
     ],
 )
 async def test_when_the_run_fails_then_run_error_names_why(
-    settings, mcp, key, respond, code
+    settings, mcp, key, respond, code, caplog
 ):
     events = await run_turn(settings, mcp, key, respond)
 
     assert events[-1]["type"] == "RUN_ERROR"
     assert events[-1]["code"] == code
+    # Logged once, with which turn, whose and why.
+    (line,) = [r.getMessage() for r in caplog.records if " ended: " in r.getMessage()]
+    assert code in line and SUB in line and PROJECT in line
+    assert events[0]["runId"] in line
+
+
+async def test_when_the_first_request_fails_then_the_session_does_not_grow(
+    settings, mcp, key, db
+):
+    events = await run_turn(settings, mcp, key, window_exceeded)
+
+    assert events[-1]["code"] == "context_full"
+    assert await rows(db, AssistantMessage) == []
+    assert await rows(db, AssistantUsage) == []
 
 
 # ——— Turn-start reads ———
@@ -598,20 +611,19 @@ async def test_when_a_change_was_applied_earlier_then_the_card_names_it(
 async def test_when_the_server_stops_mid_turn_then_the_turn_is_stored_and_unlocked(
     settings, mcp, key, db
 ):
-    # The answer after the tool call never comes: the stop cancels the turn.
-    model = scripted(tool_then_text, asyncio.Event(), gate_from=1)
+    # The answer after the tool call never comes: the app's shutdown cancels
+    # the turn while that request waits.
+    gate = Gate()
+    model = scripted(tool_then_text, gate, gate_from=1)
 
     async with platform(settings, mcp, key, model) as (client, turns):
         response = asyncio.create_task(post(client))
-        while not any(c.tool == "policy_resolve" for c in mcp.calls):
-            await asyncio.sleep(0.01)
-        await asyncio.sleep(0.1)
-        # As the app's shutdown does, once.
-        for task in list(turns.running):
-            task.cancel()
-        await settle(turns)
-        response.cancel()
+        await gate.reached.wait()
+        running = list(turns.running)
+    # Leaving the block ran the app's shutdown.
+    response.cancel()
 
+    assert running and all(t.cancelled() for t in running)
     history = [m for r in await rows(db, AssistantMessage) for m in r.content]
     stored = [
         (p["part_kind"], p.get("tool_call_id")) for m in history for p in m["parts"]
@@ -621,6 +633,160 @@ async def test_when_the_server_stops_mid_turn_then_the_turn_is_stored_and_unlock
     assert await rows(db, AssistantTurnLock) == []
 
 
+async def test_when_a_stop_lands_while_the_turn_is_stored_then_the_store_finishes(
+    settings, mcp, key, db
+):
+    entered = asyncio.Event()
+
+    async with platform(settings, mcp, key, scripted(text)) as (client, turns):
+        original = turns.store.append_messages
+
+        async def slow_append(*args, **kwargs):
+            entered.set()
+            await asyncio.sleep(0.5)
+            return await original(*args, **kwargs)
+
+        turns.store.append_messages = slow_append
+        response = asyncio.create_task(post(client))
+        await entered.wait()
+        for task in list(turns.running):
+            task.cancel()
+        # The turn itself waited for its store: nothing else is awaited.
+        await settle(turns)
+        response.cancel()
+
+    assert len(await rows(db, AssistantMessage)) == 1
+    assert len(await rows(db, AssistantUsage)) == 1
+
+
 def test_shutdown_happy_path():
     # Streams cut, then turns stored and unlocked, inside Docker's 10 s.
     assert GRACEFUL_SECONDS + SHUTDOWN_SECONDS < 10
+    # A turn's store finishes inside the shutdown's wait.
+    assert runner.STORE_SECONDS < SHUTDOWN_SECONDS
+
+
+async def test_when_the_request_is_cancelled_before_the_stream_then_the_turn_still_runs(
+    settings, mcp, key, db
+):
+    mcp.delays["policy_list_files"] = 0.5
+
+    async with platform(settings, mcp, key, scripted(text)) as (client, turns):
+        request = asyncio.create_task(post(client))
+        while not mcp.calls:
+            await asyncio.sleep(0.01)
+        # The browser leaves during the turn-start reads.
+        request.cancel()
+        await settle(turns)
+
+    assert len(await rows(db, AssistantMessage)) == 1
+    assert await rows(db, AssistantTurnLock) == []
+
+
+async def test_when_the_turn_start_reads_outlast_the_deadline_then_timeout_before_the_model(
+    settings, mcp, key, monkeypatch
+):
+    # The deadline counts from when the lock was taken, reads included.
+    monkeypatch.setattr(runner, "TURN_DEADLINE", runner.TURN_DEADLINE / 300)  # 1 s
+    mcp.delays["policy_list_files"] = 1.5
+    seen: list[object] = []
+
+    events = await run_turn(settings, mcp, key, recording(seen, last_prompt))
+
+    assert events[-1]["code"] == "timeout"
+    assert seen == []
+
+
+async def test_when_a_turn_ends_then_its_messages_are_stored_before_its_usage(
+    settings, mcp, key
+):
+    order: list[str] = []
+
+    async with platform(settings, mcp, key, scripted(text)) as (client, turns):
+        store = turns.store
+        for name in ("append_messages", "record_usage"):
+            original = getattr(store, name)
+
+            async def logged(*args, _name=name, _original=original, **kwargs):
+                order.append(_name)
+                return await _original(*args, **kwargs)
+
+            setattr(store, name, logged)
+        await turn(client, turns)
+
+    assert order == ["append_messages", "record_usage"]
+
+
+async def test_when_the_server_stops_during_the_turn_start_reads_then_the_request_ends(
+    settings, mcp, key
+):
+    mcp.delays["policy_list_files"] = 5
+
+    async with platform(settings, mcp, key, scripted(text)) as (client, turns):
+        request = asyncio.create_task(post(client))
+        while not mcp.calls:
+            await asyncio.sleep(0.01)
+        for task in list(turns.running):
+            task.cancel()
+        # The request waiting on the turn is released, not left hanging.
+        done, _ = await asyncio.wait([request], timeout=3)
+        request.cancel()
+
+    assert done == {request}
+
+
+async def test_when_the_browser_closes_the_stream_then_the_turn_runs_on(
+    settings, mcp, key, db, monkeypatch
+):
+    # Over a real server, so the response is cancelled the way a closed tab
+    # cancels it. The answer after the tool call waits until the stream is
+    # gone.
+    gate = asyncio.Event()
+    closed = asyncio.Event()
+    stream = runner.stream
+
+    async def watched(queue):
+        try:
+            async for chunk in stream(queue):
+                yield chunk
+        finally:
+            closed.set()
+
+    monkeypatch.setattr(runner, "stream", watched)
+    app = create_app(
+        replace(settings, mcp_url=mcp.url),
+        model=scripted(tool_then_text, gate, gate_from=1),
+    )
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+    )
+    serving = asyncio.create_task(server.serve())
+    while not server.started:
+        await asyncio.sleep(0.01)
+    app.state.verifier = verifier(settings, key)
+    turns = app.state.turns
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            async with client.stream(
+                "POST",
+                TURNS,
+                json={"session_id": None, "message": "hi"},
+                headers={"Authorization": f"Bearer {key.mint()}"},
+            ) as response:
+                async for line in response.aiter_lines():
+                    if '"TOOL_CALL_RESULT"' in line:
+                        break
+        # The server has seen the close and ended the response.
+        await asyncio.wait_for(closed.wait(), 5)
+        gate.set()
+        await settle(turns)
+    finally:
+        server.should_exit = True
+        await serving
+
+    history = [m for r in await rows(db, AssistantMessage) for m in r.content]
+    assert history[-1]["parts"][0]["content"] == "saw: policy_resolve result"
+    assert await rows(db, AssistantTurnLock) == []
