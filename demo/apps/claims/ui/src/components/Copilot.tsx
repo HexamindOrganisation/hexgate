@@ -3,6 +3,7 @@ import {
   ArrowRight,
   Ban,
   Check,
+  ChevronDown,
   Clock,
   LoaderCircle,
   Plus,
@@ -18,8 +19,11 @@ import { cn, eur } from "@/lib/utils";
 const SUGGESTIONS = [
   "Settle CLM-2041: pay the roofer's invoice, 12,400 euros.",
   "A new invoice came in on CLM-2107. Process it and pay it today.",
-  "What's the status of CLM-2041?",
+  "Process the expert report on CLM-2112.",
 ];
+
+const DOCUMENT_TOOL = "read_document";
+const SHOWN_ARG_CHARS = 40;
 
 type Args = Record<string, unknown>;
 
@@ -42,11 +46,16 @@ type Item =
 
 type Entry = { kind: "user"; text: string } | { kind: "turn"; items: Item[]; typing: boolean };
 
+/** An argument on one line, cut short: an email body would fill the chat. */
+function brief(value: unknown): string {
+  const line = (typeof value === "string" ? value : JSON.stringify(value)).split("\n", 1)[0];
+  return line.length <= SHOWN_ARG_CHARS ? line : `${line.slice(0, SHOWN_ARG_CHARS)}…`;
+}
+
 function signature(name: string, args: Args): string {
-  const vals = Object.values(args || {}).map((v) =>
-    typeof v === "string" ? v : JSON.stringify(v),
-  );
-  return `${name}(${vals.join(", ")})`;
+  return `${name}(${Object.values(args || {})
+    .map(brief)
+    .join(", ")})`;
 }
 
 function argsLine(args: Args): string {
@@ -140,17 +149,51 @@ function CallChip({
     rejected: "rejected, did not run",
     failed: "failed",
   }[item.status];
+  // What the tool returned, shown on demand: for a document, the text the copilot read.
+  const [open, setOpen] = useState(false);
+  const panel = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    if (open) panel.current?.scrollIntoView({ block: "nearest" });
+  }, [open]);
+  const result = item.status === "done" ? item.title : undefined;
+  const isDocument = item.name === DOCUMENT_TOOL;
+  const toggleLabel = isDocument ? "document" : "result";
   return (
-    <div className="call" title={item.title}>
-      {item.status === "running" ? (
-        <LoaderCircle size={14} strokeWidth={2.4} className="animate-spin text-faint" aria-hidden />
-      ) : failed ? (
-        <Ban size={16} strokeWidth={2.2} className="text-bad" aria-hidden />
-      ) : (
-        <Check size={14} strokeWidth={2.4} className="text-ok" aria-hidden />
+    <div className="flex flex-col gap-1.5">
+      <div className="call" title={failed ? item.title : undefined}>
+        {item.status === "running" ? (
+          <LoaderCircle
+            size={14}
+            strokeWidth={2.4}
+            className="animate-spin text-faint"
+            aria-hidden
+          />
+        ) : failed ? (
+          <Ban size={16} strokeWidth={2.2} className="text-bad" aria-hidden />
+        ) : (
+          <Check size={14} strokeWidth={2.4} className="text-ok" aria-hidden />
+        )}
+        <span className="sig">{signature(item.name, item.args)}</span>
+        <span className={cn("meta", shownApproved && "approved", failed && "failed")}>{meta}</span>
+        {result && (
+          <button
+            type="button"
+            className="peek"
+            aria-expanded={open}
+            aria-label={`${open ? "Hide" : "View"} ${toggleLabel}`}
+            title={`${open ? "Hide" : "View"} ${toggleLabel}`}
+            onClick={() => setOpen((o) => !o)}
+          >
+            {isDocument && (open ? "Hide document" : "View document")}
+            <ChevronDown size={14} strokeWidth={2.2} className={cn(open && "rotate-180")} />
+          </button>
+        )}
+      </div>
+      {open && result && (
+        <pre ref={panel} className={cn("result", isDocument && "document")}>
+          {result}
+        </pre>
       )}
-      <span className="sig">{signature(item.name, item.args)}</span>
-      <span className={cn("meta", shownApproved && "approved", failed && "failed")}>{meta}</span>
     </div>
   );
 }

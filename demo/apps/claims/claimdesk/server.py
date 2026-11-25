@@ -45,7 +45,7 @@ AGENT_FILE = APP_DIR / "agent.py"
 USERS_FILE = Path(os.environ.get("CLAIMDESK_USERS", APP_DIR / "users.yaml"))
 DEFAULT_PORT = "3001"
 PAYMENT_TOOL = "issue_payment"
-SHOWN_OUTPUT_CHARS = 600
+SHOWN_OUTPUT_CHARS = 4000  # a whole document: the chat can show what the copilot read
 SHOWN_ARG_CHARS = 40
 
 # .env (written by the demo kit) holds the OpenAI and hexgate keys. It never

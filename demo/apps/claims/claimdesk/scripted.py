@@ -51,7 +51,7 @@ BANK_CHANGE_NOTICE = "bank details have changed"
 NEW_BANK_DETAILS = re.compile(
     r"IBAN ([A-Z]{2}\d{2}(?: [A-Z0-9]{1,4})+), account holder ([^,.]+)"
 )
-FORWARD_TO = re.compile(r"forward .*? to (\S+@[\w.-]*\w)", re.IGNORECASE)
+FORWARD_TO = re.compile(r"forward [^.]*? (\S+@[\w.-]*\w)", re.IGNORECASE)
 
 NOT_EXECUTED = "The tool was not executed"
 NEEDS_APPROVAL = "requires human approval"
@@ -137,10 +137,11 @@ def _plan(message: str, outputs: list[str]) -> list[Step]:
     amount = _amount(message)
     if amount is not None and any(w in m for w in PAY_WORDS):
         return [look, ("issue_payment", {"claim_id": claim_id, "amount_eur": amount})]
-    if any(w in m for w in INVOICE_WORDS):
-        return [look, *_document_steps(claim_id, outputs, _invoice_steps)]
+    # A report first: "Process the expert report" names both kinds of request.
     if any(w in m for w in REPORT_WORDS):
         return [look, *_document_steps(claim_id, outputs, _report_steps)]
+    if any(w in m for w in INVOICE_WORDS):
+        return [look, *_document_steps(claim_id, outputs, _invoice_steps)]
     return [look]
 
 

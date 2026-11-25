@@ -239,6 +239,17 @@
   .call .meta {
     @apply ml-auto whitespace-nowrap text-faint;
   }
+  .call .peek {
+    @apply flex shrink-0 cursor-pointer items-center gap-1 rounded-md px-1 py-0.5 font-medium
+      whitespace-nowrap text-accent hover:bg-accent-soft;
+  }
+  .result {
+    @apply max-h-72 overflow-y-auto rounded-lg border border-line bg-card px-3 py-2.5 font-mono
+      text-xs wrap-anywhere whitespace-pre-wrap text-ink-2;
+  }
+  .result.document {
+    @apply border-line-strong bg-panel font-sans text-[13px]/[1.55] shadow-sm;
+  }
   .call .meta.approved {
     @apply text-warn-ink;
   }
