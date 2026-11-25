@@ -26,6 +26,7 @@ JWKS_URL = f"{API_URL}/.well-known/jwks.json"
 SUB = "00000000-0000-0000-0000-000000000002"
 PROJECT = "00000000-0000-0000-0000-000000000003"
 OTHER_PROJECT = "00000000-0000-0000-0000-000000000004"
+ORG = "00000000-0000-0000-0000-000000000005"
 # A Postgres URL (postgresql+asyncpg://...) to run the database tests on
 # instead of a per-test SQLite file. Its tables are dropped before each test,
 # so point it at a throwaway database.
@@ -56,6 +57,7 @@ class SigningKey:
         claims = {
             "iss": ISSUER,
             "sub": SUB,
+            "org": ORG,
             "aud": [RESOURCE, MCP_RESOURCE, ISSUER],
             "client_id": CLIENT_ID,
             "scope": "policy:read audit:read agents:read",

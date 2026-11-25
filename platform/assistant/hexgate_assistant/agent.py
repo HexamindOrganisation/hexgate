@@ -1,16 +1,20 @@
 """The assistant's one agent: its instructions, the MCP tools it may call, and
 the limits every turn runs under."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
-from pydantic_ai.toolsets import AbstractToolset
+from pydantic_ai.toolsets import AbstractToolset, ToolsetTool, WrapperToolset
 from pydantic_ai.usage import UsageLimits
+
+from hexgate_assistant.context import as_text, cap_tool_result
 
 # The MCP tools the model is offered, all of them reads. The writes stay out:
 # `policy_save` runs no checks, and `policy_apply` is called by our own code
@@ -61,6 +65,9 @@ class TurnDeps:
     # The user's token for this message. Out of repr: a logged or stored
     # repr of the deps must never carry it.
     token: str = field(repr=False)
+    # {file name: text_hash} as the turn found the files: the base every
+    # write of this turn is checked against.
+    snapshot: Mapping[str, str] = field(default_factory=dict)
 
 
 def build_agent(model: Model, mcp_url: str) -> Agent[TurnDeps, str]:
@@ -88,9 +95,26 @@ def build_toolset(mcp_url: str) -> AbstractToolset[TurnDeps]:
     """
     # `read_timeout` bounds each MCP request; the agent's `tool_timeout`
     # would not, it only covers the agent's own function tools.
-    return MCPToolset(mcp_url, auth=_token, read_timeout=MCP_CALL_SECONDS).filtered(
-        _allowed
-    )
+    mcp = MCPToolset(mcp_url, auth=_token, read_timeout=MCP_CALL_SECONDS)
+    return CappedResults(mcp.filtered(_allowed))
+
+
+@dataclass
+class CappedResults(WrapperToolset[TurnDeps]):
+    """Every tool result cut to what the model may receive, its start and
+    end kept, with a marker asking for a narrower call."""
+
+    async def call_tool(
+        self,
+        name: str,
+        tool_args: dict[str, Any],
+        ctx: RunContext[TurnDeps],
+        tool: ToolsetTool[TurnDeps],
+    ) -> Any:
+        result = await super().call_tool(name, tool_args, ctx, tool)
+        text = as_text(result)
+        capped = cap_tool_result(text)
+        return result if capped == text else capped
 
 
 def _token(ctx: RunContext[TurnDeps]) -> str:

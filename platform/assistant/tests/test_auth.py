@@ -21,6 +21,7 @@ from tests.conftest import (
     ISSUER,
     JWKS_URL,
     MCP_RESOURCE,
+    ORG,
     OTHER_PROJECT,
     PROJECT,
     RESOURCE,
@@ -56,6 +57,7 @@ async def test_verify_token_happy_path(verifier, key):
     assert access is not None
     assert access.token == token
     assert access.subject == SUB
+    assert access.org == ORG
     assert access.scopes == ("policy:read", "audit:read", "agents:read")
     assert access.projects == (PROJECT,)
     assert token not in repr(access)
@@ -77,6 +79,9 @@ async def test_verify_token_happy_path(verifier, key):
         pytest.param({"sub": None}, id="missing-sub"),
         pytest.param({"sub": ""}, id="empty-sub"),
         pytest.param({"sub": 2}, id="sub-not-a-string"),
+        pytest.param({"org": None}, id="missing-org"),
+        pytest.param({"org": ""}, id="empty-org"),
+        pytest.param({"org": 5}, id="org-not-a-string"),
         pytest.param({"scope": None}, id="missing-scope"),
         pytest.param({"scope": ["policy:read"]}, id="scope-not-a-string"),
         pytest.param({"projects": []}, id="empty-projects"),

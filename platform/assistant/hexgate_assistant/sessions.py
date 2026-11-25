@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 # JSON as of the pinned version. A bump that fails the frozen-row test in
 # tests/test_sessions.py raises it, with a conversion of the older rows.
 FORMAT_VERSION = 1
+# The AG-UI `CUSTOM` event name an applied change is stored under.
+CHANGE_EVENT = "change"
 
 
 class SessionNotFound(Exception):
@@ -125,6 +127,22 @@ class SessionStore:
         self, session: AssistantSession, event: dict[str, Any]
     ) -> None:
         await self._append(session, "event", event)
+
+    async def latest_change(self, session: AssistantSession) -> dict[str, Any] | None:
+        """The value of the session's latest stored `change` event, or None."""
+        async with self._db() as db:
+            stored = await db.scalars(
+                select(AssistantMessage.content)
+                .where(
+                    AssistantMessage.session_id == session.id,
+                    AssistantMessage.kind == "event",
+                )
+                .order_by(AssistantMessage.seq.desc())
+            )
+            for event in stored:
+                if event.get("name") == CHANGE_EVENT:
+                    return event.get("value")
+        return None
 
     async def record_usage(
         self,
