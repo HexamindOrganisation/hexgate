@@ -114,6 +114,21 @@ def load_users() -> dict[str, tuple[User, str]]:
 _sessions: dict[str, User] = {}
 _histories: dict[str, list] = {}  # session token -> conversation items
 _open_customer: dict[str, str] = {}  # session token -> customer id open in the page
+_chat_generations: dict[str, int] = {}  # token -> bumped when its chat starts over
+
+
+def chat_generation(token: str) -> int:
+    return _chat_generations.get(token, 0)
+
+
+def start_chat_over(token: str) -> None:
+    _histories.pop(token, None)
+    _chat_generations[token] = chat_generation(token) + 1
+
+
+def is_current_chat(token: str, generation: int) -> bool:
+    """A run may save its history only if nothing started the chat over meanwhile."""
+    return token in _sessions and chat_generation(token) == generation
 
 
 def open_customer_of(token: str) -> str:
@@ -237,6 +252,7 @@ def logout(request: Request) -> Response:
     _sessions.pop(token, None)
     _histories.pop(token, None)
     _open_customer.pop(token, None)
+    _chat_generations.pop(token, None)
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(COOKIE)
     return resp
@@ -267,7 +283,7 @@ async def open_file(request: Request) -> dict:
     if not bank.is_customer(customer_id):
         raise HTTPException(404, f"unknown customer {customer_id!r}")
     if customer_id != open_customer_of(token):
-        _histories.pop(token, None)
+        start_chat_over(token)
     _open_customer[token] = customer_id
     return {"ok": True, "open_customer": customer_id}
 
@@ -275,7 +291,7 @@ async def open_file(request: Request) -> dict:
 @app.post("/api/chat/reset")
 def chat_reset(request: Request) -> dict:
     token, _ = current_user(request)
-    _histories.pop(token, None)
+    start_chat_over(token)
     return {"ok": True}
 
 
@@ -285,6 +301,8 @@ def admin_reset(request: Request) -> dict:
     if request.client and request.client.host not in ("127.0.0.1", "::1", "localhost"):
         raise HTTPException(403)
     bank.reset()
+    for token in list(_sessions):
+        start_chat_over(token)
     _histories.clear()
     _open_customer.clear()
     return {"ok": True}
@@ -387,6 +405,7 @@ async def chat(request: Request) -> StreamingResponse:
         conversation = history + [{"role": "user", "content": message}]
         tool_names: dict[str, tuple[str, dict]] = {}
         customer_id = open_customer_of(token)
+        generation = chat_generation(token)
         actor_token = bank.actor.set(user.username)
         customer_token = bank.open_customer.set(customer_id)
         try:
@@ -439,7 +458,7 @@ async def chat(request: Request) -> StreamingResponse:
                                 "output": str(item.output)[:SHOWN_OUTPUT_CHARS],
                             }
                         )
-            if open_customer_of(token) == customer_id:
+            if is_current_chat(token, generation):
                 _histories[token] = result.to_input_list()
         except Exception as exc:
             log.warning("assistant run failed: %s", exc)
