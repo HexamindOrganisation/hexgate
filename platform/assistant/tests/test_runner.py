@@ -3,7 +3,7 @@ framework's function model and a fake MCP server."""
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
 
@@ -168,6 +168,12 @@ async def post(client: httpx.AsyncClient, **body) -> httpx.Response:
         )
 
 
+async def within[T](awaitable: Awaitable[T]) -> T:
+    """`awaitable`, failing the test if it outlasts a turn."""
+    async with asyncio.timeout(TURN_TEST_SECONDS):
+        return await awaitable
+
+
 async def settle(turns: runner.Turns) -> None:
     """Wait for every turn task, as a detached browser would not."""
     if turns.running:
@@ -323,7 +329,7 @@ async def test_when_a_turn_is_running_then_a_second_one_is_409_busy(
     gate = Gate()
     async with platform(settings, mcp, key, scripted(text, gate)) as (client, turns):
         first = asyncio.create_task(post(client))
-        await gate.reached.wait()
+        await within(gate.reached.wait())
         second = await post(client)
         gate.set()
         await settle(turns)
@@ -379,8 +385,9 @@ async def test_when_the_turn_is_silent_then_a_ping_goes_out(
     async with platform(settings, mcp, key, scripted(text, gate)) as (client, turns):
         response = asyncio.create_task(post(client))
         # Silent once the turn-start reads are done and its session exists.
-        while not await rows(db, AssistantSession):
-            await asyncio.sleep(0.01)
+        async with asyncio.timeout(TURN_TEST_SECONDS):
+            while not await rows(db, AssistantSession):
+                await asyncio.sleep(0.01)
         await asyncio.sleep(0.3)
         gate.set()
         response = await response
@@ -400,7 +407,7 @@ async def test_when_the_browser_disconnects_then_the_turn_is_stored_and_unlocked
 
     async with platform(settings, mcp, key, model) as (_, turns):
         request = runner.TurnRequest(None, "hi", Editor(None, ()))
-        queue = await runner.start(turns, token, PROJECT, request)
+        queue = await within(runner.start(turns, token, PROJECT, request))
         result_seen = asyncio.Event()
 
         async def read() -> None:
@@ -409,7 +416,7 @@ async def test_when_the_browser_disconnects_then_the_turn_is_stored_and_unlocked
                     result_seen.set()
 
         reader = asyncio.create_task(read())
-        await result_seen.wait()
+        await within(result_seen.wait())
         # As Starlette does on a disconnect: the response is cancelled.
         reader.cancel()
         gate.set()
@@ -629,7 +636,7 @@ async def test_when_the_server_stops_mid_turn_then_the_turn_is_stored_and_unlock
 
     async with platform(settings, mcp, key, model) as (client, turns):
         response = asyncio.create_task(post(client))
-        await gate.reached.wait()
+        await within(gate.reached.wait())
         running = list(turns.running)
     # Leaving the block ran the app's shutdown.
     response.cancel()
@@ -659,7 +666,7 @@ async def test_when_a_stop_lands_while_the_turn_is_stored_then_the_store_finishe
 
         turns.store.append_messages = slow_append
         response = asyncio.create_task(post(client))
-        await entered.wait()
+        await within(entered.wait())
         running = list(turns.running)
         for task in running:
             task.cancel()
@@ -687,8 +694,9 @@ async def test_when_the_request_is_cancelled_before_the_stream_then_the_turn_sti
 
     async with platform(settings, mcp, key, scripted(text)) as (client, turns):
         request = asyncio.create_task(post(client))
-        while not mcp.calls:
-            await asyncio.sleep(0.01)
+        async with asyncio.timeout(TURN_TEST_SECONDS):
+            while not mcp.calls:
+                await asyncio.sleep(0.01)
         # The browser leaves during the turn-start reads.
         request.cancel()
         await settle(turns)
@@ -738,8 +746,9 @@ async def test_when_the_server_stops_during_the_turn_start_reads_then_the_reques
 
     async with platform(settings, mcp, key, scripted(text)) as (client, turns):
         request = asyncio.create_task(post(client))
-        while not mcp.calls:
-            await asyncio.sleep(0.01)
+        async with asyncio.timeout(TURN_TEST_SECONDS):
+            while not mcp.calls:
+                await asyncio.sleep(0.01)
         for task in list(turns.running):
             task.cancel()
         # The request waiting on the turn is released, not left hanging.
@@ -784,7 +793,10 @@ async def test_when_the_browser_closes_the_stream_then_the_turn_runs_on(
     app.state.verifier = verifier(settings, key)
     turns = app.state.turns
     try:
-        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+        async with (
+            asyncio.timeout(TURN_TEST_SECONDS),
+            httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client,
+        ):
             async with client.stream(
                 "POST",
                 TURNS,
@@ -800,7 +812,7 @@ async def test_when_the_browser_closes_the_stream_then_the_turn_runs_on(
         await settle(turns)
     finally:
         server.should_exit = True
-        await serving
+        await within(serving)
 
     history = [m for r in await rows(db, AssistantMessage) for m in r.content]
     assert history[-1]["parts"][0]["content"] == "saw: policy_resolve result"
@@ -856,10 +868,11 @@ async def test_when_a_turn_ends_then_its_messages_are_stored_before_the_stream_e
 
         turns.store.append_messages = slow_append
         request = runner.TurnRequest(None, "hi", Editor(None, ()))
-        queue = await runner.start(turns, token, PROJECT, request)
-        async for chunk in runner.stream(queue):
-            if '"RUN_FINISHED"' in chunk:
-                stored_at_end.append(len(await rows(db, AssistantMessage)))
+        async with asyncio.timeout(TURN_TEST_SECONDS):
+            queue = await runner.start(turns, token, PROJECT, request)
+            async for chunk in runner.stream(queue):
+                if '"RUN_FINISHED"' in chunk:
+                    stored_at_end.append(len(await rows(db, AssistantMessage)))
         await settle(turns)
 
     assert stored_at_end == [1]
