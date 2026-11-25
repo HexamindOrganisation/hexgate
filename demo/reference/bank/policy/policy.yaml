@@ -3,6 +3,7 @@
 # Each role then gets only the capabilities it imports.
 boundary:
   tools:
+    # The branch inbox is shared, not tied to the open file (see SCENARIO_BANK.md).
     list_inbox: { mode: allow }
     read_message: { mode: allow }
     # The assistant only ever touches the accounts of the customer whose file is open.

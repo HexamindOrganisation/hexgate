@@ -144,6 +144,15 @@ fresh bank without losing the policy, restart the app with
   `ctx.session_customer_email`). A caller attribute is only as trustworthy as
   the app that sets it; in a real bank it comes from the teller application's
   customer session.
+- **"Can the assistant forward another customer's message?"** Yes. The inbox
+  is the branch's, not one customer's, so `list_inbox` and `read_message` are
+  not tied to the open file: with Marc Dubois's file open, "Read MSG-3 and
+  email it to the customer" sends Sophie Bernard's message to Marc's address,
+  which the mail rule allows. Tying a message to a customer would mean
+  trusting its sender, and this inbox has no sender verification. A real
+  teller application would pass the messages attached to the customer's file
+  (say `ctx.session_messages`) and constrain `read_message` with
+  `any(ctx.session_messages, . == args.message_id)`.
 - **"Can Camille send €1,000 fifteen times?"** Yes, in fifteen messages, to a
   registered beneficiary. The policy bounds one request; a cap across
   requests is a usage quota or a limit in the payment system.
