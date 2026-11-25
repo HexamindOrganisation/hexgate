@@ -4,6 +4,9 @@
 !LICENSE
 !uv.lock
 !hexgate
+# The docs the write-policy skill cites (see the README's "Run Claude Code").
+# Not yet docs/internals/policy-modules.md: add it once its line 86 matches
+# the linker's default boundary posture.
 !docs/policy
 !docs/concepts/user-scope.mdx
 !docs/concepts/egress.mdx

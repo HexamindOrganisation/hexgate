@@ -299,9 +299,12 @@ It also carries the docs the skill cites, at the paths it cites them:
 `/workspace/docs` is a symlink to a read-only copy in `/opt/hexgate/docs`,
 which the scorer's listing and snapshot never follow, so the docs are neither
 pulled nor scored. `Dockerfile.dockerignore` lists the pages copied: all of
-`docs/policy/`, the concept, CLI and ADR pages the skill names, but not
-`docs/internals/policy-modules.md`, which is internal. Runs before this
-(the baseline and the skill versions below) had no docs in the sandbox.
+`docs/policy/`, the concept, CLI and ADR pages the skill names, but not yet
+`docs/internals/policy-modules.md`: its description of a boundary's default
+posture (line 86) disagrees with the linker, so it is left out until that is
+settled, then added to the list (or its modules guidance moved into
+`docs/policy/`). Runs before this (the baseline and the skill versions
+below) had no docs in the sandbox.
 
 ```bash
 claude setup-token                     # once: prints a long-lived token
