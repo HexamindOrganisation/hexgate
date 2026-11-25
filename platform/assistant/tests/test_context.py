@@ -1,4 +1,5 @@
 from datetime import date
+from pathlib import Path
 
 import pytest
 from pydantic_ai.messages import (
@@ -10,10 +11,13 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RequestUsage
 
 from hexgate_assistant.context import (
+    WHOLE_RESULT_BYTES,
+    WHOLE_RESULT_TOOLS,
     BudgetGuard,
     ContextFull,
     Editor,
     ProjectState,
+    cap_tool_result,
     context_budget,
     context_tokens,
     editor_text,
@@ -149,3 +153,43 @@ def test_when_requests_carry_instructions_then_the_estimate_leaves_them_out():
     instructed = [ModelRequest(parts=[UserPromptPart("hi")], instructions="x" * 30_000)]
 
     assert context_tokens(instructed, 0) == context_tokens(bare, 0)
+
+
+def test_cap_tool_result_happy_path():
+    text = "HEAD" + "x" * 200 * 1024 + "TAIL"
+
+    capped = cap_tool_result("audit_decisions", text)
+
+    assert estimate_tokens(capped) <= 8000
+    assert capped.startswith("HEAD") and capped.endswith("TAIL")
+    assert "narrower request" in capped
+
+
+@pytest.mark.parametrize("tool", sorted(WHOLE_RESULT_TOOLS))
+def test_when_a_whole_result_tool_answers_under_64_kib_then_it_is_kept_whole(tool):
+    text = "y" * (WHOLE_RESULT_BYTES - 10)
+
+    assert cap_tool_result(tool, text) == text
+
+
+def test_when_a_policy_file_is_over_64_kib_then_none_of_it_is_given():
+    capped = cap_tool_result("policy_read_file", "z" * (WHOLE_RESULT_BYTES + 1))
+
+    assert capped == "file too large for the assistant (64 KiB); edit it in the editor"
+
+
+def test_when_a_reference_section_is_over_64_kib_then_it_is_cut_as_any_result():
+    capped = cap_tool_result("policy_reference", "r" * (WHOLE_RESULT_BYTES + 1))
+
+    assert estimate_tokens(capped) <= 8000
+
+
+DOCS = Path(__file__).resolve().parents[3] / "docs" / "policy"
+
+
+def test_every_policy_reference_section_fits_in_a_whole_result():
+    sections = sorted(DOCS.glob("*.mdx"))
+
+    assert sections, DOCS
+    too_big = [s.name for s in sections if len(s.read_bytes()) > WHOLE_RESULT_BYTES]
+    assert too_big == []

@@ -66,8 +66,23 @@ def keep_ends(text: str, max_bytes: int, marker: str) -> str:
     return f"{head}{note}{tail}"
 
 
-def cap_tool_result(text: str) -> str:
+# Tools whose result is read whole or not at all, up to WHOLE_RESULT_BYTES:
+# a reference section or a policy file cut in the middle would be rewritten
+# from what is left, and neither tool has a narrower call.
+WHOLE_RESULT_TOOLS = frozenset({"policy_reference", "policy_read_file"})
+WHOLE_RESULT_BYTES = 64 * 1024
+
+
+def cap_tool_result(tool: str, text: str) -> str:
     """A tool result as the model receives it."""
+    size = len(text.encode())
+    if tool in WHOLE_RESULT_TOOLS and size <= WHOLE_RESULT_BYTES:
+        return text
+    if tool == "policy_read_file":
+        return (
+            f"file too large for the assistant ({size // 1024} KiB); "
+            "edit it in the editor"
+        )
     return keep_ends(
         text,
         TOOL_RESULT_TOKENS * BYTES_PER_TOKEN,

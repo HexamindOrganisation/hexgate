@@ -101,8 +101,8 @@ def build_toolset(mcp_url: str) -> AbstractToolset[TurnDeps]:
 
 @dataclass
 class CappedResults(WrapperToolset[TurnDeps]):
-    """Every tool result cut to what the model may receive, its start and
-    end kept, with a marker asking for a narrower call."""
+    """Every tool result cut to what the model may receive (see
+    `cap_tool_result`)."""
 
     async def call_tool(
         self,
@@ -113,7 +113,7 @@ class CappedResults(WrapperToolset[TurnDeps]):
     ) -> Any:
         result = await super().call_tool(name, tool_args, ctx, tool)
         text = as_text(result)
-        capped = cap_tool_result(text)
+        capped = cap_tool_result(name, text)
         return result if capped == text else capped
 
 
