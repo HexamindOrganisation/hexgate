@@ -91,7 +91,7 @@ class Message:
 @dataclass
 class Event:
     at: float
-    kind: str  # ok | blocked | warn | info | danger
+    kind: str  # ok | blocked | info | danger
     text: str
     who: str
 
@@ -372,9 +372,9 @@ def list_transactions(account_id: str, limit: int = 5) -> str:
 
 
 def get_statement(account_id: str, month: str) -> str:
-    if not MONTH.fullmatch(str(month).strip()):
-        return f"{ERROR_PREFIX} write the month as YYYY-MM, e.g. 2026-10; got {month!r}"
     month = str(month).strip()
+    if not MONTH.fullmatch(month):
+        return f"{ERROR_PREFIX} write the month as YYYY-MM, e.g. 2026-10; got {month!r}"
     with _lock:
         account = _find_account(account_id)
         if account is None:
@@ -497,9 +497,7 @@ def snapshot() -> dict:
             ],
             "events": [
                 {"at": e.at, "kind": e.kind, "text": e.text, "who": e.who}
-                for e in sorted(_events, key=lambda e: e.at, reverse=True)[
-                    :SHOWN_EVENTS
-                ]
+                for e in reversed(_events[-SHOWN_EVENTS:])  # appended in time order
             ],
             "moved_out_eur": _moved_out_eur,
         }

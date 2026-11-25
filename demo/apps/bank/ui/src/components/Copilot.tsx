@@ -173,8 +173,7 @@ function CallChip({
   }, [open]);
   const result = item.status === "done" ? item.title : undefined;
   const documentKind = DOCUMENT_TOOLS[item.name];
-  const isDocument = documentKind !== undefined;
-  const toggleLabel = documentKind ?? "result";
+  const toggle = `${open ? "Hide" : "View"} ${documentKind ?? "result"}`;
   return (
     <div className="flex flex-col gap-1.5">
       <div className="call" title={failed ? item.title : undefined}>
@@ -197,17 +196,17 @@ function CallChip({
             type="button"
             className="peek"
             aria-expanded={open}
-            aria-label={`${open ? "Hide" : "View"} ${toggleLabel}`}
-            title={`${open ? "Hide" : "View"} ${toggleLabel}`}
+            aria-label={toggle}
+            title={toggle}
             onClick={() => setOpen((o) => !o)}
           >
-            {isDocument && `${open ? "Hide" : "View"} ${documentKind}`}
+            {documentKind && toggle}
             <ChevronDown size={14} strokeWidth={2.2} className={cn(open && "rotate-180")} />
           </button>
         )}
       </div>
       {open && result && (
-        <pre ref={panel} className={cn("result", isDocument && "document")}>
+        <pre ref={panel} className={cn("result", documentKind && "document")}>
           {result}
         </pre>
       )}
@@ -427,7 +426,7 @@ export function Copilot({
         className="flex grow flex-col gap-4 overflow-y-auto p-5"
       >
         {entries.length === 0 ? (
-          <div className="empty m-auto flex max-w-[300px] flex-col gap-3 text-center text-faint">
+          <div className="m-auto flex max-w-[300px] flex-col gap-3 text-center text-faint">
             <div>
               Hi {firstName}, ask me about an account, a transfer, or a message in the inbox.
             </div>

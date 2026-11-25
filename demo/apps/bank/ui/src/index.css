@@ -135,9 +135,6 @@
   .k-danger {
     @apply text-bad;
   }
-  .k-warn {
-    @apply text-warn;
-  }
   .k-info {
     @apply text-faint;
   }
