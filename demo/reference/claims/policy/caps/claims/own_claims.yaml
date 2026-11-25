@@ -1,6 +1,5 @@
 # Junior handlers work only on the claims assigned to them, and settle up to 5,000 EUR alone.
 tools:
-  list_claims: { mode: allow }
   get_claim: { mode: allow, constraint: "any(ctx.assigned_claims, . == args.claim_id)" }
   read_document: { mode: allow, constraint: "any(ctx.assigned_claims, . == args.claim_id)" }
   issue_payment:
