@@ -12,6 +12,7 @@ that file's. An approval request is answered in the terminal. Uses the same
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 from typing import Any
 
@@ -19,6 +20,7 @@ from tellerdesk import bank, server
 
 USAGE_EXIT = 2
 MIN_ARGS = 3
+CUSTOMER_ID = re.compile(r"C-\d+")
 
 
 async def main(username: str, message: str, customer_id: str) -> int:
@@ -58,10 +60,11 @@ async def main(username: str, message: str, customer_id: str) -> int:
 
 
 def _parse(argv: list[str]) -> tuple[str, str, str]:
-    """username, message, customer id: the last argument when it names a customer."""
+    """username, message, customer id: the last argument when it is shaped like one,
+    so a mistyped id is rejected rather than read as part of the message."""
     username, rest = argv[0], argv[1:]
     customer_id = bank.DEFAULT_CUSTOMER
-    if len(rest) > 1 and bank.is_customer(rest[-1]):
+    if len(rest) > 1 and CUSTOMER_ID.fullmatch(rest[-1]):
         customer_id, rest = rest[-1], rest[:-1]
     return username, " ".join(rest), customer_id
 
