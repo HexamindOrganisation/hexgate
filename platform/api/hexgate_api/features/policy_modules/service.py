@@ -1454,10 +1454,18 @@ async def resolved_yaml_by_agent_compose(
     store once; note it re-parses per agent (the compose resolver runs per-agent
     import resolution, which mutates per-scope state, so the parsed entry can't be
     safely shared across agents — a shared parse cache is a follow-up). Raises the
-    SDK's compose errors so callers keep the last-good bundle (fail-safe)."""
+    SDK's compose errors so callers keep the last-good bundle (fail-safe). The
+    resolves run in a worker thread, as in :func:`_resolve_and_lint`."""
+    files = await _files_map(session, project_id)
+    return await asyncio.to_thread(_resolved_yaml_by_agent_files, files, list(agents))
+
+
+def _resolved_yaml_by_agent_files(
+    files: dict[str, str], agents: list[str]
+) -> dict[str, str]:
+    """Each of ``agents``' resolved YAML from a ``{name: content}`` project."""
     from hexgate.security import RESOLVED_POLICY_MARKER
 
-    files = await _files_map(session, project_id)
     out: dict[str, str] = {}
     for agent in agents:
         result = _resolve_files(files, agent)

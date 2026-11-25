@@ -4,6 +4,7 @@ saved in one commit or not at all."""
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import pytest
 from pydantic import ValidationError
@@ -461,3 +462,24 @@ def test_policy_apply_request_happy_path() -> None:
 
     assert request.samples[0].agent == "*"
     assert request.samples[0].attributes == {}
+
+
+@pytest.mark.usefixtures("project")
+async def test_when_the_bundles_are_rebuilt_then_their_resolve_runs_off_the_loop(
+    session_factory, monkeypatch
+) -> None:
+    threads: list[int] = []
+    real = service._resolved_yaml_by_agent_files
+
+    def record(*args, **kwargs):
+        threads.append(threading.get_ident())
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_resolved_yaml_by_agent_files", record)
+    out = await _apply(
+        session_factory, _request(("grants.yaml", _NEW_GRANTS, _h(_GRANTS)))
+    )
+
+    assert out.applied, out.checks
+    assert len(threads) == 1
+    assert threads[0] != threading.get_ident()
