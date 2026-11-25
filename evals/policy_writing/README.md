@@ -313,6 +313,16 @@ for, and its `usage.modelUsage` which one ran.
 
 At most `MAX_SANDBOXES` (default 4) samples run at once: each sandbox is a full Claude Code, and more than about four on a laptop makes every case time out. An empty `MAX_SANDBOXES=` falls back to Inspect's default.
 
+Each run's log is named
+`<created>_policy-writing_<model>-epoch-<n>-<target>-<commit>_<id>.eval`:
+`<model>` is `MODEL` without `claude-` (`default` when unset), `<target>` is
+`TARGET` if given, else `CASES` (`all` when empty), with `/` and `_` turned
+into `-` and `,` into `+`, and `<commit>` is the short commit with `-dirty`
+when the tree has changes, the same test as the log's own `eval.revision`.
+Inspect lists a log by splitting its name on `_` into created, task, and id,
+so the fields in between are joined with `-`. Name a selection of cases with
+`TARGET`, e.g. `make policy-eval CASES=must_refuse,security TARGET=refusals`.
+
 The container has no route out: its only network is internal, and a `proxy`
 sidecar (`squid.conf`) tunnels to `api.anthropic.com:443` and refuses anything
 else, so direct connections reach only `api.anthropic.com:443`. The token is
@@ -334,8 +344,9 @@ changes report against this.
   (run with `MODEL` unset, which resolved to `claude-sonnet-5-5` in every
   sample's `modelUsage`; pin it, as the default may change).
 - Commit `d3ba8fe5` (clean tree), 2026-11-19, log
-  `2026-11-19T11-11-28-00-00_policy-writing_KTc6fpPvpnK7dvSRWV4Ar7.eval`
-  (`logs/` is not committed). 105 of 105 samples scored, none errored or hit
+  `2026-11-19T11-11-28-00-00_policy-writing_sonnet-5-5-epoch-3-all-d3ba8fe5_KTc6fpPvpnK7dvSRWV4Ar7.eval`
+  (`logs/` is not committed; see *Skill versions* for where the logs are kept).
+  105 of 105 samples scored, none errored or hit
   a limit. The sandbox has the skill but not the `docs/` pages it points at.
 
 | Cases | n | Mean ± stderr | pass^3 ± stderr |
@@ -350,6 +361,105 @@ per-case scores for the other rows. Failed every epoch: `agent_as_tool`,
 `unknown_argument` (held out); failed some: `file_paths` 2 of 3,
 `l2_roles_hierarchy` (held out) 2 of 3, `reach_in_modules` 1 of 3.
 
+## Skill versions
+
+The `write-policy` skill was then tuned on the failures of the cases that are
+not held out, one commit per version, with `MODEL=claude-sonnet-5-5`, 3
+epochs and `MAX_SANDBOXES=4`: v2, v3, v4 and v5 had a full run on the same 35
+cases as the baseline (v5's also covered the two revoke cases below), v1 only
+a run on the cases it targeted. Held-out cases
+were scored, never read. To rerun a version:
+`git checkout <commit> && make policy-eval CASES= EPOCHS=3 MAX_SANDBOXES=4 MODEL=claude-sonnet-5-5`.
+If these commits are ever squashed away on main, they stay reachable with
+`git fetch origin pull/506/head`.
+
+| Version | Commit | Change |
+|---|---|---|
+| v0 | `d3ba8fe5` | the skill before tuning (the baseline above) |
+| v1 | `ff258610` | record and keep what a policy allows today; admission and reach are opt-in, then global; never widen a boundary on a team's request; write the least-privilege reading instead of stopping on an open choice; anchor the path traversal guard on segments and test a lookalike value for every deny |
+| v2 | `ed61a299` | before any `agents:` block a handoff passes but an agent-as-tool call needs its delegation tool, so re-grant only that; a request a boundary blocks entirely changes no file |
+| v3 | `6772540a` | the least-privilege rule covers open permissions only; refuse a request the policy cannot express (a per-tool hourly count, a handoff depth, a missing tool) and offer the substitute without writing it |
+| v4 | `95ebad96` | admission and reach are two separate gates: adding `admission` does not touch reach |
+| v5 | `072433d7` | handoff reach is on while any `agents:` entry exists, agent-as-tool reach only while a `via: tool` entry does; once it is on, the delegation tool's own `tools:` rule no longer applies, and while it is off a permissive `default_policy` lets any role call the delegation tool; revoke reach with `mode: deny`, not by deleting the entry |
+
+Full runs (mean ± stderr / pass^3 ± stderr; samples that hit a network error
+are left out: 2 in v2, 1 in v3):
+
+| Version | All (35) | Not held out (28) | Held out (7) |
+|---|---|---|---|
+| v0 | 0.810 ± 0.063 / 0.771 ± 0.072 | 0.821 ± 0.070 / 0.786 ± 0.079 | 0.762 ± 0.158 / 0.714 ± 0.184 |
+| v2 | 0.924 ± 0.043 / 0.914 ± 0.048 | 0.940 ± 0.042 / 0.929 ± 0.050 | 0.857 ± 0.143 / 0.857 ± 0.143 |
+| v3 | 0.924 ± 0.041 / 0.886 ± 0.055 | 0.940 ± 0.039 / 0.893 ± 0.060 | 0.857 ± 0.143 / 0.857 ± 0.143 |
+| v4 | 0.943 ± 0.040 / 0.943 ± 0.040 | 0.964 ± 0.036 / 0.964 ± 0.036 | 0.857 ± 0.143 / 0.857 ± 0.143 |
+| v5 | 0.943 ± 0.040 / 0.943 ± 0.040 | 0.964 ± 0.036 / 0.964 ± 0.036 | 0.857 ± 0.143 / 0.857 ± 0.143 |
+
+v5 scored every one of the 35 cases exactly as v4 did, and passed the two
+revoke cases 6 of 6, so 105 of 111 samples over its 37 cases (0.946 mean and
+pass^3).
+
+v1 had no full run: on the six cases it targeted it passed 11 of 18 samples
+(v0: 3). Partial runs: v2 15 of 18 on the same six, v3 12 of 15 on
+`must_refuse`, v4 12 of 12 on `admission`, `admission_with_global_cap`,
+`agent_as_tool` and `handoff_approval`, v5 18 of 18 on those four and the two
+revoke cases.
+
+Two cases came after v4's full run, so the tables above don't count them:
+`robustness/revoke_last_tool_reach` and `robustness/revoke_last_handoff`
+revoke a policy's only reach entry. A reach gate is on only while some role
+declares it (`declares_reach` and `declares_tool_reach` in
+`hexgate/security/policy_set.py`), so deleting that entry turns the gate off
+and reopens what it closed, while `policy test` still prints DENY; an
+explicit `mode: deny` keeps it on. Their `wrong_answer/` is the deletion, and
+their `preserve.yaml` holds the shared project's preserved calls, so an
+answer that revokes correctly but breaks another call fails too. v4 passed
+both, 6 of 6, writing the explicit deny and saying why; it did so first with
+shorter preserve files, then again with the full ones. v5 also passed both,
+6 of 6, in its full run.
+
+v4 and v5 still fail two cases, every epoch: `reach_in_modules`, whose decision 4
+expects `default` and `support` to lose their handoff to billing-bot while
+`agent_as_tool`'s preserved calls, on another project that also starts with
+no reach rules, expect the same roles to keep theirs: each case can be passed
+on its own, but no single consistent rule about untouched handoffs passes
+both; and `unknown_argument` (held out), failed in every run that included
+it. The median sample took 115 s and $0.075 at list price in v4, 114 s and
+$0.078 in v5, against 60 s and $0.061 in v0.
+
+The logs are not committed. They are kept in the Hexamind Google Drive under
+`01 - Hexamind/04 - Projects/21 - HexGate/evals/policy_writing/version_<v>/`,
+where the `v<v>` of a row below is its `version_<v>` folder, and named
+`<date>_policy-writing_<model>-epoch-<epochs>-<target>-<commit>_<Inspect id>.eval`,
+where `<model>` is the model that ran, `<commit>` the commit the run recorded
+and `<target>` the cases the run covered. Only the three separators Inspect
+expects are `_` (date, task, fields, id), so Inspect View lists each log
+with its real task and id:
+
+| `<target>` | Cases |
+|---|---|
+| `all` | every case at that commit: 35, or 37 once the two revoke cases exist |
+| `must-refuse` | the `must_refuse` category |
+| `targeted6` | the six cases not held out that the baseline failed: `agent_as_tool`, `file_paths`, `handoff_approval`, `reach_in_modules`, `l2b_roles_no_meaning`, `boundary_conflict` |
+| `admission-reach4` | `admission`, `admission_with_global_cap`, `agent_as_tool`, `handoff_approval` |
+| `revoke-last2` | `revoke_last_tool_reach`, `revoke_last_handoff` |
+| `admission-reach-revoke6` | the four of `admission-reach4` and the two of `revoke-last2` |
+
+A copy can be checked by its SHA-256:
+
+| Run | Log | SHA-256 |
+|---|---|---|
+| v0, all | `2026-11-19T11-11-28-00-00_policy-writing_sonnet-5-5-epoch-3-all-d3ba8fe5_KTc6fpPvpnK7dvSRWV4Ar7.eval` | `09a43747c61af3a4ac26130a27ffb41c15eea99a922ae1574c3395730bbfe949` |
+| v1, six cases | `2026-11-19T16-54-54-00-00_policy-writing_sonnet-5-5-epoch-3-targeted6-ff258610_Pe3diL4Mt9zAUgAP2wJLub.eval` | `1a3069bc339e15a0833f65cb5204cc80084616441bff131772c7cddbc93d7efe` |
+| v2, six cases | `2026-11-19T17-17-03-00-00_policy-writing_sonnet-5-5-epoch-3-targeted6-ed61a299_849Y28oRLHZy2L5BvbByAS.eval` | `70392d199a51af344d51ae31feb63e1e69a3a457d3ea09fea9acd88c698f4500` |
+| v2, all | `2026-11-20T09-47-51-00-00_policy-writing_sonnet-5-5-epoch-3-all-ed61a299_NL9Wid9zDM49RbxhXfimHe.eval` | `55cd9aee1dc5e79e7ba530f2c558c9148482e018db42516818c91875ceb5c1d4` |
+| v3, `must_refuse` | `2026-11-20T11-01-47-00-00_policy-writing_sonnet-5-5-epoch-3-must-refuse-6772540a_MwxkCrNisYVebtkV6JLt3K.eval` | `fc9f92776f4c7cdd75909ffd5876e43940840b3810c485c5852a80a2c0c4b367` |
+| v3, all | `2026-11-20T11-08-51-00-00_policy-writing_sonnet-5-5-epoch-3-all-6772540a_KGME8iqF7buTVPDxXioQZn.eval` | `7ca34ca327f4cabecb55061c1b56a307ccbe082de4334d2128b50596c45bbbff` |
+| v4, four cases | `2026-11-20T12-14-23-00-00_policy-writing_sonnet-5-5-epoch-3-admission-reach4-95ebad96_gVy4Cqd5Wt7Zg45cJWmR2f.eval` | `d8f53446252a26e63ffa8a669b076e99935f8b61dfe290e511ad81e75a77e34b` |
+| v4, all | `2026-11-20T12-27-54-00-00_policy-writing_sonnet-5-5-epoch-3-all-95ebad96_kSCM64Q3anJtgVytdndaxQ.eval` | `8b716ca25de70ea33c6d824ea52d9a07b3c978b2de81df5784f4caa5af26552d` |
+| v4, two revoke cases, shorter preserve files | `2026-11-23T16-11-27-00-00_policy-writing_sonnet-5-5-epoch-3-revoke-last2-dc5996d7_Zq7DfLoCgQHsg5zvesWCKT.eval` | `610c2d8a351523eaf3698c5f0b6739e9cc84de1449996f1c50b20bda99ae075c` |
+| v4, two revoke cases | `2026-11-24T11-12-46-00-00_policy-writing_sonnet-5-5-epoch-3-revoke-last2-8ad48caa_Ub2NZ9L42A98Ha5RZYYivx.eval` | `2c082c8e88847f885e112782c692cc7121de458faa5be18e5d072bc4e3b7794d` |
+| v5, six cases | `2026-11-24T11-27-04-00-00_policy-writing_sonnet-5-5-epoch-3-admission-reach-revoke6-072433d7_oUrmoHqdeNRgwT6GniHZbJ.eval` | `96808ae03bc751a60286d3624c2c6baf2ec3e8c463b52e0b9699473a768aab1e` |
+| v5, all | `2026-11-24T11-45-08-00-00_policy-writing_sonnet-5-5-epoch-3-all-072433d7_5rbJq6fYubTs7fvjvLvP72.eval` | `254eac933b9ce95ac575d6051c731a48f596ae864c7b3bf5d8288c0a011e600e` |
+
 ## Adding a case
 
 1. Add `cases/<category>/<name>/case.yaml`. Include the boundary values (the
@@ -357,5 +467,7 @@ per-case scores for the other rows. Failed every epoch: `agent_as_tool`,
    role that must stay unaffected.
 2. Add `solution/`: the files to overwrite, plus `ANSWER.md` when the case
    checks the answer text. If the case is a trap, add the mistake as
-   `wrong_answer/`.
+   `wrong_answer/`. Keep the trap out of the starting project's comments: the
+   agent reads every file it is given, and a comment that names the trap
+   gives the answer away.
 3. `uv run pytest tests/evals` must stay green.

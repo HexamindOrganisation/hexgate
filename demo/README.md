@@ -30,7 +30,8 @@ Without it, the kit offers a scripted model for rehearsals.
    - uv;
    - Python 3.13;
    - Node 22, to build the dashboard;
-   - Go, to build the audit collector.
+   - Go, to build the audit collector;
+   - OPA, which the platform compiles policies with.
 
    Downloads are checked against their published checksums. Docker is the only
    system-wide install, and the script asks first.

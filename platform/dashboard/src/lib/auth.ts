@@ -18,6 +18,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ApiError, UnauthenticatedError } from "./api";
 import { stashConsentReturn } from "./oauth_consent";
+import { resetAssistant } from "./assistant";
 import { resetPlayground } from "./playground";
 
 /** Public shape of a User. Mirrors UserRead on the backend
@@ -127,12 +128,13 @@ export function useLogout() {
   return useMutation({
     mutationFn: logoutRequest,
     onSuccess: () => {
-      // Tear down the playground module-level store + socket so the
-      // next signed-in user on this browser tab doesn't see the prior
+      // Tear down the playground and assistant module-level stores so
+      // the next signed-in user on this browser tab doesn't see the prior
       // user's chat history. There's no full page reload on logout
       // (just a cookie invalidation), so without this the module
       // globals survive.
       resetPlayground();
+      resetAssistant();
       qc.invalidateQueries({ queryKey: USER_QUERY_KEY });
     },
   });

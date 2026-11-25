@@ -71,7 +71,7 @@ export const authRedirect = {
  * turns every other non-2xx into an ``ApiError``. Returns the raw Response so
  * the JSON callers and the binary ones (the AI Act annex / PDF downloads)
  * go through one auth and error path. */
-async function send(
+export async function send(
   path: string,
   init?: RequestInit,
   redirectOn401 = true,
@@ -1168,4 +1168,34 @@ export const oauthApi = {
       },
       false,
     ),
+};
+
+/** Mirror of platform/api schemas.py:AssistantConfig. */
+export interface AssistantConfig {
+  /** False hides the Assistant tab. */
+  enabled: boolean;
+  mode: "off" | "read_only" | "read_write";
+  /** Admin or owner, and the org's mode is read_write. */
+  can_write: boolean;
+  verified: boolean;
+}
+
+/** Mirror of platform/api schemas.py:AssistantToken. A bearer credential for
+ * one message: held only for the request it authorizes, never stored. */
+export interface AssistantToken {
+  token: string;
+  expires_at: string;
+  can_write: boolean;
+}
+
+/** The api's assistant routes: both take the session cookie, so a 401 is an
+ * expired dashboard session and redirects to sign-in like any other call. */
+export const assistantApi = {
+  config: (projectId: string) =>
+    request<AssistantConfig>(`/v1/projects/${projectId}/assistant/config`),
+
+  token: (projectId: string) =>
+    request<AssistantToken>(`/v1/projects/${projectId}/assistant/token`, {
+      method: "POST",
+    }),
 };

@@ -212,7 +212,10 @@ async def bundle_for_agent(
 
 
 async def recompile_project(
-    session: AsyncSession, project_id: str, sign: Callable[[bytes], bytes]
+    session: AsyncSession,
+    project_id: str,
+    sign: Callable[[bytes], bytes],
+    commit: bool = True,
 ) -> int | None:
     """Recompile every agent in a project after its modules or roles change.
 
@@ -235,6 +238,10 @@ async def recompile_project(
     untouched). The ``None`` return lets a caller distinguish "nothing to do"
     (``0``: no agents) from "could not build" — the classic→modular flip relies
     on it to avoid leaving agents on a stale classic bundle (see the roles PUT).
+
+    With ``commit=False`` the new bundles are left in the session for the
+    caller's own commit, so a write and the bundles built from it land together
+    or not at all.
     """
     from hexgate_api.features.policy_modules import service as modules
 
@@ -287,7 +294,7 @@ async def recompile_project(
             session.add(agent)
             count += 1
 
-    if count:
+    if count and commit:
         await session.commit()
     return count
 

@@ -14,6 +14,12 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // The assistant service. It must stay above the '/v1' entry: the first
+      // matching key wins, so below it every turn would reach the api (404).
+      '/v1/assistant': {
+        target: 'http://localhost:8090',
+        changeOrigin: true,
+      },
       '/v1': {
         target: 'http://localhost:8000',
         ws: true,

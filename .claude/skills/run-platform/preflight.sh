@@ -80,10 +80,10 @@ listener() {
 }
 
 echo "ports:"
-# 8000 API, 5173 dashboard, 8080 MCP server; full mode adds the collector (4317/4318) and the
-# host ports platform/docker-compose.yml maps: Postgres 5433, ClickHouse
-# 8124/9001, Redpanda 9092.
-ports="8000 5173"; [ $mcp = 1 ] && ports="$ports 8080"; [ $full = 1 ] && ports="$ports 4317 4318 5433 8124 9001 9092"
+# 8000 API, 5173 dashboard, 8080 MCP server; full mode adds the assistant (8090), the
+# collector (4317/4318) and the host ports platform/docker-compose.yml maps:
+# Postgres 5433, ClickHouse 8124/9001, Redpanda 9092.
+ports="8000 5173"; [ $mcp = 1 ] && ports="$ports 8080"; [ $full = 1 ] && ports="$ports 8090 4317 4318 5433 8124 9001 9092"
 if ! command -v lsof >/dev/null 2>&1 && ! command -v ss >/dev/null 2>&1; then
   warn "ports not checked" "needs lsof or ss: $(hint 'lsof ships with macOS' 'install lsof or iproute2')"
 else

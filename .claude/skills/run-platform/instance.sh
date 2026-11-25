@@ -109,9 +109,9 @@ dash)
 stop)
   root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "instance.sh: run it inside a hexgate checkout" >&2; exit 1; }
   # API, dashboard (Vite moves up from 5173 when it is taken), MCP server,
-  # collector, enricher (matched on its -m module, not on a file path an editor
-  # could hold).
-  cands=$( { for port in 8000 5173 5174 5175 5176 8080 4317 4318; do listeners "$port"; done
+  # assistant, collector, enricher (matched on its -m module, not on a file
+  # path an editor could hold).
+  cands=$( { for port in 8000 5173 5174 5175 5176 8080 8090 4317 4318; do listeners "$port"; done
              pgrep -f -- '-m hexgate_api\.jobs\.enricher'; } 2>/dev/null | sort -u)
   pids=""
   for p in $cands; do

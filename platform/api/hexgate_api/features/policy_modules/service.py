@@ -9,6 +9,7 @@ fold itself lives in the SDK; nothing here reimplements it.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -69,6 +70,21 @@ class NoPolicyStoreError(Exception):
     enforce their own ``policy_yaml``, which the store's reads don't see."""
 
 
+class NoEntryFileError(Exception):
+    """A change applied to a project with no stored entry file (→ 409
+    ``layout``): it enforces from the module store or each agent's own policy,
+    and a first ``policy.yaml`` would switch every agent onto the file store."""
+
+
+class StaleBaseError(Exception):
+    """Files whose stored text is no longer what the caller read (→ 409
+    ``stale``). ``files`` names them, in request order."""
+
+    def __init__(self, files: list[str]) -> None:
+        super().__init__(f"changed since read: {files}")
+        self.files = files
+
+
 class ChangeNotFoundError(Exception):
     """No applied change with that id in this project (→ 404)."""
 
@@ -85,11 +101,22 @@ class UnknownRoleError(Exception):
     unrelated missing key — which should surface as a 500, not a phantom 404.
     """
 
+    def __str__(self) -> str:
+        return f"role {self.args[0]!r} not defined"
+
 
 class UndeclaredAgentError(UnknownRoleError):
     """An unknown role looked up for an agent the policy does not declare: the
     agent resolved under the generic ``"*"`` view, so a mistyped agent, not the
     role, is the likelier cause. ``args``: the role, the agent, the declared."""
+
+    def __str__(self) -> str:
+        role, agent, declared = self.args
+        return (
+            f"agent {agent!r} is not declared in the policy (declared: {declared}), "
+            f'so role {role!r} was looked up under the generic "*" view, which '
+            "does not define it"
+        )
 
 
 async def get_change(
@@ -824,17 +851,26 @@ async def compose_resolve(
     return _resolve_files(await _files_map(session, project_id), agent)
 
 
-def validate_compose_file(content: str) -> None:
+def validate_compose_file(content: str, source: str = "<file>") -> None:
     """Structural check: the file parses as a compose document (raises
-    :class:`InvalidModuleError` → HTTP 422). Checked before resolution so a
-    malformed file returns 422, not the 409 an unresolvable-but-valid file gets."""
+    :class:`InvalidModuleError` → HTTP 422, its message prefixed with ``source``).
+    Checked before resolution so a malformed file returns 422, not the 409 an
+    unresolvable-but-valid file gets."""
     from hexgate.security.compose import parse_entry
     from hexgate.security.modules import LinkError
 
     try:
-        parse_entry(content, source="<file>")
+        parse_entry(content, source=source)
     except LinkError as exc:
         raise InvalidModuleError(str(exc)) from exc
+    except RecursionError as exc:  # YAML nested past the interpreter's stack
+        raise InvalidModuleError(f"{source}: nested too deeply") from exc
+    except ValueError as exc:  # a YAML timestamp that is no date (2026-02-30)
+        raise InvalidModuleError(f"{source}: {exc}") from exc
+    # What the YAML loader raises for a tagged scalar it cannot read:
+    # !!timestamp "abc", !!bool "abc", !!int "".
+    except (AttributeError, KeyError, IndexError) as exc:
+        raise InvalidModuleError(f"{source}: unreadable tagged scalar") from exc
 
 
 async def project_resolves_with_file(
@@ -870,14 +906,7 @@ async def upsert_file(
     chash = _content_hash(content)
     row = await get_file(session, project_id, name)
     if row is None:
-        row = PolicyFile(
-            id=new_id(PolicyFile),
-            project_id=project_id,
-            name=name,
-            content=content,
-            content_hash=chash,
-            created_by_user_id=actor_user_id,
-        )
+        row = _new_file_row(project_id, name, content, chash, actor_user_id)
         session.add(row)
         try:
             await session.flush()
@@ -885,14 +914,7 @@ async def upsert_file(
             await session.rollback()
             row = await get_file(session, project_id, name)
             if row is None:  # the racing row was deleted between — re-create
-                row = PolicyFile(
-                    id=new_id(PolicyFile),
-                    project_id=project_id,
-                    name=name,
-                    content=content,
-                    content_hash=chash,
-                    created_by_user_id=actor_user_id,
-                )
+                row = _new_file_row(project_id, name, content, chash, actor_user_id)
                 session.add(row)
             else:
                 _apply_file_edit(row, content, chash, actor_user_id)
@@ -902,14 +924,79 @@ async def upsert_file(
     return row
 
 
+def stage_file(
+    session: AsyncSession,
+    row: PolicyFile | None,
+    *,
+    project_id: str,
+    name: str,
+    content: str,
+    actor_user_id: str,
+    change_id: str,
+) -> None:
+    """Write ``content`` to ``row``, or to a new row when ``row`` is None, as
+    part of the applied change ``change_id``. Neither flushes nor commits: the
+    caller writes the whole change in one transaction."""
+    chash = _content_hash(content)
+    if row is None:
+        row = _new_file_row(project_id, name, content, chash, actor_user_id)
+    _apply_file_edit(row, content, chash, actor_user_id, change_id)
+    session.add(row)
+
+
+def _new_file_row(
+    project_id: str, name: str, content: str, content_hash: str, actor_user_id: str
+) -> PolicyFile:
+    """A file row not stored yet, credited to its creator."""
+    return PolicyFile(
+        id=new_id(PolicyFile),
+        project_id=project_id,
+        name=name,
+        content=content,
+        content_hash=content_hash,
+        created_by_user_id=actor_user_id,
+    )
+
+
+async def rebuild_bundles(
+    session: AsyncSession, project_id: str, *, commit: bool = True
+) -> int | None:
+    """Rebuild every agent's bundle from the project's stored policy (its
+    files, its role bindings, or each agent's own policy): the number built,
+    or None when they could not be built, live bundles then untouched. An opa
+    or signing failure does not raise: ``compile_bundle`` turns it into a
+    missing bundle and ``recompile_project`` into None. What raises out of
+    ``recompile_project`` is a database or commit error, which this logs and
+    also answers None. See ``agents.service.recompile_project``.
+
+    A plain file, module or role save calls it best-effort and ignores the
+    result: the stored row is the source of truth and the bundle a derived
+    artifact, left untouched when it cannot be built (R-POL-002). A change
+    that must not land without its bundle checks for None and rolls back."""
+    from hexgate_api.core.keystore import keystore
+    from hexgate_api.features.agents.service import recompile_project
+
+    try:
+        return await recompile_project(
+            session, project_id, keystore.sign, commit=commit
+        )
+    except Exception:  # noqa: BLE001 — any build failure is "not built"
+        logger.exception("bundle rebuild failed for project %s", project_id)
+        return None
+
+
 def _apply_file_edit(
-    row: PolicyFile, content: str, content_hash: str, actor_user_id: str
+    row: PolicyFile,
+    content: str,
+    content_hash: str,
+    actor_user_id: str,
+    change_id: str | None = None,
 ) -> None:
     row.content = content
     row.content_hash = content_hash
     row.updated_at = utcnow()
     row.updated_by_user_id = actor_user_id
-    row.updated_via_change_id = None
+    row.updated_via_change_id = change_id
 
 
 async def delete_file(session: AsyncSession, *, project_id: str, name: str) -> bool:
@@ -987,10 +1074,12 @@ async def _resolve_and_lint(
 ) -> tuple[dict, list[PolicyLint]]:
     """Resolve every declared agent, then lint the project. Raises
     :func:`compose_error_types` when an agent doesn't resolve, before the
-    manifests are loaded, so a draft that doesn't compose costs no DB query."""
+    manifests are loaded, so a draft that doesn't compose costs no DB query.
+    The resolve runs in a worker thread: a large project takes seconds, which
+    would otherwise block the event loop."""
     from hexgate_api.features.agents.service import latest_manifests
 
-    resolved = _resolve_all_agents_files(files)
+    resolved = await asyncio.to_thread(_resolve_all_agents_files, files)
     manifests = await latest_manifests(session, project_id)
     return resolved, _compose_lints(resolved, manifests)
 
@@ -1007,15 +1096,16 @@ def _compose_lints(resolved: dict, manifests: dict) -> list[PolicyLint]:
     file, which the resolved form no longer tells apart.
 
     A named agent's lint is tagged with the agent and dropped only when the
-    ``"*"`` view already reported it (a top-level rule every agent shares), so two
-    named agents with the same defect each report it."""
+    ``"*"`` view already reported it at the same severity (a top-level rule every
+    agent shares), so two named agents with the same defect each report it, and
+    an agent's error is kept beside a ``"*"`` warning of the same text."""
     from dataclasses import replace
 
     from hexgate.security import analyze_policy
     from hexgate.security.analyzer import SEVERITY_RANK
 
     def key(lint) -> tuple:
-        return (lint.code, lint.message, lint.tool, lint.role)
+        return (lint.code, lint.severity, lint.message, lint.tool, lint.role)
 
     generic = analyze_policy(resolved[DEFAULT_AGENT].policy_set, source=ENTRY_FILE)
     shared = {key(lint) for lint in generic}
@@ -1245,6 +1335,21 @@ class DryRun:
     declared_agents: list[str]
 
 
+# SDK Verdict.outcome enum name → the wire string the editor expects.
+_OUTCOME_WIRE = {
+    "ALLOW": "allow",
+    "DENY": "deny",
+    "NEEDS_APPROVAL": "approval_required",
+}
+
+
+def verdict_outcome(verdict: Verdict) -> str:
+    """A verdict's outcome as its wire string: ``allow``, ``deny`` or
+    ``approval_required``."""
+    name = verdict.outcome.name
+    return _OUTCOME_WIRE.get(name, name.lower())
+
+
 def _named_agents(declared: Iterable[str], registered: Iterable[str]) -> list[str]:
     """Every agent a project-wide read covers: declared in the policy or
     registered with a manifest, without the generic ``"*"`` view."""
@@ -1315,17 +1420,12 @@ async def test_policy(
     not declared either)."""
     files = await files_with_drafts(session, project_id, drafts)
     if ENTRY_FILE in files:
-        # One parse: the entry gives both the declared agents and the resolve.
-        from hexgate.security.compose import parse_entry
-
-        entry = parse_entry(files[ENTRY_FILE], source=ENTRY_FILE)
-        declared = _declared_agents(entry)
-        result = _resolve_parsed(files, entry, agent)
+        declared, result = await asyncio.to_thread(_resolve_entry, files, agent)
     else:
         declared, resolve_for_agent, _ = await _agent_resolver(
             session, project_id, files
         )
-        result = resolve_for_agent(agent)
+        result = await asyncio.to_thread(resolve_for_agent, agent)
     if role not in result.policy_set.roles:
         if agent not in declared:
             raise UndeclaredAgentError(role, agent, declared)
@@ -1338,17 +1438,37 @@ async def test_policy(
     )
 
 
+def _resolve_entry(
+    files: dict[str, str], agent: str
+) -> tuple[list[str], ProjectLinkResult]:
+    """The agents the entry declares and ``agent``'s resolution, from one parse
+    of the entry."""
+    from hexgate.security.compose import parse_entry
+
+    entry = parse_entry(files[ENTRY_FILE], source=ENTRY_FILE)
+    return _declared_agents(entry), _resolve_parsed(files, entry, agent)
+
+
 async def resolved_yaml_by_agent_compose(
     session: AsyncSession, project_id: str, agents: Iterable[str]
 ) -> dict[str, str]:
     """Per-agent resolved YAML for the compile fan-out, via compose. Reads the
-    store once; note it re-parses per agent (the compose resolver runs per-agent
-    import resolution, which mutates per-scope state, so the parsed entry can't be
-    safely shared across agents — a shared parse cache is a follow-up). Raises the
-    SDK's compose errors so callers keep the last-good bundle (fail-safe)."""
+    store once. Raises the SDK's compose errors so callers keep the last-good
+    bundle (fail-safe). The resolves run in a worker thread, as in
+    :func:`_resolve_and_lint`."""
+    files = await _files_map(session, project_id)
+    return await asyncio.to_thread(_resolved_yaml_by_agent_files, files, list(agents))
+
+
+def _resolved_yaml_by_agent_files(
+    files: dict[str, str], agents: list[str]
+) -> dict[str, str]:
+    """Each of ``agents``' resolved YAML from a ``{name: content}`` project.
+    It re-parses per agent: the compose resolver runs per-agent import
+    resolution, which mutates per-scope state, so the parsed entry can't be
+    safely shared across agents (a shared parse cache is a follow-up)."""
     from hexgate.security import RESOLVED_POLICY_MARKER
 
-    files = await _files_map(session, project_id)
     out: dict[str, str] = {}
     for agent in agents:
         result = _resolve_files(files, agent)

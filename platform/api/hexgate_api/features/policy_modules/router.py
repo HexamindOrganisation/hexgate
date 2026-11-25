@@ -11,8 +11,6 @@ docs/adr/R-POL-002).
 from __future__ import annotations
 
 import json
-import logging
-from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -53,16 +51,7 @@ from hexgate_api.schemas import (
 if TYPE_CHECKING:  # the SDK is imported lazily at run time
     from hexgate.security import PolicyLint
 
-# SDK Verdict.outcome enum name → the wire string the editor expects.
-_OUTCOME_WIRE = {
-    "ALLOW": "allow",
-    "DENY": "deny",
-    "NEEDS_APPROVAL": "approval_required",
-}
-
 router = APIRouter()
-
-logger = logging.getLogger("hexgate.platform.policy_modules")
 
 
 def _norm(roles: dict[str, dict[str, list[str]]]) -> dict[str, dict[str, list[str]]]:
@@ -93,42 +82,6 @@ def _file_read(row: PolicyFile) -> PolicyFileRead:
         text_hash=service.text_hash(row.content),
         updated_at=row.updated_at,
     )
-
-
-async def _recompile_project_agents(session: AsyncSession, project_id: str) -> None:
-    """Recompile the project's agent bundles after a policy change.
-
-    Best-effort and never fatal to the write: the store row is the source of
-    truth, the bundle is a derived artifact. A resolve failure leaves live
-    bundles untouched (handled in the service); any other failure (opa, signing,
-    a DB hiccup on the agent commit) is logged and swallowed so the policy edit
-    still returns success. ``check`` surfaces an unresolvable state. R-POL-002.
-    """
-    from hexgate_api.core.keystore import keystore
-    from hexgate_api.features.agents.service import recompile_project
-
-    try:
-        await recompile_project(session, project_id, keystore.sign)
-    except Exception:  # noqa: BLE001 — bundles are derived + fail-safe
-        logger.exception(
-            "recompile after policy change failed for project %s", project_id
-        )
-
-
-async def _rebuild_or_none(session: AsyncSession, project_id: str) -> bool:
-    """Recompile and report whether a bundle was built (or there was nothing to
-    build) vs. no bundle could be built. Used by the classic→modular flip, which
-    rolls back on a False; ``None`` from ``recompile_project`` means "couldn't
-    build", ``0``/``>0`` means "nothing to do / built" — both are fine."""
-    from hexgate_api.core.keystore import keystore
-    from hexgate_api.features.agents.service import recompile_project
-
-    try:
-        built = await recompile_project(session, project_id, keystore.sign)
-    except Exception:  # noqa: BLE001 — any compile failure is "can't build"
-        logger.exception("modular flip recompile failed for project %s", project_id)
-        return False
-    return built is not None
 
 
 # --- module CRUD -------------------------------------------------------------
@@ -207,7 +160,7 @@ async def api_put_policy_module(
         # modular: a byte-identical re-PUT, or any edit to a classic library,
         # changes no agent, so don't pay a resolve + opa compile for it.
         if modular and row.content_hash != prev_hash:
-            await _recompile_project_agents(session, project_id)
+            await service.rebuild_bundles(session, project_id)
     return _module_read(row)
 
 
@@ -246,7 +199,7 @@ async def api_delete_policy_module(
         if not deleted:
             raise HTTPException(status_code=404, detail="module not found")
         if await service.is_modular(session, project_id):
-            await _recompile_project_agents(session, project_id)
+            await service.rebuild_bundles(session, project_id)
     return Response(status_code=204)
 
 
@@ -316,17 +269,7 @@ async def api_set_policy_roles(
             # bundles that are now wrong. Require a freshly-built modular bundle;
             # if none can be built (e.g. opa unavailable) roll back rather than
             # leave is_modular True with stale classic WASM in force.
-            from hexgate_api.core.keystore import keystore
-            from hexgate_api.features.agents.service import recompile_project
-
-            try:
-                built = await recompile_project(session, project_id, keystore.sign)
-            except Exception:  # noqa: BLE001 — any compile failure is "can't build"
-                logger.exception(
-                    "modular flip recompile failed for project %s", project_id
-                )
-                built = None
-            if built is None:
+            if await service.rebuild_bundles(session, project_id) is None:
                 # The restore is still this caller's write, not a
                 # resurrection of whoever wrote `before`.
                 await service.set_roles(
@@ -346,7 +289,7 @@ async def api_set_policy_roles(
             # Already modular (module/role tweak) or dropped back to classic —
             # the existing best-effort fail-safe applies (keep live bundles on a
             # transient failure; the store row is the source of truth).
-            await _recompile_project_agents(session, project_id)
+            await service.rebuild_bundles(session, project_id)
 
     return RoleBindingsRead(roles=roles)
 
@@ -432,7 +375,7 @@ async def api_put_policy_file(
             # is_modular True with stale classic WASM in force.
             now_modular = name == service.ENTRY_FILE and not was_modular
             if now_modular:
-                if not await _rebuild_or_none(session, project_id):
+                if await service.rebuild_bundles(session, project_id) is None:
                     await service.delete_file(session, project_id=project_id, name=name)
                     raise HTTPException(
                         status_code=409,
@@ -442,7 +385,7 @@ async def api_put_policy_file(
                         ),
                     )
             else:
-                await _recompile_project_agents(session, project_id)
+                await service.rebuild_bundles(session, project_id)
     return _file_read(row)
 
 
@@ -480,18 +423,8 @@ async def api_delete_policy_file(
                     detail=f"file {name!r} is still imported; not deleted ({exc})",
                 ) from exc
         await service.delete_file(session, project_id=project_id, name=name)
-        await _recompile_project_agents(session, project_id)
+        await service.rebuild_bundles(session, project_id)
     return Response(status_code=204)
-
-
-def _lint_out(lint: PolicyLint) -> PolicyLintOut:
-    """An SDK ``PolicyLint`` as its wire model. A named agent's lint also names
-    it in the message, which is what the dashboard shows, unless the message
-    names it already (a column's ``link-error`` from ``resolve_role_map``)."""
-    out = PolicyLintOut(**asdict(lint))
-    if lint.agent is not None and f"agent {lint.agent!r}" not in lint.message:
-        out.message = f"agent {lint.agent!r}: {lint.message}"
-    return out
 
 
 @router.post(
@@ -514,7 +447,7 @@ async def api_preview_policy(
     return PolicyPreviewResponse(
         resolved=resolved,
         matrix=PolicyMatrixResponse(**matrix) if matrix else None,
-        lints=[_lint_out(x) for x in lints],
+        lints=[PolicyLintOut.from_lint(x) for x in lints],
     )
 
 
@@ -605,7 +538,7 @@ async def api_check_policy_drafts(
 
 
 def _check_response(lints: list[PolicyLint]) -> PolicyCheckResponse:
-    out = [_lint_out(x) for x in lints]
+    out = [PolicyLintOut.from_lint(x) for x in lints]
     ok = not any(lint.severity == "error" for lint in out)
     return PolicyCheckResponse(ok=ok, lints=out)
 
@@ -815,22 +748,12 @@ async def api_test_policy(
         ) from exc
     except service.DraftWithoutEntryError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except service.UndeclaredAgentError as exc:
-        role, agent, declared = exc.args
-        raise HTTPException(
-            status_code=404,
-            detail=f"agent {agent!r} is not declared in the policy (declared: "
-            f"{declared}), so role {role!r} was looked up under the generic "
-            '"*" view, which does not define it',
-        ) from exc
     except service.UnknownRoleError as exc:
-        raise HTTPException(
-            status_code=404, detail=f"role {exc.args[0]!r} not defined"
-        ) from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     verdict = dry_run.verdict
     return PolicyTestResponse(
-        outcome=_OUTCOME_WIRE.get(verdict.outcome.name, verdict.outcome.name.lower()),
+        outcome=service.verdict_outcome(verdict),
         reason=verdict.reason,
         violations=[str(v) for v in (verdict.violations or [])],
         # Verdict.hint is a machine-readable dict (file-scope path hint); the wire

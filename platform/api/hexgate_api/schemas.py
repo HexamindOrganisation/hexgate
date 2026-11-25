@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Final, Literal, Optional
@@ -80,6 +81,24 @@ class OrgUpdate(BaseModel):
         pattern=r"^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$",
     )
     assistant_mode: Optional[AssistantMode] = None
+
+
+class AssistantToken(BaseModel):
+    """``POST /v1/projects/{project_id}/assistant/token``: one message's token."""
+
+    token: str
+    expires_at: datetime
+    # Whether the token carries policy:apply, so the assistant may save.
+    can_write: bool
+
+
+class AssistantConfig(BaseModel):
+    """``GET /v1/projects/{project_id}/assistant/config``: what the tab shows."""
+
+    enabled: bool
+    mode: AssistantMode
+    can_write: bool
+    verified: bool
 
 
 class MemberRead(BaseModel):
@@ -556,6 +575,17 @@ class PolicyLintOut(BaseModel):
     role: str | None = None
     agent: str | None = None
 
+    @classmethod
+    def from_lint(cls, lint: Any) -> "PolicyLintOut":
+        """An SDK ``PolicyLint`` as its wire model. A named agent's lint also
+        names it in the message, which is what the dashboard shows, unless the
+        message names it already (a column's ``link-error`` from
+        ``resolve_role_map``)."""
+        out = cls(**asdict(lint))
+        if lint.agent is not None and f"agent {lint.agent!r}" not in lint.message:
+            out.message = f"agent {lint.agent!r}: {lint.message}"
+        return out
+
 
 class PolicyCheckResponse(BaseModel):
     """Lints over the resolved project, diagnostics-as-data (always 200)."""
@@ -823,6 +853,85 @@ class ChangeRead(BaseModel):
     def _assume_utc(cls, v: datetime) -> datetime:
         # SQLite hands back a naive datetime; the column is stored as UTC.
         return as_utc(v)
+
+
+# What one apply may carry: each file's text, in UTF-8 bytes, and the counts.
+APPLY_MAX_FILE_BYTES: Final = 256 * 1024
+APPLY_MAX_FILES: Final = 10
+APPLY_MAX_SAMPLES: Final = 20
+
+
+class PolicyApplyFile(PolicyFileDraft):
+    """One whole file to save. ``base_hash`` is the ``text_hash`` the caller
+    read; null means the file must not exist yet, never "skip the check"."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    base_hash: str | None
+
+    @field_validator("content")
+    @classmethod
+    def _cap_size(cls, v: str) -> str:
+        size = len(v.encode("utf-8"))
+        if size > APPLY_MAX_FILE_BYTES:
+            raise ValueError(
+                f"a file is at most {APPLY_MAX_FILE_BYTES} bytes (got {size})"
+            )
+        return v
+
+
+class PolicyApplySample(BaseModel):
+    """A tool call and the outcome it must get with the change saved."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent: str = "*"
+    role: str
+    tool: str
+    args: dict = Field(default_factory=dict)
+    attributes: dict = Field(default_factory=dict)
+    expect: Literal["allow", "deny", "approval_required"]
+
+
+class PolicyApplyRequest(BaseModel):
+    """A policy change to check and, when every check passes, save at once.
+    Files can be added or replaced, not deleted."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    files: Annotated[
+        list[PolicyApplyFile],
+        Field(min_length=1, max_length=APPLY_MAX_FILES),
+        AfterValidator(_unique_draft_names),
+    ]
+    summary: str = Field(max_length=2000)
+    samples: list[PolicyApplySample] = Field(
+        default_factory=list, max_length=APPLY_MAX_SAMPLES
+    )
+    # The assistant's chat session, opaque here; null from other clients.
+    session_id: str | None = Field(default=None, max_length=64)
+
+
+class PolicyApplyFileOut(BaseModel):
+    """A saved file's ``text_hash`` before and after; ``before_hash`` is null
+    for a file the change created."""
+
+    name: str
+    before_hash: str | None
+    after_hash: str
+
+
+class PolicyApplyResponse(BaseModel):
+    """What an apply did. ``applied`` is true only when every check passed and
+    the change was committed; ``change_id`` is set exactly then. ``checks`` and
+    ``boundary_changes`` have the shape ``ChangeRead`` returns them in."""
+
+    applied: bool
+    change_id: str | None = None
+    checks: list[dict[str, Any]]
+    boundary_changes: list[dict[str, Any]] = Field(default_factory=list)
+    files: list[PolicyApplyFileOut] = Field(default_factory=list)
 
 
 class PolicyTestResponse(BaseModel):

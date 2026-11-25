@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import shutil
+import threading
 
 import pytest
 import yaml
@@ -325,6 +326,45 @@ async def test_resolved_policy_yaml_is_inline_roles_shape(session_factory):
     assert "view_orders" in doc["roles"]["billing"]["tools"]
 
 
+async def test_when_a_tier_project_is_dry_run_then_its_resolve_runs_off_the_loop(
+    session_factory, monkeypatch
+):
+    import hexgate.security as sdk
+
+    threads: list[int] = []
+    real = sdk.resolve_for_project
+
+    def record(*args, **kwargs):
+        threads.append(threading.get_ident())
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(sdk, "resolve_for_project", record)
+    async with session_factory() as s:
+        proj, _ = await _fresh_project_with_agent(s)
+        await svc.upsert_module(
+            s,
+            project_id=proj.id,
+            tier="capability",
+            path="read_only",
+            content=READ_ONLY,
+            actor_user_id=ACTOR,
+        )
+        await svc.set_roles(
+            s,
+            project_id=proj.id,
+            roles={"billing": ["read_only"]},
+            created_by_user_id=ACTOR,
+        )
+        threads.clear()  # the writes above resolve too, on the loop
+        dry_run = await svc.test_policy(
+            s, proj.id, role="billing", tool="view_orders", args={}
+        )
+
+    assert svc.verdict_outcome(dry_run.verdict) == "allow"
+    assert len(threads) == 1
+    assert threads[0] != threading.get_ident()
+
+
 async def test_bundle_for_agent_routes_by_mode(session_factory, monkeypatch):
     import hexgate_api.features.agents.service as asvc
     from hexgate_api.features.policy_modules import service as pm
@@ -581,9 +621,9 @@ def test_identical_role_put_skips_recompile(client: TestClient, monkeypatch) -> 
     calls = {"n": 0}
     real = asvc.recompile_project
 
-    async def spy(session, project_id, sign):
+    async def spy(session, project_id, sign, **kwargs):
         calls["n"] += 1
-        return await real(session, project_id, sign)
+        return await real(session, project_id, sign, **kwargs)
 
     monkeypatch.setattr(asvc, "recompile_project", spy)
 
@@ -606,9 +646,9 @@ def test_reordered_role_put_skips_recompile(client: TestClient, monkeypatch) -> 
     calls = {"n": 0}
     real = asvc.recompile_project
 
-    async def spy(session, project_id, sign):
+    async def spy(session, project_id, sign, **kwargs):
         calls["n"] += 1
-        return await real(session, project_id, sign)
+        return await real(session, project_id, sign, **kwargs)
 
     monkeypatch.setattr(asvc, "recompile_project", spy)
 
@@ -770,9 +810,9 @@ def test_identical_module_put_skips_recompile(client: TestClient, monkeypatch) -
     calls = {"n": 0}
     real = asvc.recompile_project
 
-    async def spy(session, project_id, sign):
+    async def spy(session, project_id, sign, **kwargs):
         calls["n"] += 1
-        return await real(session, project_id, sign)
+        return await real(session, project_id, sign, **kwargs)
 
     monkeypatch.setattr(asvc, "recompile_project", spy)
 
@@ -1052,6 +1092,38 @@ def test_put_and_list_policy_files(client):
         f["name"] for f in client.get(f"/v1/projects/{pid}/policy-files").json()
     )
     assert names == ["caps/read.yaml", "policy.yaml"]
+
+
+def test_when_a_file_is_created_by_a_racing_request_then_the_put_updates_it(
+    client, monkeypatch
+):
+    """The file PUT reads no row, but another request stores one before its
+    insert: the insert hits the unique name, and the PUT falls back to an
+    update of that row instead of failing."""
+    pid = _project(client)
+    _put_file(client, pid, "policy.yaml", "tools: { a: { mode: allow } }\n")
+    _put_file(client, pid, "caps.yaml", "tools: { b: { mode: allow } }\n")
+    real_get_file = svc.get_file
+    calls = []
+
+    async def get_file(session, project_id, name):
+        if name == "caps.yaml":
+            calls.append(name)
+            # The PUT's own read (1st) sees the row; upsert_file's (2nd) does
+            # not, as if the racing create had not committed yet.
+            if len(calls) == 2:
+                return None
+        return await real_get_file(session, project_id, name)
+
+    monkeypatch.setattr(svc, "get_file", get_file)
+
+    r = _put_file(client, pid, "caps.yaml", "tools: { c: { mode: allow } }\n")
+
+    assert r.status_code == 200, r.text
+    assert len(calls) == 3  # the fallback re-read the stored row
+    files = client.get(f"/v1/projects/{pid}/policy-files").json()
+    [caps] = [f for f in files if f["name"] == "caps.yaml"]
+    assert caps["content"] == "tools: { c: { mode: allow } }\n"
 
 
 def test_resolve_via_entry_file(client):
@@ -2348,10 +2420,12 @@ def test_when_a_lint_names_an_agent_then_the_wire_names_it_in_the_message_too():
     # The dashboard shows the message, not the agent field: two agents' identical
     # lints must still read apart.
     from hexgate.security import PolicyLint
-    from hexgate_api.features.policy_modules.router import _lint_out
+    from hexgate_api.schemas import PolicyLintOut
 
-    named = _lint_out(PolicyLint("dead-grant", "warning", "m", agent="bot"))
-    generic = _lint_out(PolicyLint("dead-grant", "warning", "m"))
+    named = PolicyLintOut.from_lint(
+        PolicyLint("dead-grant", "warning", "m", agent="bot")
+    )
+    generic = PolicyLintOut.from_lint(PolicyLint("dead-grant", "warning", "m"))
 
     assert (named.agent, named.message) == ("bot", "agent 'bot': m")
     assert (generic.agent, generic.message) == (None, "m")
@@ -2360,7 +2434,7 @@ def test_when_a_lint_names_an_agent_then_the_wire_names_it_in_the_message_too():
 def test_when_a_lint_message_already_names_its_agent_then_it_is_not_prefixed():
     # A named column's link-error carries the agent in its LinkError text.
     from hexgate.security import AgentBinding, check_project
-    from hexgate_api.features.policy_modules.router import _lint_out
+    from hexgate_api.schemas import PolicyLintOut
 
     roles = {
         "default": {"*": AgentBinding()},
@@ -2368,7 +2442,7 @@ def test_when_a_lint_message_already_names_its_agent_then_it_is_not_prefixed():
     }
     (lint,) = [x for x in check_project([], [], roles) if x.code == "link-error"]
 
-    out = _lint_out(lint)
+    out = PolicyLintOut.from_lint(lint)
 
     assert out.message == lint.message
     assert out.message.count("'billing_bot'") == 1

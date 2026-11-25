@@ -3,7 +3,7 @@ from pathlib import Path
 DEMO = Path(__file__).resolve().parent.parent
 REPO = DEMO.parent
 RUN = DEMO / ".run"          # logs, pids, build stamps (gitignored)
-TOOLS = DEMO / ".tools"      # node, go, uv installed by demo/run (gitignored)
+TOOLS = DEMO / ".tools"      # node, go, uv, opa installed by demo/run (gitignored)
 APPS = DEMO / "apps"
 REFERENCE = DEMO / "reference"
 ENV_FILE = DEMO / ".env"     # OPENAI_API_KEY for every demo
