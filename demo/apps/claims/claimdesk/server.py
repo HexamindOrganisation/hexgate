@@ -179,7 +179,7 @@ def agent_status() -> dict:
 
 
 app = FastAPI(title="Claimdesk")
-app.mount("/static", StaticFiles(directory=WEB), name="static")
+app.mount("/static", StaticFiles(directory=WEB, check_dir=False), name="static")
 
 
 @app.get("/")
