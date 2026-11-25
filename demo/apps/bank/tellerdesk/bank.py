@@ -22,6 +22,7 @@ BANK_DOMAIN = "hexabank.example"
 BANK_ADDRESS = re.compile(rf"[^,;\s@]+@{re.escape(BANK_DOMAIN)}", re.IGNORECASE)
 ERROR_PREFIX = "Error:"  # how a request the bank cannot do starts
 ID_SEPARATORS = re.compile(r"[\s_]+")
+ID_SPELLING_SEPARATORS = ("-", " ", "_")  # each one _canonical_id folds back to "-"
 MONTH = re.compile(r"\d{4}-\d{2}")
 
 DEFAULT_CUSTOMER = "C-1042"  # the file open when a teller signs in
@@ -256,6 +257,11 @@ def _canonical_id(raw: str) -> str:
     return ID_SEPARATORS.sub("-", str(raw).strip()).upper()
 
 
+def _id_spellings(account_id: str) -> list[str]:
+    spelled = [account_id.replace("-", sep) for sep in ID_SPELLING_SEPARATORS]
+    return spelled + [s.lower() for s in spelled]
+
+
 def _find_account(account_id: str) -> Account | None:
     return _accounts.get(_canonical_id(account_id))
 
@@ -284,8 +290,8 @@ def is_customer(customer_id: str) -> bool:
 def session_attributes(customer_id: str) -> dict:
     """What the policy knows about the customer file open in the page.
 
-    Each IBAN comes in both spellings, so a model that drops the spaces
-    still matches. An unknown customer gives empty values: nothing matches."""
+    Each IBAN and account id comes in the spellings the bank accepts, so a
+    model that drops the spaces or changes case still matches. An unknown customer gives empty values: nothing matches."""
     customer = _customers.get(customer_id)
     if customer is None:
         return {
@@ -293,11 +299,12 @@ def session_attributes(customer_id: str) -> dict:
             "session_beneficiaries": [],
             "session_customer_email": "",
         }
+    accounts = [s for a in customer.account_ids for s in _id_spellings(a)]
     beneficiaries = []
     for b in customer.beneficiaries:
         beneficiaries += [b.iban, normalize_iban(b.iban)]
     return {
-        "session_accounts": list(customer.account_ids),
+        "session_accounts": accounts,
         "session_beneficiaries": beneficiaries,
         "session_customer_email": customer.email,
     }
