@@ -322,14 +322,16 @@ def issue_payment(claim_id: str, amount_eur: float) -> str:
         claim = _find(claim_id)
         if claim is None:
             return _unknown_claim(claim_id)
+        # An approval belongs to this call, even one that fails below.
+        signed = claim.approved_payments > 0
+        if signed:
+            claim.approved_payments -= 1
         if amount_eur <= 0:
             return f"{ERROR_PREFIX} a payment must be above zero, got {amount_eur}"
         flags = []
         if claim.bank_details_changed:
             flags.append(FLAG_UNVERIFIED_ACCOUNT)
-        if claim.approved_payments > 0:
-            claim.approved_payments -= 1
-        elif amount_eur > HANDLER_AUTHORITY_EUR:
+        if not signed and amount_eur > HANDLER_AUTHORITY_EUR:
             flags.append(FLAG_NO_SECOND_SIGNATURE)
         claim.paid_eur += amount_eur
         claim.status = STATUS_PAID
