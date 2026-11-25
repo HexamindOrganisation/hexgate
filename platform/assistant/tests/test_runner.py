@@ -3,7 +3,6 @@ framework's function model and a fake MCP server."""
 
 import asyncio
 import json
-import socket
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -26,9 +25,11 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 from sqlalchemy import select
 
+from hexgate_assistant import agent as agent_module
 from hexgate_assistant import runner
+from hexgate_assistant.agent import INSTRUCTIONS
 from hexgate_assistant.auth import AssistantToken, JwksTokenVerifier
-from hexgate_assistant.context import Editor
+from hexgate_assistant.context import Editor, estimate_tokens
 from hexgate_assistant.jwks import JwksCache
 from hexgate_assistant.models import (
     AssistantMessage,
@@ -39,7 +40,7 @@ from hexgate_assistant.models import (
 from hexgate_assistant.server import GRACEFUL_SECONDS, SHUTDOWN_SECONDS, create_app
 from hexgate_assistant.sessions import SessionStore
 from tests.conftest import JWKS_URL, ORG, OTHER_PROJECT, PROJECT, SUB, jwks
-from tests.fake_mcp import FakeMCP, serve
+from tests.fake_mcp import FakeMCP, serve, snapshot_tools
 
 TURNS = f"/v1/assistant/projects/{PROJECT}/turns"
 FILES = json.dumps(
@@ -308,11 +309,12 @@ async def test_when_the_body_is_invalid_then_422_and_no_lock(
 async def test_when_a_turn_is_running_then_a_second_one_is_409_busy(
     settings, mcp, key, db
 ):
-    gate = asyncio.Event()
+    # The first turn is held in its run, at the model, past its turn-start
+    # reads and its history: the lock covers the whole of it.
+    gate = Gate()
     async with platform(settings, mcp, key, scripted(text, gate)) as (client, turns):
         first = asyncio.create_task(post(client))
-        while not await rows(db, AssistantTurnLock):
-            await asyncio.sleep(0.01)
+        await gate.reached.wait()
         second = await post(client)
         gate.set()
         await settle(turns)
@@ -649,7 +651,8 @@ async def test_when_a_stop_lands_while_the_turn_is_stored_then_the_store_finishe
         turns.store.append_messages = slow_append
         response = asyncio.create_task(post(client))
         await entered.wait()
-        for task in list(turns.running):
+        running = list(turns.running)
+        for task in running:
             task.cancel()
         # The turn itself waited for its store: nothing else is awaited.
         await settle(turns)
@@ -657,6 +660,8 @@ async def test_when_a_stop_lands_while_the_turn_is_stored_then_the_store_finishe
 
     assert len(await rows(db, AssistantMessage)) == 1
     assert len(await rows(db, AssistantUsage)) == 1
+    # The cancel was held, then raised: the turn ended cancelled.
+    assert running and all(t.cancelled() for t in running)
 
 
 def test_shutdown_happy_path():
@@ -757,15 +762,16 @@ async def test_when_the_browser_closes_the_stream_then_the_turn_runs_on(
         replace(settings, mcp_url=mcp.url),
         model=scripted(tool_then_text, gate, gate_from=1),
     )
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
     server = uvicorn.Server(
-        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+        uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning")
     )
     serving = asyncio.create_task(server.serve())
-    while not server.started:
-        await asyncio.sleep(0.01)
+    async with asyncio.timeout(10):
+        while not server.started:
+            # A server that failed to start ends its task: fail, don't wait.
+            assert not serving.done(), "uvicorn did not start"
+            await asyncio.sleep(0.01)
+    port = server.servers[0].sockets[0].getsockname()[1]
     app.state.verifier = verifier(settings, key)
     turns = app.state.turns
     try:
@@ -790,3 +796,61 @@ async def test_when_the_browser_closes_the_stream_then_the_turn_runs_on(
     history = [m for r in await rows(db, AssistantMessage) for m in r.content]
     assert history[-1]["parts"][0]["content"] == "saw: policy_resolve result"
     assert await rows(db, AssistantTurnLock) == []
+
+
+async def prefix_after_a_turn(settings, mcp, key) -> tuple[int, str]:
+    async with platform(settings, mcp, key, scripted(text)) as (client, turns):
+        await turn(client, turns)
+        assert turns.reference is not None
+        return turns.prefix_tokens, turns.reference
+
+
+async def test_prefix_tokens_happy_path(settings, mcp, key):
+    prefix, reference = await prefix_after_a_turn(settings, mcp, key)
+
+    offered = [
+        {
+            "name": t["name"],
+            "description": t["description"],
+            "parameters": t["inputSchema"],
+        }
+        for t in snapshot_tools()
+    ]
+    assert prefix >= estimate_tokens(INSTRUCTIONS + reference + json.dumps(offered))
+
+
+async def test_when_a_tool_joins_the_allowlist_then_the_prefix_grows(
+    settings, mcp, key, monkeypatch
+):
+    before, _ = await prefix_after_a_turn(settings, mcp, key)
+    monkeypatch.setattr(
+        agent_module, "ALLOWLIST", agent_module.ALLOWLIST | {"projects_list"}
+    )
+
+    after, _ = await prefix_after_a_turn(settings, mcp, key)
+
+    assert after > before
+
+
+async def test_when_a_turn_ends_then_its_messages_are_stored_before_the_stream_ends(
+    settings, mcp, key, db
+):
+    token = AssistantToken(SUB, ORG, (PROJECT,), (), 0, token=key.mint())
+    stored_at_end: list[int] = []
+
+    async with platform(settings, mcp, key, scripted(text)) as (_, turns):
+        original = turns.store.append_messages
+
+        async def slow_append(*args, **kwargs):
+            await asyncio.sleep(0.3)
+            return await original(*args, **kwargs)
+
+        turns.store.append_messages = slow_append
+        request = runner.TurnRequest(None, "hi", Editor(None, ()))
+        queue = await runner.start(turns, token, PROJECT, request)
+        async for chunk in runner.stream(queue):
+            if '"RUN_FINISHED"' in chunk:
+                stored_at_end.append(len(await rows(db, AssistantMessage)))
+        await settle(turns)
+
+    assert stored_at_end == [1]

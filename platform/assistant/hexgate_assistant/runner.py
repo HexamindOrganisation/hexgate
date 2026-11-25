@@ -10,6 +10,7 @@ anyone is still listening.
 
 import asyncio
 import hashlib
+import json
 import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Mapping
@@ -36,6 +37,7 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.usage import RunUsage
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from hexgate_assistant import agent as agent_module
 from hexgate_assistant import events
 from hexgate_assistant.agent import (
     INSTRUCTIONS,
@@ -102,6 +104,9 @@ class Turns:
     # The policy reference, the same for every turn: read by the first turn
     # that can, and again by the next one while it fails.
     reference: str | None = None
+    # Estimated tokens of the tool definitions the model is offered with
+    # every request, read with the reference.
+    tool_tokens: int = 0
     store: SessionStore = field(init=False)
     # Turn tasks still running, held so the event loop keeps them.
     running: set[asyncio.Task[None]] = field(init=False, default_factory=set)
@@ -120,8 +125,9 @@ class Turns:
 
     @property
     def prefix_tokens(self) -> int:
-        """The instructions and the reference, as sent before the history."""
-        return estimate_tokens(INSTRUCTIONS + (self.reference or ""))
+        """What every request sends before the history: the instructions,
+        the reference and the tool definitions."""
+        return estimate_tokens(INSTRUCTIONS + (self.reference or "")) + self.tool_tokens
 
 
 async def start(
@@ -232,7 +238,9 @@ async def _read_project(
     try:
         async with mcp:
             if turns.reference is None:
+                tool_tokens = await _tool_tokens(mcp)
                 turns.reference = await read_reference(mcp)
+                turns.tool_tokens = tool_tokens
             return await read_project(mcp, project_id)
     except Exception as exc:
         # Which failure (a 401 or 403 from MCP, a connection refused), never
@@ -244,6 +252,18 @@ async def _read_project(
             _describe(exc),
         )
         raise ProjectUnreadable(type(exc).__name__) from exc
+
+
+async def _tool_tokens(mcp: MCPToolset[None]) -> int:
+    """The estimated size of the tool definitions the model is offered: each
+    allowlisted tool's name, description and input schema, as the server
+    lists them."""
+    offered = [
+        {"name": t.name, "description": t.description, "parameters": t.input_schema}
+        for t in await mcp.list_tools()
+        if t.name in agent_module.ALLOWLIST
+    ]
+    return estimate_tokens(json.dumps(offered))
 
 
 def _describe(exc: BaseException) -> str:
