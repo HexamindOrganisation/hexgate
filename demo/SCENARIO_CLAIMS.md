@@ -101,7 +101,9 @@ money still did not leave.
 Between takes: `./demo/run reset claims` goes back to the start of scene 1
 (unprotected agent, no policy, fresh desk). To replay protected scenes on a
 fresh desk without losing the policy, restart the app with
-`./demo/run app claims` instead.
+`./demo/run app claims` instead. Add `--scripted` when rehearsing without
+`OPENAI_API_KEY`: unlike `./demo/run claims`, this command does not offer the
+scripted model and starts `gpt-4o-mini`.
 
 ### What to say when asked
 
