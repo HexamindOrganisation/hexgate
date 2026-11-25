@@ -1438,7 +1438,9 @@ async def test_policy(
     )
 
 
-def _resolve_entry(files: dict[str, str], agent: str):
+def _resolve_entry(
+    files: dict[str, str], agent: str
+) -> tuple[list[str], ProjectLinkResult]:
     """The agents the entry declares and ``agent``'s resolution, from one parse
     of the entry."""
     from hexgate.security.compose import parse_entry
@@ -1451,11 +1453,9 @@ async def resolved_yaml_by_agent_compose(
     session: AsyncSession, project_id: str, agents: Iterable[str]
 ) -> dict[str, str]:
     """Per-agent resolved YAML for the compile fan-out, via compose. Reads the
-    store once; note it re-parses per agent (the compose resolver runs per-agent
-    import resolution, which mutates per-scope state, so the parsed entry can't be
-    safely shared across agents — a shared parse cache is a follow-up). Raises the
-    SDK's compose errors so callers keep the last-good bundle (fail-safe). The
-    resolves run in a worker thread, as in :func:`_resolve_and_lint`."""
+    store once. Raises the SDK's compose errors so callers keep the last-good
+    bundle (fail-safe). The resolves run in a worker thread, as in
+    :func:`_resolve_and_lint`."""
     files = await _files_map(session, project_id)
     return await asyncio.to_thread(_resolved_yaml_by_agent_files, files, list(agents))
 
@@ -1463,7 +1463,10 @@ async def resolved_yaml_by_agent_compose(
 def _resolved_yaml_by_agent_files(
     files: dict[str, str], agents: list[str]
 ) -> dict[str, str]:
-    """Each of ``agents``' resolved YAML from a ``{name: content}`` project."""
+    """Each of ``agents``' resolved YAML from a ``{name: content}`` project.
+    It re-parses per agent: the compose resolver runs per-agent import
+    resolution, which mutates per-scope state, so the parsed entry can't be
+    safely shared across agents (a shared parse cache is a follow-up)."""
     from hexgate.security import RESOLVED_POLICY_MARKER
 
     out: dict[str, str] = {}
