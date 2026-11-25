@@ -1,7 +1,7 @@
 """demo/run entry point (after the bootstrap installed what's missing).
 
 ./demo/run                 menu
-./demo/run devops          prepare and start the DevOps demo
+./demo/run devops          prepare and start the DevOps demo (or `claims`, the claims-desk demo)
 ./demo/run reset devops    back to the start of scene 1
 ./demo/run secure devops   scene 2 without Claude (--take claude-take: Claude's filmed answer)
 ./demo/run film devops     film the demo video (see demo/FILMING.md)

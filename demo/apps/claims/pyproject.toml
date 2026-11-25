@@ -1,0 +1,17 @@
+[project]
+name = "claimdesk-demo"
+version = "0.1.0"
+description = "Claimdesk: a fake insurance claims back office with a claims copilot (hexgate demo app)"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "hexgate",            # brings openai-agents and python-dotenv
+    "fastapi",
+    "uvicorn",
+    "pyyaml",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+hexgate = { path = "../../..", editable = true }

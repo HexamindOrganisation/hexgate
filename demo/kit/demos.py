@@ -27,6 +27,7 @@ class Demo:
     register: str
     agent_file: str
     reference: str
+    package: str  # the app's Python package: shipyard, claimdesk
     app_command: list[str]
     app_port: int
     app_url: str
@@ -187,15 +188,16 @@ def sync_workspace(demo: Demo) -> None:
     (d / ".mcp.json").write_text(_MCP_JSON)
     _git(demo, "add", "-A")
     if _git(demo, "status", "--porcelain").stdout.strip():
-        _git(demo, "commit", "-q", "-m", "Shipyard ops copilot" if fresh else "Update Shipyard")
+        name = demo.package.capitalize()
+        _git(demo, "commit", "-q", "-m", f"{name} copilot" if fresh else f"Update {name}")
     ui.ok(f"app folder {demo.shown_dir} (its own git repo, clean)")
 
 
 # ------------------------------------------------------------ app
 
 
-def app_env(scripted: bool) -> dict[str, str]:
-    env = {"SHIPYARD_MODEL": "scripted"} if scripted else {}
+def app_env(demo: Demo, scripted: bool) -> dict[str, str]:
+    env = {f"{demo.package.upper()}_MODEL": "scripted"} if scripted else {}
     return {**platform.tool_env(), **env}
 
 
@@ -215,7 +217,7 @@ def start_app(demo: Demo, scripted: bool) -> None:
         demo.proc,
         cmd,
         demo.dir,
-        {**app_env(scripted), "SHIPYARD_PORT": str(demo.app_port)},
+        {**app_env(demo, scripted), f"{demo.package.upper()}_PORT": str(demo.app_port)},
     )
     if not procs.wait_http(demo.proc, f"{demo.app_url}/login", 60):
         raise SystemExit(1)
@@ -274,7 +276,7 @@ def _next_steps(demo: Demo) -> None:
     print()
     print(
         ui.bold("Scene 1")
-        + f"  sign in as sam, ask the copilot:\n  {ui.violet(demo.prompts.get('scene1', ''))}"
+        + f"  sign in as {demo.prompts.get('scene1_user', '')}, ask the copilot:\n  {ui.violet(demo.prompts.get('scene1', ''))}"
     )
     print()
     print(
@@ -314,7 +316,7 @@ def reset(demo: Demo) -> None:
     if not demo.workspace:
         extra = sorted(p.name for p in demo.dir.iterdir()
                        if p.name not in {".env", ".venv", "__pycache__", "users.yaml", "pyproject.toml", "uv.lock",
-                                         "CLAUDE.md", ".claude", "demo.toml", "shipyard", demo.agent_file})
+                                         "CLAUDE.md", ".claude", "demo.toml", demo.package, demo.agent_file})
         if extra:
             ui.warn("left in the app folder by a take (check and remove by hand): " + ", ".join(extra))
 
