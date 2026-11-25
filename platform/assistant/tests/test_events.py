@@ -95,3 +95,12 @@ def test_sse_happy_path():
         'data: {"type":"RUN_ERROR","message":"late","code":"timeout"}\n\n'
     )
     assert PING == ": ping\n\n"
+
+
+def test_when_streamed_args_arrive_as_a_dict_then_they_go_out_as_json():
+    out = translate(
+        PartStartEvent(index=0, part=ToolCallPart("t", "", "c1")),
+        PartDeltaEvent(index=0, delta=ToolCallPartDelta(args_delta={"a": 1})),
+    )
+
+    assert json.loads(out[-1]["delta"]) == {"a": 1}

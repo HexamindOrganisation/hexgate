@@ -175,7 +175,9 @@ def test_when_a_whole_result_tool_answers_under_64_kib_then_it_is_kept_whole(too
 def test_when_a_policy_file_is_over_64_kib_then_none_of_it_is_given():
     capped = cap_tool_result("policy_read_file", "z" * (WHOLE_RESULT_BYTES + 1))
 
-    assert capped == "file too large for the assistant (64 KiB); edit it in the editor"
+    assert capped == (
+        "file too large for the assistant (over 64 KiB: 64 KiB); edit it in the editor"
+    )
 
 
 def test_when_a_reference_section_is_over_64_kib_then_it_is_cut_as_any_result():
@@ -193,3 +195,35 @@ def test_every_policy_reference_section_fits_in_a_whole_result():
     assert sections, DOCS
     too_big = [s.name for s in sections if len(s.read_bytes()) > WHOLE_RESULT_BYTES]
     assert too_big == []
+
+
+def test_when_every_name_list_is_long_then_each_line_keeps_whole_names():
+    def names(kind: str) -> tuple[str, ...]:
+        return tuple(f"{kind}-{i:03}-" + "n" * (28 - len(kind) - 6) for i in range(60))
+
+    files, roles, agents = names("file"), names("role"), names("agent")
+    card = project_card(
+        project(snapshot=dict.fromkeys(files, "h"), roles=roles, agents=agents),
+        may_write=False,
+        today=date.today(),
+    )
+    message = user_message(card=card, latest_change="none", editor="none", message="hi")
+
+    lines = {line.split(":", 1)[0]: line for line in card.splitlines()}
+    for label, listed in (("Files", files), ("Roles", roles), ("Agents", agents)):
+        line = lines[label]
+        body, _, more = line.removeprefix(f"{label}: ").partition(" (and ")
+        shown = body.split(", ")
+        assert set(shown) <= set(listed)  # no name cut
+        assert more == f"{60 - len(shown)} more)"
+    assert card in message  # the card is never cut as a whole
+
+
+def test_when_a_change_created_a_file_then_its_before_side_says_new_file():
+    change = {
+        "change_id": "chg_1",
+        "files": [{"name": "caps/new.yaml", "before_hash": None, "after_hash": "h1"}],
+        "checks": [{"id": "yaml", "status": "pass"}],
+    }
+
+    assert "caps/new.yaml: new file" in latest_change_text(change)

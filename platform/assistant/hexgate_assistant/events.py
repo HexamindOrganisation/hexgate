@@ -22,7 +22,9 @@ from hexgate_assistant.context import keep_ends
 
 Event = dict[str, Any]
 
-# A tool result as the browser receives it; the model's own cap is smaller.
+# A tool result as the browser receives it, start and end kept. Smaller than
+# what the model may receive whole (a policy file or reference section up to
+# 64 KiB), larger than every other result the model gets.
 BROWSER_RESULT_BYTES = 32 * 1024
 
 # The keep-alive: a comment line, which every SSE client skips.
@@ -99,7 +101,9 @@ class EventTranslator:
                 yield _text(self._texts[event.index], delta.content_delta)
         elif isinstance(delta, ToolCallPartDelta) and event.index in self._calls:
             if delta.args_delta:
-                yield _args(self._calls[event.index], delta.args_delta)
+                args = delta.args_delta
+                text = args if isinstance(args, str) else json.dumps(args)
+                yield _args(self._calls[event.index], text)
 
     def _end(self, event: PartEndEvent) -> Iterator[Event]:
         if (message_id := self._texts.pop(event.index, None)) is not None:

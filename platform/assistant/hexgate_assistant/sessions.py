@@ -131,18 +131,17 @@ class SessionStore:
     async def latest_change(self, session: AssistantSession) -> dict[str, Any] | None:
         """The value of the session's latest stored `change` event, or None."""
         async with self._db() as db:
-            stored = await db.scalars(
+            event = await db.scalar(
                 select(AssistantMessage.content)
                 .where(
                     AssistantMessage.session_id == session.id,
                     AssistantMessage.kind == "event",
+                    AssistantMessage.content["name"].as_string() == CHANGE_EVENT,
                 )
                 .order_by(AssistantMessage.seq.desc())
+                .limit(1)
             )
-            for event in stored:
-                if event.get("name") == CHANGE_EVENT:
-                    return event.get("value")
-        return None
+        return None if event is None else event["value"]
 
     async def record_usage(
         self,

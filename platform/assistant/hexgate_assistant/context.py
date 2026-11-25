@@ -6,7 +6,6 @@ and the conversation's.
 
 import asyncio
 import json
-import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
@@ -22,11 +21,11 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
-logger = logging.getLogger(__name__)
-
 # Tokens are estimated, never counted: no tokenizer runs here. Three bytes a
-# token is fewer than English text and JSON average, so an estimate comes out
-# high, and a cap set in tokens holds.
+# token is fewer than English text and most JSON average, so the estimate
+# usually comes out high. It can run low on dense text (hex hashes,
+# digit-heavy JSON); the next response's reported usage then corrects it, so
+# a cap set in tokens is soft by at most one step's tool results.
 BYTES_PER_TOKEN = 3
 
 # A tool result reaches the model at most this long, its start and end kept.
@@ -66,9 +65,10 @@ def keep_ends(text: str, max_bytes: int, marker: str) -> str:
     return f"{head}{note}{tail}"
 
 
-# Tools whose result is read whole or not at all, up to WHOLE_RESULT_BYTES:
-# a reference section or a policy file cut in the middle would be rewritten
-# from what is left, and neither tool has a narrower call.
+# Tools whose result is kept whole up to WHOLE_RESULT_BYTES: a reference
+# section or a policy file cut in the middle would be rewritten from what is
+# left, and neither tool has a narrower call. Over it, a policy file is
+# refused and a reference section is cut like any other result.
 WHOLE_RESULT_TOOLS = frozenset({"policy_reference", "policy_read_file"})
 WHOLE_RESULT_BYTES = 64 * 1024
 
@@ -80,7 +80,7 @@ def cap_tool_result(tool: str, text: str) -> str:
         return text
     if tool == "policy_read_file":
         return (
-            f"file too large for the assistant ({size // 1024} KiB); "
+            f"file too large for the assistant (over 64 KiB: {size // 1024} KiB); "
             "edit it in the editor"
         )
     return keep_ends(
@@ -226,6 +226,11 @@ class Editor:
     unsaved: tuple[str, ...]
 
 
+# The card's name lists share its budget (CARD_TOKENS) equally, each list
+# kept to whole names.
+NAMES_LINE_BYTES = 900
+
+
 def project_card(project: ProjectState, *, may_write: bool, today: date) -> str:
     """The project as the turn found it. Whether the turn may write stands
     in for the user's role: the token names neither the role nor the
@@ -242,18 +247,32 @@ def project_card(project: ProjectState, *, may_write: bool, today: date) -> str:
 
 
 def _names(label: str, names: Sequence[str] | None) -> str:
+    """`label: a, b, c (and N more)`: up to CARD_NAMES whole names, as many
+    as fit in NAMES_LINE_BYTES."""
     if names is None:
         return f"{label}: unknown (not readable at turn start)"
-    shown = ", ".join(names[:CARD_NAMES]) or "none"
-    more = len(names) - CARD_NAMES
-    return f"{label}: {shown}" + (f" (and {more} more)" if more > 0 else "")
+    if not names:
+        return f"{label}: none"
+    # Room kept for the longest possible "(and N more)".
+    room = NAMES_LINE_BYTES - len(f"{label}:  (and {len(names)} more)".encode())
+    shown: list[str] = []
+    for name in names[:CARD_NAMES]:
+        size = len(name.encode()) + (2 if shown else 0)
+        if size > room:
+            break
+        shown.append(name)
+        room -= size
+    more = len(names) - len(shown)
+    return f"{label}: {', '.join(shown)}" + (f" (and {more} more)" if more else "")
 
 
 def latest_change_text(change: Mapping[str, Any] | None) -> str:
     """The session's latest applied change, from its stored `change` event."""
     if change is None:
         return "none"
-    files = ", ".join(f"{f['name']}: {f['before_hash']}" for f in change["files"])
+    files = ", ".join(
+        f"{f['name']}: {f['before_hash'] or 'new file'}" for f in change["files"]
+    )
     checks = ", ".join(f"{c['id']} {c['status']}" for c in change["checks"])
     return "\n".join(
         [
@@ -270,7 +289,8 @@ def editor_text(editor: Editor) -> str:
 
 
 # Each part of the user message is at most this long, so a long name list
-# cannot crowd out the message.
+# cannot crowd out the message. The card keeps to it by construction (three
+# NAMES_LINE_BYTES lines and a short header); the cut below never reaches it.
 CARD_TOKENS = 1000
 CHANGE_TOKENS = 500
 EDITOR_TOKENS = 1000
