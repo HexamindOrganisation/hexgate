@@ -41,10 +41,11 @@ class InvalidAccessTokenError(Exception):
 
 class AccessTokenClaims(BaseModel):
     """The verified claims of an access token, every one the API reads (the
-    ``org`` claim, which only the assistant reads, is dropped). Validating a
-    decoded payload against it refuses any claim of the wrong type, so a bad
-    shape is a 401, never a 500 or a set of characters. PyJWT has already
-    checked the values of iss, aud, exp and iat."""
+    ``org`` claim, which only the assistant reads, is dropped unchecked).
+    Validating a decoded payload against it refuses any of these claims with
+    the wrong type, so a bad shape is a 401, never a 500 or a set of
+    characters. PyJWT has already checked the values of iss, aud, exp and
+    iat."""
 
     model_config = ConfigDict(frozen=True)
 
