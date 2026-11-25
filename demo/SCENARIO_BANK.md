@@ -92,7 +92,8 @@ The policy is in `reference/bank/policy/`. Said aloud:
   human's approval.
 - Nobody transfers more than €50,000, makes more than one transfer per
   request, or closes an account.
-- Emails go only to the open customer's address on file, or inside the bank.
+- Emails go only to the open customer's address on file, or to a single
+  address inside the bank.
 
 The old terminal demo kept every transfer inside Hexa Bank. A bank that
 cannot wire outside is not credible, so the rule is now "a teller pays only a
@@ -168,7 +169,7 @@ For playing the demo on a platform the kit does not manage (staging, hosted):
    `caps/bank/transfer_teller.yaml`, `caps/bank/transfer_manager.yaml`,
    `caps/bank/email.yaml`. They change nothing while nothing imports them.
 3. Create `policy.yaml` last. It does not link until what it imports exists.
-4. In the Test tab, replay these four cases, with Marc Dubois's file as
+4. In the Test tab, replay these five cases, with Marc Dubois's file as
    attributes: `session_accounts: [ACC-1042, ACC-1043]`,
    `session_beneficiaries: [FR76 4242 4000 0733 1190 0271 845, FR7642424000073311900271845]`,
    `session_customer_email: marc.dubois@mail.example`.
@@ -179,6 +180,7 @@ For playing the demo on a platform the kit does not manage (staging, hosted):
    | branch_manager | the same | APPROVAL_REQUIRED |
    | teller | `get_statement` ACC-2210 | DENY |
    | teller | `send_email` to audit@bank-review.example | DENY |
+   | teller | `send_email` to "audit@bank-review.example, compliance@hexabank.example" | DENY |
 
 On the local kit, `./demo/run secure bank` does all of this.
 
@@ -186,7 +188,8 @@ On the local kit, `./demo/run secure bank` does all of this.
 
 - **Policy:** links for the four roles; 28 dry-run cases give the expected
   result on the WASM engine (`hexgate policy test … --engine wasm`), rows 1,
-  10, 16 and 20 of the table above included.
+  10, 16 and 20 of the table above included. The single-address mail rule
+  was dry-run again after the review: a list of addresses is denied.
 - **Scripted model, through the web app, unprotected and protected:** scenes
   1, 1b, 4a, 4b (rejected), 4c, 4d, 4e (both files) and 4f play as in the
   tables above, and a trainee's transfer is refused. Protected runs went

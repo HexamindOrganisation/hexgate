@@ -15,10 +15,10 @@ boundary:
         - any(ctx.session_accounts, . == args.from_account)     # only from the open customer's accounts
         - args.amount_eur <= 50000                               # bank ceiling per transfer
         - run.calls_of_this_tool < 1                             # one transfer per request: no splitting
-    # Mail goes to the open customer's address on file, or stays inside the bank.
+    # Mail goes to the open customer's address on file, or to a single address inside the bank.
     send_email:
       mode: allow
-      constraint: 'args.to == ctx.session_customer_email or endswith(args.to, "@hexabank.example")'
+      constraint: 'args.to == ctx.session_customer_email or matches(args.to, "(?i)^[^,;\\s@]+@hexabank\\.example$")'
     close_account: { mode: deny }                                # never through the assistant
   admission: { mode: allow }
 agents:
