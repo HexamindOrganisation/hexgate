@@ -47,7 +47,7 @@ FILES = json.dumps(
     }
 )
 GRAPH = json.dumps({"roles": ["support"], "declared_agents": ["billing"]})
-READ_FILE = ToolCallPart("policy_read_file", {"project_id": PROJECT, "name": "x"}, "c1")
+RESOLVE = ToolCallPart("policy_resolve", {"project_id": PROJECT}, "c1")
 
 Respond = Callable[[list[ModelMessage], AgentInfo], ModelResponse]
 
@@ -81,11 +81,11 @@ def scripted(respond: Respond, gate: asyncio.Event | None = None, gate_from: int
 
 
 def tool_then_text(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
-    """Calls READ_FILE, then answers with what came back."""
+    """Calls RESOLVE (its result keeps the start-and-end cap), then answers with what came back."""
     for part in messages[-1].parts:
         if isinstance(part, ToolReturnPart) and part.tool_call_id == "c1":
             return ModelResponse(parts=[TextPart(f"saw: {part.content}")])
-    return ModelResponse(parts=[READ_FILE])
+    return ModelResponse(parts=[RESOLVE])
 
 
 def text(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
@@ -200,9 +200,9 @@ async def test_post_turn_happy_path(settings, mcp, key, db):
     ]
     session_id = events[0]["threadId"]
     assert events[-1]["threadId"] == session_id
-    assert events[1]["toolCallName"] == "policy_read_file"
-    assert events[4]["content"] == "policy_read_file result"
-    assert events[6]["delta"] == "saw: policy_read_file result"
+    assert events[1]["toolCallName"] == "policy_resolve"
+    assert events[4]["content"] == "policy_resolve result"
+    assert events[6]["delta"] == "saw: policy_resolve result"
     # The user message carries the project as the turn found it.
     prompt = last_prompt(seen[0])
     assert "Files: caps/refund.yaml, policy.yaml" in prompt
@@ -376,7 +376,7 @@ async def test_when_the_browser_disconnects_then_the_turn_is_stored_and_unlocked
         await settle(turns)
 
     history = [m for r in await rows(db, AssistantMessage) for m in r.content]
-    assert history[-1]["parts"][0]["content"] == "saw: policy_read_file result"
+    assert history[-1]["parts"][0]["content"] == "saw: policy_resolve result"
     assert await rows(db, AssistantTurnLock) == []
     assert len(await rows(db, AssistantUsage)) == 1
 
@@ -388,7 +388,7 @@ async def test_when_the_turn_runs_past_its_deadline_then_timeout_and_the_next_tu
     settings, mcp, key, db, monkeypatch
 ):
     monkeypatch.setattr(runner, "TURN_DEADLINE", runner.TURN_DEADLINE / 150)  # 2 s
-    mcp.delays["policy_read_file"] = 10
+    mcp.delays["policy_resolve"] = 10
     seen: list[list[ModelMessage]] = []
 
     def respond(messages, info):
@@ -422,7 +422,7 @@ async def test_when_a_tool_runs_over_its_time_then_the_model_is_told_and_the_tur
 ):
     # The agent's MCP calls only; the turn-start reads keep their own limit.
     monkeypatch.setattr(agent_module, "MCP_CALL_SECONDS", 1)
-    mcp.delays["policy_read_file"] = 3
+    mcp.delays["policy_resolve"] = 3
 
     events = await run_turn(settings, mcp, key, tool_then_text)
 
@@ -434,7 +434,7 @@ async def test_when_a_tool_runs_over_its_time_then_the_model_is_told_and_the_tur
 async def test_when_a_tool_result_is_200_kib_then_the_model_gets_8000_tokens_with_both_ends(
     settings, mcp, key
 ):
-    mcp.results["policy_read_file"] = "HEAD" + "x" * 200 * 1024 + "TAIL"
+    mcp.results["policy_resolve"] = "HEAD" + "x" * 200 * 1024 + "TAIL"
     seen: list[str] = []
 
     def respond(messages, info):
@@ -467,7 +467,7 @@ async def test_when_the_history_is_over_budget_then_context_full_and_nothing_sto
 async def test_when_a_tool_result_fills_the_context_then_context_full_and_the_turn_is_stored(
     settings, mcp, key, db
 ):
-    mcp.results["policy_read_file"] = "y" * 40_000
+    mcp.results["policy_resolve"] = "y" * 40_000
     # Room for the prefix and the message, not for the tool result.
     small = replace(settings, context_tokens=8_000)
 
@@ -603,7 +603,7 @@ async def test_when_the_server_stops_mid_turn_then_the_turn_is_stored_and_unlock
 
     async with platform(settings, mcp, key, model) as (client, turns):
         response = asyncio.create_task(post(client))
-        while not any(c.tool == "policy_read_file" for c in mcp.calls):
+        while not any(c.tool == "policy_resolve" for c in mcp.calls):
             await asyncio.sleep(0.01)
         await asyncio.sleep(0.1)
         # As the app's shutdown does, once.
