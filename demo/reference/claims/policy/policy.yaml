@@ -12,7 +12,7 @@ boundary:
       mode: allow
       constraints:
         - args.amount_eur <= 50000                                # company ceiling per payment
-        - run.calls_of_this_tool < 1                              # one payment per request: no splitting
+        - run.calls_of_this_tool < 1                              # one payment per request; a later chat message starts a new run
         - every(run.tools_used, . != "update_bank_details")       # never pay in a run that changed the bank details
     # Once the copilot has read a document sent from outside, mail goes to one company address only.
     # Within one request only: a later chat message starts a new run.

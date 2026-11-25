@@ -115,6 +115,12 @@ fresh desk without losing the policy, restart the app with
   even though the conversation still holds the document. Covering the whole
   conversation needs the app to pass what was read as a caller attribute
   (`ctx.*`) and the constraint to test it.
+- **"Can Léa pay 5,000 three times, in three messages?"** Yes. The €5,000
+  cap is per payment, and "one payment per request" only counts the current
+  run, so each new message starts again at zero. A cap on the total paid per
+  claim belongs in the payment system, or in a custom guard that reads what
+  the claim has already been paid. Usage quotas (`user_usage.*`) count calls,
+  not euros.
 - **"Karim approved his own request."** Who may approve is decided by the app
   that shows the card, not by hexgate. Same as Shipyard.
 - **"Where do Léa's assigned claims come from?"** From `users.yaml` here; in a
