@@ -9,6 +9,7 @@ fold itself lives in the SDK; nothing here reimplements it.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -1073,10 +1074,12 @@ async def _resolve_and_lint(
 ) -> tuple[dict, list[PolicyLint]]:
     """Resolve every declared agent, then lint the project. Raises
     :func:`compose_error_types` when an agent doesn't resolve, before the
-    manifests are loaded, so a draft that doesn't compose costs no DB query."""
+    manifests are loaded, so a draft that doesn't compose costs no DB query.
+    The resolve runs in a worker thread: a large project takes seconds, which
+    would otherwise block the event loop."""
     from hexgate_api.features.agents.service import latest_manifests
 
-    resolved = _resolve_all_agents_files(files)
+    resolved = await asyncio.to_thread(_resolve_all_agents_files, files)
     manifests = await latest_manifests(session, project_id)
     return resolved, _compose_lints(resolved, manifests)
 
@@ -1417,17 +1420,12 @@ async def test_policy(
     not declared either)."""
     files = await files_with_drafts(session, project_id, drafts)
     if ENTRY_FILE in files:
-        # One parse: the entry gives both the declared agents and the resolve.
-        from hexgate.security.compose import parse_entry
-
-        entry = parse_entry(files[ENTRY_FILE], source=ENTRY_FILE)
-        declared = _declared_agents(entry)
-        result = _resolve_parsed(files, entry, agent)
+        declared, result = await asyncio.to_thread(_resolve_entry, files, agent)
     else:
         declared, resolve_for_agent, _ = await _agent_resolver(
             session, project_id, files
         )
-        result = resolve_for_agent(agent)
+        result = await asyncio.to_thread(resolve_for_agent, agent)
     if role not in result.policy_set.roles:
         if agent not in declared:
             raise UndeclaredAgentError(role, agent, declared)
@@ -1438,6 +1436,15 @@ async def test_policy(
     return DryRun(
         verdict=verdict, agent_declared=agent in declared, declared_agents=declared
     )
+
+
+def _resolve_entry(files: dict[str, str], agent: str):
+    """The agents the entry declares and ``agent``'s resolution, from one parse
+    of the entry."""
+    from hexgate.security.compose import parse_entry
+
+    entry = parse_entry(files[ENTRY_FILE], source=ENTRY_FILE)
+    return _declared_agents(entry), _resolve_parsed(files, entry, agent)
 
 
 async def resolved_yaml_by_agent_compose(
