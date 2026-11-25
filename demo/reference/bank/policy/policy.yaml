@@ -1,0 +1,35 @@
+# Hexa Bank: bank_assistant policy.
+# Boundary = what the bank allows at most, whoever asks (security-owned).
+# Each role then gets only the capabilities it imports.
+boundary:
+  tools:
+    list_inbox: { mode: allow }
+    read_message: { mode: allow }
+    # The assistant only ever touches the accounts of the customer whose file is open.
+    get_balance: { mode: allow, constraint: "any(ctx.session_accounts, . == args.account_id)" }
+    list_transactions: { mode: allow, constraint: "any(ctx.session_accounts, . == args.account_id)" }
+    get_statement: { mode: allow, constraint: "any(ctx.session_accounts, . == args.account_id)" }
+    transfer_funds:
+      mode: allow
+      constraints:
+        - any(ctx.session_accounts, . == args.from_account)     # only from the open customer's accounts
+        - args.amount_eur <= 50000                               # bank ceiling per transfer
+        - run.calls_of_this_tool < 1                             # one transfer per request: no splitting
+    # Mail goes to the open customer's address on file, or stays inside the bank.
+    send_email:
+      mode: allow
+      constraint: 'args.to == ctx.session_customer_email or endswith(args.to, "@hexabank.example")'
+    close_account: { mode: deny }                                # never through the assistant
+  admission: { mode: allow }
+agents:
+  bank_assistant:
+    roles:
+      # Anyone signed in with a role this file doesn't name: read-only.
+      default:
+        import: [ caps/bank/ingress.yaml, caps/bank/read.yaml ]
+      trainee:
+        import: [ caps/bank/ingress.yaml, caps/bank/read.yaml ]
+      teller:
+        import: [ caps/bank/ingress.yaml, caps/bank/read.yaml, caps/bank/transfer_teller.yaml, caps/bank/email.yaml ]
+      branch_manager:
+        import: [ caps/bank/ingress.yaml, caps/bank/read.yaml, caps/bank/transfer_manager.yaml, caps/bank/email.yaml ]

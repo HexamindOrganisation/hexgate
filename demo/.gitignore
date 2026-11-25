@@ -1,5 +1,3 @@
-bank/.env
-bank/.venv/
 __pycache__/
 .run/
 .tools/
@@ -9,5 +7,6 @@ apps/*/.venv/
 apps/*/ui/node_modules/
 apps/devops/shipyard/web/
 apps/claims/claimdesk/web/
+apps/bank/tellerdesk/web/
 film/node_modules/
 apps/*/ui/*.tsbuildinfo

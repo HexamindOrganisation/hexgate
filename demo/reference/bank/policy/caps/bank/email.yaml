@@ -1,0 +1,2 @@
+tools:
+  send_email: { mode: allow }

@@ -1,0 +1,25 @@
+# Fake accounts for the Tellerdesk demo app. Edit freely: the app re-reads this
+# file at every sign-in.
+#
+# Passwords are plain text on purpose: this is a local demo, never a real login.
+# `roles` is what the assistant passes to hexgate as the caller's roles. A role
+# the policy doesn't mention gets the policy's `default` access. The caller
+# attributes (ctx.* in the policy) come from the customer file open in the
+# page, not from this file: session_accounts, session_beneficiaries and
+# session_customer_email.
+
+users:
+  hugo:
+    name: Hugo Petit
+    password: en-formation
+    roles: [trainee]
+
+  camille:
+    name: Camille Roux
+    password: guichet-camille
+    roles: [teller]
+
+  nadia:
+    name: Nadia Fontaine
+    password: agence-nadia
+    roles: [branch_manager]
