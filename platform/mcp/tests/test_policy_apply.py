@@ -88,6 +88,27 @@ def test_when_api_refuses_then_tool_error_carries_its_detail(key, status, detail
     )
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"samples": [{"role": "r", "tool": "t", "expect": "allow", "arguments": {}}]},
+        {"files": [FILE | {"basehash": "abc"}]},
+    ],
+    ids=["sample", "file"],
+)
+@respx.mock
+def test_when_a_file_or_sample_has_an_unknown_key_then_refused_before_any_request(
+    key, arguments
+):
+    respx.get(JWKS_URL).respond(json=jwks(key))
+    api = respx.route(host="api.internal", path__startswith="/v1/")
+
+    result = apply(key, **arguments)
+
+    assert result["isError"]
+    assert not api.called
+
+
 @respx.mock
 def test_when_a_check_fails_then_the_answer_says_nothing_was_saved(key):
     respx.get(JWKS_URL).respond(json=jwks(key))

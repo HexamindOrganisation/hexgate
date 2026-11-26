@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from hexgate_mcp.api import ApiClient
 from hexgate_mcp.tools import caller, result_text
@@ -19,6 +19,10 @@ class ApplyFile(BaseModel):
     """A whole file to save. `base_hash` is the `text_hash` of the stored file
     the change was written against; null when the file does not exist yet."""
 
+    # Refused here: the default would drop a misspelt key before the API,
+    # whose own `extra="forbid"` then never sees it.
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     content: str
     base_hash: str | None
@@ -26,6 +30,8 @@ class ApplyFile(BaseModel):
 
 class ApplySample(BaseModel):
     """A tool call and the outcome it must get once the change is saved."""
+
+    model_config = ConfigDict(extra="forbid")  # as ApplyFile
 
     agent: str = "*"
     role: str
