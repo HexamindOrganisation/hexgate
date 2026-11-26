@@ -10,10 +10,11 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from hexgate_api.constants import DEFAULT_USER_ID
+from hexgate_api.constants import DEFAULT_ORG_ID, DEFAULT_USER_ID, ROLE_MEMBER
 from hexgate_api.core import keystore as keystore_mod
 from hexgate_api.features.agents import service as agents_service
 from hexgate_api.main import app
+from hexgate_api.models import OrganizationMember, User
 from hexgate_api.schemas import (
     AgentFramework,
     AgentManifest,
@@ -22,6 +23,9 @@ from hexgate_api.schemas import (
     ToolDefinition,
 )
 from hexgate_api.seeds.defaults import ensure_default_project
+
+# A plain member of the default org, added by the ``add_member`` fixture.
+MEMBER_ID = "usr_member"
 
 
 @pytest_asyncio.fixture
@@ -139,3 +143,17 @@ async def session(session_factory):
     """One session on the seeded database."""
     async with session_factory() as session:
         yield session
+
+
+@pytest_asyncio.fixture
+async def add_member(session_factory) -> str:
+    """Add a plain (non-admin) member to the default org; their user id."""
+    async with session_factory() as s:
+        s.add(User(id=MEMBER_ID, email="member@example.test"))
+        s.add(
+            OrganizationMember(
+                user_id=MEMBER_ID, org_id=DEFAULT_ORG_ID, role=ROLE_MEMBER
+            )
+        )
+        await s.commit()
+    return MEMBER_ID
