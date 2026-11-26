@@ -4,15 +4,23 @@ from typing import Literal
 from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict
 
-from hexgate_mcp.api import ApiClient
+from hexgate_mcp.api import ApiClient, ApiRefusal
 from hexgate_mcp.tools import caller, result_text
 
 # The apply checks every file, runs the samples and builds each agent's bundle
 # before it commits, which the shared client's 5 s does not allow for.
 APPLY_TIMEOUT_SECONDS = 30.0
+
+# The API commits before it answers, so a call that got no answer may have
+# saved the change; a blind retry then spends an attempt on a 409 stale.
+NO_ANSWER = (
+    "the Hexgate API did not answer; the change may be saved: read the files "
+    "again with policy_read_file before retrying"
+)
 
 
 class ApplyFile(BaseModel):
@@ -80,5 +88,12 @@ def register(mcp: FastMCP, api: ApiClient) -> None:
             "session_id": session_id,
         }
         path = f"/projects/{quote(project_id, safe='')}/policy/apply"
-        applied = await api.post(path, token.token, body, timeout=APPLY_TIMEOUT_SECONDS)
+        try:
+            applied = await api.post(
+                path, token.token, body, timeout=APPLY_TIMEOUT_SECONDS
+            )
+        except ApiRefusal:
+            raise  # the API answered, and said why nothing was saved
+        except ToolError as exc:
+            raise ToolError(NO_ANSWER) from exc
         return result_text(applied)

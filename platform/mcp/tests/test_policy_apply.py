@@ -121,17 +121,28 @@ def test_when_a_check_fails_then_the_answer_says_nothing_was_saved(key):
     assert json.loads(result["content"][0]["text"]) == failed
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [httpx.ReadTimeout("slow"), httpx.Response(500, text="boom")],
+    ids=["timeout", "server-error"],
+)
 @respx.mock
-def test_when_the_apply_times_out_then_error_says_to_read_before_retrying(key):
-    # The API commits before it answers, so the change may be saved; the retry
-    # of the same change then gets the 409 stale the error text points to.
+def test_when_the_apply_gets_no_answer_then_error_says_it_may_be_saved(key, failure):
+    # The API commits before it answers, so the change may be saved; a blind
+    # retry would then spend an attempt on the 409 stale.
     respx.get(JWKS_URL).respond(json=jwks(key))
-    respx.post(APPLY_URL).mock(side_effect=httpx.ReadTimeout("slow"))
+    route = respx.post(APPLY_URL)
+    if isinstance(failure, Exception):
+        route.mock(side_effect=failure)
+    else:
+        route.mock(return_value=failure)
 
     result = apply(key)
 
     assert result["isError"]
-    assert "failed to answer" in result["content"][0]["text"]
+    assert result["content"][0]["text"] == (
+        f"Error executing tool policy_apply: {policy_apply.NO_ANSWER}"
+    )
 
 
 async def test_description_tells_the_model_a_timed_out_apply_may_be_saved():
