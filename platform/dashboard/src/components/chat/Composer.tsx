@@ -7,29 +7,30 @@ export function Composer({
   agentName,
   identity,
   disabled = false,
-  maxLength,
 }: {
-  onSubmit: (text: string) => void;
+  /** A promise that resolves false means the message was not sent: the box
+   * gets its text back, unless something new has been typed since. */
+  onSubmit: (text: string) => void | Promise<boolean>;
   agentName: string | null;
   identity: React.ReactNode;
   /** Keeps the text and refuses to send, e.g. while an answer streams. */
   disabled?: boolean;
-  /** The most characters the box takes. */
-  maxLength?: number;
 }) {
   const [value, setValue] = useState("");
   const text = value.trim();
   const canSend = text !== "" && !disabled;
   const send = () => {
     if (!canSend) return;
-    onSubmit(text);
+    const draft = value;
     setValue("");
+    void Promise.resolve(onSubmit(text)).then((sent) => {
+      if (sent === false) setValue((now) => (now === "" ? draft : now));
+    });
   };
   return (
     <div className="rounded-2xl border border-border bg-card p-3 shadow-sm transition-colors focus-within:border-primary/60">
       <textarea
         value={value}
-        maxLength={maxLength}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
           // Enter confirming an IME candidate isn't a send (Safari reports

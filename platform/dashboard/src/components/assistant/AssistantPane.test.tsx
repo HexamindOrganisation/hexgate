@@ -161,9 +161,28 @@ describe("AssistantPane", () => {
     expect(transcript.scrollTop).toBe(1000);
   });
 
-  it("takes at most the route's 8000 characters", () => {
+  it("gives a refused message back to the composer", async () => {
+    stubTurns([new Response(null, { status: 422 })]);
     renderWithProviders(<AssistantPane projectId="p1" editor={EDITOR} />);
-    expect(screen.getByRole("textbox")).toHaveAttribute("maxLength", "8000");
+    const long = "x".repeat(8001);
+    const box = screen.getByRole("textbox");
+    fireEvent.change(box, { target: { value: long } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(
+      await screen.findByText(/over 8 000 characters/),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(box).toHaveValue(long));
+  });
+
+  it("keeps the composer empty once the answer streams", async () => {
+    stubTurns([sseResponse({ type: "RUN_FINISHED" })]);
+    renderWithProviders(<AssistantPane projectId="p1" editor={EDITOR} />);
+    await ask("hello");
+    expect(await screen.findByText("hello")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /New chat/ })).toBeEnabled(),
+    );
+    expect(screen.getByRole("textbox")).toHaveValue("");
   });
 
   it("starts a new chat", async () => {

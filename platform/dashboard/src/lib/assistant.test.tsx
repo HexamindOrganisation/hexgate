@@ -275,14 +275,49 @@ describe("useAssistant", () => {
     [403, /cannot work on this project/],
     [404, /no longer available/],
     [409, /still being answered/],
-    [422, /too long or malformed/],
+    [422, /over 8 000 characters or malformed/],
     [502, /could not reach the platform/],
     [503, /no model/],
   ])("shows the assistant's %i refusal", async (status, message) => {
     stubFetch({ turn: () => new Response(null, { status }) });
     const { result } = renderAssistant();
-    await act(() => result.current.send("hi", EDITOR));
+    let sent: boolean | undefined;
+    await act(async () => {
+      sent = await result.current.send("hi", EDITOR);
+    });
     expect(result.current.state.messages[1].turn?.error).toMatch(message);
+    // Refused before any stream: the caller gives the text back.
+    expect(sent).toBe(false);
+  });
+
+  it("reports a refusal before the stream, and only that, as unsent", async () => {
+    let turns = 0;
+    stubFetch({
+      token: (n) =>
+        n === 1
+          ? Response.json(
+              { detail: { code: "assistant_off" } },
+              { status: 403 },
+            )
+          : undefined,
+      turn: () => {
+        turns += 1;
+        return turns <= 2
+          ? new Response(null, { status: 401 })
+          : streamResponse(
+              sse({ type: "RUN_ERROR", message: "failed", code: "provider" }),
+            );
+      },
+    });
+    const { result } = renderAssistant();
+    const sent: boolean[] = [];
+    for (const text of ["token refused", "401 twice", "stream opened"]) {
+      await act(async () => {
+        sent.push(await result.current.send(text, EDITOR));
+      });
+    }
+    // A run error ends a turn whose stream opened: that message was sent.
+    expect(sent).toEqual([false, false, true]);
   });
 
   it("shows a token refusal on the turn", async () => {
@@ -358,7 +393,7 @@ describe("useAssistant", () => {
     const stream = deferredStream();
     const fetch = stubFetch({ turn: () => stream.response });
     const { result } = renderAssistant();
-    let sent: Promise<void> = Promise.resolve();
+    let sent: Promise<boolean> = Promise.resolve(false);
     act(() => {
       sent = result.current.send("hi", EDITOR);
     });
@@ -407,7 +442,7 @@ describe("useAssistant", () => {
     const stream = deferredStream();
     const fetch = stubFetch({ turn: () => stream.response });
     const { result, rerender } = renderAssistant();
-    let sent: Promise<void> = Promise.resolve();
+    let sent: Promise<boolean> = Promise.resolve(false);
     act(() => {
       sent = result.current.send("hi", EDITOR);
     });
@@ -443,7 +478,7 @@ describe("useAssistant", () => {
       turn: () => deferredStream().response,
     });
     const { result, rerender } = renderAssistant();
-    let first: Promise<void> = Promise.resolve();
+    let first: Promise<boolean> = Promise.resolve(false);
     act(() => {
       first = result.current.send("on p1", EDITOR);
     });

@@ -5,7 +5,6 @@ import { Hexagon, RotateCcw } from "lucide-react";
 import { Composer } from "@/components/chat/Composer";
 import { ThinkingGoo } from "@/components/chat/ThinkingGoo";
 import {
-  MAX_MESSAGE,
   useAssistant,
   type AssistantEditor,
   type AssistantMessage,
@@ -79,11 +78,10 @@ export function AssistantPane({
           onSubmit={(text) => {
             // Show the sent message and its answer, even after scrolling up.
             atBottomRef.current = true;
-            void send(text, editor);
+            return send(text, editor);
           }}
           agentName="the assistant"
           disabled={streaming}
-          maxLength={MAX_MESSAGE}
           identity={
             <button
               type="button"
