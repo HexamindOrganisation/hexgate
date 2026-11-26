@@ -1,8 +1,7 @@
 """The assistant's one agent: its instructions, the MCP tools it may call, and
 the limits every turn runs under."""
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +10,17 @@ from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
-from pydantic_ai.toolsets import AbstractToolset, ToolsetTool, WrapperToolset
+from pydantic_ai.toolsets import (
+    AbstractToolset,
+    FunctionToolset,
+    ToolsetTool,
+    WrapperToolset,
+)
 from pydantic_ai.usage import UsageLimits
 
+from hexgate_assistant.changes import build_apply_tool
 from hexgate_assistant.context import as_text, cap_tool_result
+from hexgate_assistant.deps import TurnDeps
 
 # The MCP tools the model is offered, all of them reads. The writes stay out:
 # `policy_save` runs no checks, and `policy_apply` is called by our own code
@@ -58,24 +64,13 @@ MCP_CALL_SECONDS = 30
 INSTRUCTIONS = (Path(__file__).parent / "prompt.md").read_text(encoding="utf-8")
 
 
-@dataclass(frozen=True)
-class TurnDeps:
-    """What one turn's tools act with."""
-
-    # The user's token for this message. Out of repr: a logged or stored
-    # repr of the deps must never carry it.
-    token: str = field(repr=False)
-    # {file name: text_hash} as the turn found the files: the base every
-    # write of this turn is checked against.
-    snapshot: Mapping[str, str] = field(default_factory=dict)
-
-
 def build_agent(model: Model, mcp_url: str) -> Agent[TurnDeps, str]:
     """The agent, built once at start-up and shared by every turn."""
     return Agent(
         model,
         instructions=INSTRUCTIONS,
         deps_type=TurnDeps,
+        tools=[build_apply_tool(mcp_url)],
         toolsets=[build_toolset(mcp_url)],
         model_settings=MODEL_SETTINGS,
         # A refused call (the server's refusal, an unknown tool, bad
@@ -85,6 +80,19 @@ def build_agent(model: Model, mcp_url: str) -> Agent[TurnDeps, str]:
         # budget is spent: 4 attempts, then IncompleteToolCall.
         retries={"tools": TOOL_RETRIES},
     )
+
+
+def function_tools(
+    agent: Agent[TurnDeps, str],
+) -> list[tuple[str, str | None, dict[str, Any]]]:
+    """(name, description, input schema) of each tool registered on the
+    agent itself (`apply_change`), offered beside the MCP server's."""
+    return [
+        (t.tool_def.name, t.tool_def.description, t.tool_def.parameters_json_schema)
+        for toolset in agent.toolsets
+        if isinstance(toolset, FunctionToolset)
+        for t in toolset.tools.values()
+    ]
 
 
 def build_toolset(mcp_url: str) -> AbstractToolset[TurnDeps]:

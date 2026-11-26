@@ -51,6 +51,9 @@ class FakeMCP:
     # it sleeps on top of `delay`.
     results: dict[str, str] = field(default_factory=dict)
     delays: dict[str, float] = field(default_factory=dict)
+    # Per tool: the message it is refused with, after its sleep, as the
+    # platform's server words it (see `_RecordingTool.run`).
+    errors: dict[str, str] = field(default_factory=dict)
 
 
 class _RecordingTool(Tool):
@@ -61,6 +64,12 @@ class _RecordingTool(Tool):
         headers = get_http_headers(include={"authorization"})
         state.calls.append(Call(self.name, arguments, headers.get("authorization")))
         await asyncio.sleep(state.delay + state.delays.get(self.name, 0))
+        if self.name in state.errors:
+            # The platform's server is the official SDK's FastMCP, which
+            # rewraps every error a tool raises with this prefix.
+            raise ToolError(
+                f"Error executing tool {self.name}: {state.errors[self.name]}"
+            )
         if state.refusal is not None:
             raise ToolError(state.refusal)
         text = state.results.get(self.name, f"{self.name} result")

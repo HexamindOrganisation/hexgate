@@ -10,7 +10,6 @@ anyone is still listening.
 
 import asyncio
 import hashlib
-import json
 import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Mapping
@@ -43,9 +42,15 @@ from hexgate_assistant.agent import (
     INSTRUCTIONS,
     MCP_CALL_SECONDS,
     TURN_LIMITS,
-    TurnDeps,
+    function_tools,
 )
 from hexgate_assistant.auth import AssistantToken
+from hexgate_assistant.changes import (
+    APPLY_SCOPE,
+    applied_calls,
+    redact_calls,
+    redact_history,
+)
 from hexgate_assistant.context import (
     CONTEXT_FULL_MESSAGE,
     BudgetGuard,
@@ -53,6 +58,7 @@ from hexgate_assistant.context import (
     Editor,
     ProjectState,
     ProjectUnreadable,
+    definition_tokens,
     editor_text,
     estimate_tokens,
     latest_change_text,
@@ -62,9 +68,10 @@ from hexgate_assistant.context import (
     user_message,
     without_instructions,
 )
+from hexgate_assistant.deps import TurnDeps, TurnWrites
 from hexgate_assistant.lock import TURN_DEADLINE, turn_lock
 from hexgate_assistant.models import AssistantSession, utcnow
-from hexgate_assistant.sessions import SessionStore
+from hexgate_assistant.sessions import CHANGE_EVENT, SessionStore
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +84,6 @@ PING_SECONDS = 15
 STORE_SECONDS = 4
 # A new session's title: the start of its first message.
 TITLE_CHARS = 80
-APPLY_SCOPE = "policy:apply"
 # Which instructions a session started under.
 PROMPT_VERSION = hashlib.sha256(INSTRUCTIONS.encode()).hexdigest()[:12]
 
@@ -238,7 +244,7 @@ async def _read_project(
     try:
         async with mcp:
             if turns.reference is None:
-                tool_tokens = await _tool_tokens(mcp)
+                tool_tokens = await _tool_tokens(mcp, turns.agent)
                 turns.reference = await read_reference(mcp)
                 turns.tool_tokens = tool_tokens
             return await read_project(mcp, project_id)
@@ -256,16 +262,16 @@ async def _read_project(
         raise ProjectUnreadable(type(exc).__name__) from exc
 
 
-async def _tool_tokens(mcp: MCPToolset[None]) -> int:
+async def _tool_tokens(mcp: MCPToolset[None], agent: Agent[TurnDeps, str]) -> int:
     """The estimated size of the tool definitions the model is offered: each
-    allowlisted tool's name, description and input schema, as the server
-    lists them."""
-    offered = [
-        {"name": t.name, "description": t.description, "parameters": t.input_schema}
+    allowlisted MCP tool's name, description and input schema, as the server
+    lists them, and the agent's own tools'."""
+    listed = [
+        (t.name, t.description, t.input_schema)
         for t in await mcp.list_tools()
         if t.name in agent_module.ALLOWLIST
     ]
-    return estimate_tokens(json.dumps(offered))
+    return definition_tokens(listed + function_tools(agent))
 
 
 def _describe(exc: BaseException) -> str:
@@ -300,6 +306,17 @@ class _Run:
         self._translator = events.EventTranslator()
         # The run's own count, live; kept even when the run raises.
         self._usage = RunUsage()
+        self._writes = (
+            TurnWrites(
+                project_id=project_id,
+                session_id=str(session.id),
+                on_change=self._changed,
+            )
+            if APPLY_SCOPE in token.scopes
+            else None
+        )
+        # The turn's `change` event once sent, stored with its messages.
+        self._change: events.Event | None = None
 
     async def execute(
         self,
@@ -317,14 +334,19 @@ class _Run:
                     prompt,
                     message_history=history,
                     instructions=self._turns.reference,
-                    deps=TurnDeps(self._token.token, snapshot=snapshot),
+                    deps=TurnDeps(
+                        self._token.token, snapshot=snapshot, writes=self._writes
+                    ),
                     usage_limits=TURN_LIMITS,
                     timeout=max(deadline, 0),
                     event_stream_handler=self._forward,
                     capabilities=[
+                        # First: the budget is measured without the contents
+                        # an applied call no longer carries.
+                        ProcessHistory(redact_history),
                         ProcessHistory(
                             BudgetGuard(self._turns.budget, self._turns.prefix_tokens)
-                        )
+                        ),
                     ],
                 )
                 final = events.run_finished(thread_id, self._turn_id)
@@ -364,11 +386,17 @@ class _Run:
             for out in self._translator.translate(event):
                 self._send(out)
 
+    def _changed(self, value: dict[str, Any]) -> None:
+        self._change = events.custom(CHANGE_EVENT, value)
+        self._send(self._change)
+
     async def _store(self, new: list[ModelMessage]) -> None:
         if not new:
             return
         model = self._turns.agent.model
         assert isinstance(model, Model)
+        # The last call's contents too, when no request followed its result.
+        new = redact_calls(new, applied_calls(self._writes))
         try:
             await self._turns.store.append_messages(
                 self._session, without_instructions(new)
@@ -382,6 +410,9 @@ class _Run:
                 cost_micros=0,
                 cost_source="none",
             )
+            # After the usage: the spend is recorded whatever this costs.
+            if self._change is not None:
+                await self._turns.store.append_event(self._session, self._change)
         except Exception:
             logger.exception("turn %s: storing its messages failed", self._turn_id)
 

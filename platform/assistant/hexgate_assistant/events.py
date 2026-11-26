@@ -18,6 +18,8 @@ from pydantic_ai.messages import (
     ToolCallPartDelta,
 )
 
+from hexgate_assistant.changes import TOOL_NAME as APPLY_TOOL
+from hexgate_assistant.changes import call_summary, redact_retry
 from hexgate_assistant.context import keep_ends
 
 Event = dict[str, Any]
@@ -43,6 +45,10 @@ def run_finished(thread_id: str, run_id: str) -> Event:
     return {"type": "RUN_FINISHED", "threadId": thread_id, "runId": run_id}
 
 
+def custom(name: str, value: Any) -> Event:
+    return {"type": "CUSTOM", "name": name, "value": value}
+
+
 def run_error(code: str | None, message: str) -> Event:
     return {"type": "RUN_ERROR", "message": message, "code": code}
 
@@ -57,6 +63,10 @@ class EventTranslator:
         self._texts: dict[int, str] = {}
         # The tool call id of each call being streamed, by the same index.
         self._calls: dict[int, str] = {}
+        # The indexes of `apply_change` calls: their arguments carry whole
+        # files, so the browser is sent only their names and summary, once
+        # the call is complete.
+        self._names_only: set[int] = set()
 
     def translate(self, event: AgentStreamEvent) -> Iterator[Event]:
         if isinstance(event, PartStartEvent):
@@ -87,7 +97,9 @@ class EventTranslator:
                 "toolCallId": part.tool_call_id,
                 "toolCallName": part.tool_name,
             }
-            if part.args:
+            if part.tool_name == APPLY_TOOL:
+                self._names_only.add(event.index)
+            elif part.args:
                 # Streamed arguments arrive as raw text, possibly cut short.
                 args = (
                     part.args if isinstance(part.args, str) else part.args_as_json_str()
@@ -100,7 +112,7 @@ class EventTranslator:
             if delta.content_delta:
                 yield _text(self._texts[event.index], delta.content_delta)
         elif isinstance(delta, ToolCallPartDelta) and event.index in self._calls:
-            if delta.args_delta:
+            if delta.args_delta and event.index not in self._names_only:
                 args = delta.args_delta
                 text = args if isinstance(args, str) else json.dumps(args)
                 yield _args(self._calls[event.index], text)
@@ -109,10 +121,14 @@ class EventTranslator:
         if (message_id := self._texts.pop(event.index, None)) is not None:
             yield {"type": "TEXT_MESSAGE_END", "messageId": message_id}
         elif (call_id := self._calls.pop(event.index, None)) is not None:
+            if event.index in self._names_only and isinstance(event.part, ToolCallPart):
+                self._names_only.discard(event.index)
+                summary = call_summary(event.part.args_as_dict())
+                yield _args(call_id, json.dumps(summary))
             yield {"type": "TOOL_CALL_END", "toolCallId": call_id}
 
     def _result(self, event: FunctionToolResultEvent) -> Event:
-        part = event.part
+        part = redact_retry(event.part)
         return {
             "type": "TOOL_CALL_RESULT",
             "messageId": str(uuid.uuid4()),

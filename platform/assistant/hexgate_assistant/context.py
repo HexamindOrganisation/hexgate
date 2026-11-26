@@ -6,7 +6,7 @@ and the conversation's.
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any
@@ -48,6 +48,16 @@ class ProjectUnreadable(Exception):
 
 def estimate_tokens(text: str) -> int:
     return -(-len(text.encode()) // BYTES_PER_TOKEN)
+
+
+def definition_tokens(tools: Iterable[tuple[str, str | None, dict[str, Any]]]) -> int:
+    """The estimated size of tool definitions, each (name, description,
+    input schema), as a model is offered them."""
+    offered = [
+        {"name": name, "description": description, "parameters": schema}
+        for name, description, schema in tools
+    ]
+    return estimate_tokens(json.dumps(offered))
 
 
 def keep_ends(text: str, max_bytes: int, marker: str) -> str:
@@ -186,7 +196,7 @@ async def read_project(mcp: MCPToolset[Any], project_id: str) -> ProjectState:
     effort: a project with no policy store has none."""
     args = {"project_id": project_id}
     listed, (roles, agents) = await asyncio.gather(
-        _call(mcp, "policy_list_files", args), _read_graph(mcp, args)
+        call_text(mcp, "policy_list_files", args), _read_graph(mcp, args)
     )
     listed = _file_list(listed)
     snapshot = {f["name"]: f["text_hash"] for f in listed["files"]}
@@ -224,7 +234,7 @@ async def _read_graph(
     mcp: MCPToolset[Any], args: dict[str, Any]
 ) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
     try:
-        graph = json.loads(await _call(mcp, "policy_graph", args))
+        graph = json.loads(await call_text(mcp, "policy_graph", args))
     except (ModelRetry, ValueError):
         # No policy store, a policy that does not compose, or a graph cut
         # short (no longer JSON): the card says they are unknown, and the
@@ -233,7 +243,8 @@ async def _read_graph(
     return tuple(graph["roles"]), tuple(graph["declared_agents"])
 
 
-async def _call(mcp: MCPToolset[Any], tool: str, args: dict[str, Any]) -> str:
+async def call_text(mcp: MCPToolset[Any], tool: str, args: dict[str, Any]) -> str:
+    """A direct MCP tool call's result, as text."""
     return as_text(await mcp.direct_call_tool(tool, args))
 
 
@@ -251,7 +262,9 @@ async def read_reference(mcp: MCPToolset[Any]) -> str:
     """The policy reference the model is given beside its instructions: the
     section index, then each of :data:`REFERENCE_SECTIONS`."""
     calls = [{}, *({"section": s} for s in REFERENCE_SECTIONS)]
-    texts = await asyncio.gather(*(_call(mcp, "policy_reference", a) for a in calls))
+    texts = await asyncio.gather(
+        *(call_text(mcp, "policy_reference", a) for a in calls)
+    )
     return "\n\n".join(["# Policy reference", *texts])
 
 
