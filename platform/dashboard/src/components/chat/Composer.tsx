@@ -6,15 +6,19 @@ export function Composer({
   onSubmit,
   agentName,
   identity,
+  disabled = false,
 }: {
   onSubmit: (text: string) => void;
   agentName: string | null;
   identity: React.ReactNode;
+  /** Keeps the text and refuses to send, e.g. while an answer streams. */
+  disabled?: boolean;
 }) {
   const [value, setValue] = useState("");
+  const text = value.trim();
+  const canSend = text !== "" && !disabled;
   const send = () => {
-    const text = value.trim();
-    if (!text) return;
+    if (!canSend) return;
     onSubmit(text);
     setValue("");
   };
@@ -43,7 +47,7 @@ export function Composer({
         <button
           type="button"
           onClick={send}
-          disabled={!value.trim()}
+          disabled={!canSend}
           aria-label="Send"
           className="grid size-9 place-items-center rounded-full bg-action text-action-foreground transition-all hover:bg-action/85 disabled:scale-90 disabled:bg-muted disabled:text-muted-foreground"
         >

@@ -13,12 +13,9 @@ import {
   useAssistant,
 } from "./assistant";
 import { useLogout } from "./auth";
+import { sse } from "@/test/sse";
 
 const EDITOR = { open_file: "policy.yaml", unsaved: [] };
-
-function sse(...events: object[]): string {
-  return events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
-}
 
 const TURN = sse(
   { type: "RUN_STARTED", threadId: "s1", runId: "t1" },
@@ -278,6 +275,7 @@ describe("useAssistant", () => {
     [403, /cannot work on this project/],
     [404, /no longer available/],
     [409, /still being answered/],
+    [502, /could not reach the platform/],
     [503, /no model/],
   ])("shows the assistant's %i refusal", async (status, message) => {
     stubFetch({ turn: () => new Response(null, { status }) });
@@ -302,7 +300,11 @@ describe("useAssistant", () => {
         streamResponse(
           sse(
             { type: "TOOL_CALL_START", toolCallId: "c1", toolCallName: "x" },
-            { type: "RUN_ERROR", message: "full", code: "context_full" },
+            {
+              type: "RUN_ERROR",
+              message: "This conversation is full; start a new chat.",
+              code: "context_full",
+            },
           ),
         ),
     });
@@ -311,6 +313,20 @@ describe("useAssistant", () => {
     const turn = result.current.state.messages[1].turn;
     expect(turn?.error).toBe("This conversation is full; start a new chat.");
     expect(turn?.tools[0].state).toBe("failed");
+  });
+
+  it.each([
+    ["limit_reached", "This answer reached its length limit."],
+    ["limit_reached", "This answer reached its step limit."],
+    ["provider", "The model answered in a way it cannot use."],
+  ])("keeps the server's message for the run error %s", async (code, msg) => {
+    stubFetch({
+      turn: () =>
+        streamResponse(sse({ type: "RUN_ERROR", message: msg, code })),
+    });
+    const { result } = renderAssistant();
+    await act(() => result.current.send("hi", EDITOR));
+    expect(result.current.state.messages[1].turn?.error).toBe(msg);
   });
 
   it("ends a turn whose stream closes without finishing", async () => {

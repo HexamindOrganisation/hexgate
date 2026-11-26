@@ -411,7 +411,7 @@ export function PoliciesPage() {
                   agentNames={agentNames}
                   inspectAgent={inspectAgent}
                   onInspectAgentChange={setInspectAgent}
-                  unsaved={dirtyKeys.size > 0}
+                  editor={{ open_file: active, unsaved: [...dirtyKeys] }}
                 />
               </div>
             </div>

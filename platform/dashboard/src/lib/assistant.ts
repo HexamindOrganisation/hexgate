@@ -252,7 +252,9 @@ export function applyEvent(
     case "RUN_FINISHED":
       return endTurn(state);
     case "RUN_ERROR":
-      return endTurn(state, messageFor(event.code, event.message));
+      // The server words every run error for the user, and its code alone
+      // does not say which (a step or a length limit, for one).
+      return endTurn(state, event.message);
     default:
       return state;
   }
@@ -260,9 +262,8 @@ export function applyEvent(
 
 // ——— Refusals and errors, in the user's words ———
 
-/** One table for every way a message can fail: the token route's codes, the
- * assistant's refusals (plain HTTP, keyed by status) and the run's error
- * codes. */
+/** The ways a message can be refused before its turn runs: the token route's
+ * codes and the assistant's refusals (plain HTTP, keyed by status). */
 const MESSAGES: Record<string, string> = {
   assistant_disabled: "The assistant is not enabled on this platform.",
   user_not_verified: "Verify your email address to use the assistant.",
@@ -274,13 +275,12 @@ const MESSAGES: Record<string, string> = {
   "404": "This conversation is no longer available; start a new chat.",
   "409":
     "Another of your messages is still being answered; wait for it to finish.",
+  "502": "The assistant could not reach the platform; try again.",
   "503": "The assistant has no model configured.",
-  timeout: "The answer took too long and was stopped.",
-  limit_reached: "This answer reached its step limit and was stopped.",
-  budget: "Your daily assistant budget is used up.",
-  context_full: "This conversation is full; start a new chat.",
-  provider: "The model provider failed; try again.",
 };
+
+/** The most unsaved file names a turn may carry. */
+const MAX_UNSAVED = 50;
 
 function messageFor(code: unknown, fallback: string): string {
   return (typeof code === "string" && MESSAGES[code]) || fallback;
@@ -431,7 +431,7 @@ async function sendMessage(
   const body = JSON.stringify({
     session_id: state.sessionId,
     message,
-    editor,
+    editor: { ...editor, unsaved: editor.unsaved.slice(0, MAX_UNSAVED) },
   });
   useStore.setState({
     messages: [

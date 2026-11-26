@@ -4,13 +4,16 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { QueryClient } from "@tanstack/react-query";
 
 import type { PolicyLint, PolicyMatrix, ResolvedPolicy } from "@/lib/api";
 import { InspectorTabs } from "./InspectorTabs";
+import { resetAssistant } from "@/lib/assistant";
 import { Route, Routes } from "react-router-dom";
-import { renderWithProviders } from "@/test/render";
+import { makeQueryClient, renderWithProviders } from "@/test/render";
+import { sseResponse } from "@/test/sse";
 
 const RESOLVED: ResolvedPolicy = {
   support: {
@@ -39,6 +42,7 @@ const MATRIX: PolicyMatrix = {
 };
 
 const noop = () => undefined;
+const EDITOR = { open_file: "policy.yaml", unsaved: [] };
 
 /** The picker lists the project's agents from the manifest endpoint. */
 function stubAgents(names: string[]) {
@@ -53,6 +57,7 @@ function stubAgents(names: string[]) {
 
 function renderInspector(
   props: Partial<Parameters<typeof InspectorTabs>[0]> = {},
+  client?: QueryClient,
 ) {
   return renderWithProviders(
     <InspectorTabs
@@ -67,8 +72,10 @@ function renderInspector(
       agentNames={[]}
       inspectAgent="*"
       onInspectAgentChange={noop}
+      editor={EDITOR}
       {...props}
     />,
+    { client },
   );
 }
 
@@ -78,7 +85,7 @@ describe("InspectorTabs", () => {
   it("opens the hub in a new tab while edits are unsaved", async () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     stubAgents(["support_bot"]);
-    renderInspector({ unsaved: true });
+    renderInspector({ editor: { open_file: null, unsaved: ["a.yaml"] } });
     await userEvent.click(screen.getByRole("button", { name: /Graph/ }));
     expect(screen.getByText(/unsaved edits/)).toBeInTheDocument();
     await userEvent.click(
@@ -110,6 +117,7 @@ describe("InspectorTabs", () => {
               agentNames={["billing_bot", "support_bot"]}
               inspectAgent="*"
               onInspectAgentChange={noop}
+              editor={EDITOR}
             />
           }
         />
@@ -265,5 +273,74 @@ describe("InspectorTabs", () => {
     expect(
       screen.queryByText("agent.handoff:billing_bot"),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("InspectorTabs Assistant tab", () => {
+  /** The config answers `enabled`; a turn streams one answer. */
+  function stubAssistant(enabled: boolean) {
+    return vi.spyOn(window, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/assistant/config")) {
+        return Response.json({
+          enabled,
+          mode: "read_write",
+          can_write: true,
+          verified: true,
+        });
+      }
+      if (url.endsWith("/assistant/token")) {
+        return Response.json({ token: "t", expires_at: "x", can_write: true });
+      }
+      if (url.endsWith("/turns")) {
+        return sseResponse(
+          { type: "RUN_STARTED", threadId: "s1" },
+          { type: "TEXT_MESSAGE_START" },
+          { type: "TEXT_MESSAGE_CONTENT", delta: "The cap is 1000." },
+          { type: "RUN_FINISHED" },
+        );
+      }
+      return Response.json([]);
+    });
+  }
+
+  afterEach(() => resetAssistant());
+
+  it("is hidden when the platform disables the assistant", async () => {
+    stubAssistant(false);
+    const client = makeQueryClient();
+    renderInspector({}, client);
+    // The config has arrived, so the tab's absence is its answer.
+    await waitFor(() =>
+      expect(client.getQueryState(["assistant-config", "p1"])?.status).toBe(
+        "success",
+      ),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Assistant" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("comes first, and its chat survives a switch to Lints", async () => {
+    stubAssistant(true);
+    renderInspector();
+    const tab = await screen.findByRole("button", { name: "Assistant" });
+    const tabs = screen.getAllByRole("button");
+    expect(tabs.indexOf(tab)).toBeLessThan(
+      tabs.indexOf(screen.getByRole("button", { name: "Resolved" })),
+    );
+
+    await userEvent.click(tab);
+    await userEvent.type(
+      screen.getByRole("textbox"),
+      "what is the cap?{Enter}",
+    );
+    expect(await screen.findByText("The cap is 1000.")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /Lints/ }));
+    expect(screen.queryByText("The cap is 1000.")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Assistant" }));
+    expect(screen.getByText("what is the cap?")).toBeInTheDocument();
+    expect(screen.getByText("The cap is 1000.")).toBeInTheDocument();
   });
 });
