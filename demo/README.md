@@ -7,8 +7,9 @@ demo app built on an agent, and gets everything ready to film.
 ./demo/run                 # menu
 ./demo/run devops          # start the DevOps demo (Shipyard)
 ./demo/run claims          # start the claims demo (Claimdesk)
-./demo/run reset devops    # back to the start of scene 1, between takes (or: reset claims)
-./demo/run secure devops   # do scene 2 (wrap + register + policy) without Claude (or: secure claims)
+./demo/run bank            # start the bank demo (Tellerdesk)
+./demo/run reset devops    # back to the start of scene 1, between takes (or: reset claims, reset bank)
+./demo/run secure devops   # do scene 2 (wrap + register + policy) without Claude (or: secure claims, secure bank)
 ./demo/run film devops     # film the demo video: see FILMING.md (devops only)
 ./demo/run status          # what is running
 ./demo/run down            # stop everything, Docker containers included
@@ -21,7 +22,7 @@ Without it, the kit offers a scripted model for rehearsals.
 |---|---|---|
 | devops | Shipyard, an internal developer platform whose ops copilot ships to prod | [SCENARIO_DEVOPS.md](SCENARIO_DEVOPS.md) |
 | claims | Claimdesk, an insurer's claims back office whose copilot pays, and follows a forged invoice; for business audiences | [SCENARIO_CLAIMS.md](SCENARIO_CLAIMS.md) |
-| bank (older) | a bank teller assistant that moves money, terminal only | [SCENARIO.md](SCENARIO.md), scripts in `scripts/` |
+| bank | Tellerdesk, a bank branch back office whose assistant moves money and answers a forged customer email; for business audiences | [SCENARIO_BANK.md](SCENARIO_BANK.md) |
 
 ## What `./demo/run` does
 
@@ -46,7 +47,7 @@ Without it, the kit offers a scripted model for rehearsals.
 
    The dashboard and collector are rebuilt only when their sources change.
 3. **Prepares the demo** (`kit/demos.py`, driven by `apps/<demo>/demo.toml`):
-   - its own hexgate project ("shipyard", "claimdesk");
+   - its own hexgate project ("shipyard", "claimdesk", "hexabank");
    - an API key, written to `apps/<demo>/.env`;
    - the app, then two browser tabs, then the prompts for each scene.
 
@@ -64,6 +65,8 @@ Without it, the kit offers a scripted model for rehearsals.
 | `apps/devops/ui/` | Shipyard's web UI (Vite + React + Tailwind); the kit builds it |
 | `apps/claims/` | the Claimdesk app, laid out like `apps/devops/`: `agent.py`, `users.yaml` (roles and attributes), `claimdesk/`, `ui/`. Runs on port 3001, so both demos can run at once |
 | `reference/claims/` | the answers for Claimdesk: original and secured `agent.py`, the policy |
+| `apps/bank/` | the Tellerdesk app, laid out like `apps/claims/`: `agent.py`, `users.yaml` (roles; the attributes come from the customer file open in the page), `tellerdesk/`, `ui/`. Runs on port 3002 |
+| `reference/bank/` | the answers for Tellerdesk: original and secured `agent.py`, the policy |
 | `film/` | the film: scene scripts, `cut.json` (title cards, subtitles, voice, pace), render tools. See [FILMING.md](FILMING.md) |
 | `film/STYLE.md` | the Hexgate video style: title cards, palette, subtitles, voice |
 | `DESIGN.md` | why it's built this way |
@@ -75,5 +78,5 @@ Without it, the kit offers a scripted model for rehearsals.
   on every interface, as in a deploy, but answers only with a token from the
   API. Keep the demo to your own machine.
 - The dashboard remembers the active project per browser. Pick "shipyard"
-  (or "claimdesk") once in the top-left switcher.
+  (or "claimdesk", "hexabank") once in the top-left switcher.
 - `./demo/run down` stops Docker's containers too (they use a lot of RAM). Their data is kept.

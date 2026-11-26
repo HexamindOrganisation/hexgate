@@ -1,0 +1,3 @@
+# Branch managers can send any transfer the bank allows, but each one needs a human's approval.
+tools:
+  transfer_funds: { mode: approval_required }

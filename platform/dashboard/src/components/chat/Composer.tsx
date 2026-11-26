@@ -6,17 +6,26 @@ export function Composer({
   onSubmit,
   agentName,
   identity,
+  disabled = false,
 }: {
-  onSubmit: (text: string) => void;
+  /** A promise that resolves false means the message was not sent: the box
+   * gets its text back, unless something new has been typed since. */
+  onSubmit: (text: string) => void | Promise<boolean>;
   agentName: string | null;
   identity: React.ReactNode;
+  /** Keeps the text and refuses to send, e.g. while an answer streams. */
+  disabled?: boolean;
 }) {
   const [value, setValue] = useState("");
+  const text = value.trim();
+  const canSend = text !== "" && !disabled;
   const send = () => {
-    const text = value.trim();
-    if (!text) return;
-    onSubmit(text);
+    if (!canSend) return;
+    const draft = value;
     setValue("");
+    void Promise.resolve(onSubmit(text)).then((sent) => {
+      if (sent === false) setValue((now) => (now === "" ? draft : now));
+    });
   };
   return (
     <div className="rounded-2xl border border-border bg-card p-3 shadow-sm transition-colors focus-within:border-primary/60">
@@ -43,7 +52,7 @@ export function Composer({
         <button
           type="button"
           onClick={send}
-          disabled={!value.trim()}
+          disabled={!canSend}
           aria-label="Send"
           className="grid size-9 place-items-center rounded-full bg-action text-action-foreground transition-all hover:bg-action/85 disabled:scale-90 disabled:bg-muted disabled:text-muted-foreground"
         >
