@@ -7,6 +7,7 @@ import time
 from collections.abc import Iterator
 from datetime import datetime
 
+import jwt
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
@@ -135,6 +136,11 @@ def _claims(token: str, audience: str = ASSISTANT_URL) -> AccessTokenClaims:
     return verify_access_token(token, issuer=PUBLIC_URL, audience=audience)
 
 
+def _payload(token: str) -> dict:
+    """The raw claims, for the one AccessTokenClaims does not model."""
+    return jwt.decode(token, options={"verify_signature": False})
+
+
 def test_token_happy_path(client: TestClient) -> None:
     before = int(time.time())
     resp = _token(client)
@@ -151,6 +157,18 @@ def test_token_happy_path(client: TestClient) -> None:
     assert claims.exp - claims.iat == ACCESS_TOKEN_TTL_SECONDS
     assert before <= claims.iat <= int(time.time())
     assert datetime.fromisoformat(body["expires_at"]).timestamp() == claims.exp
+    assert _payload(body["token"])["org"] == DEFAULT_ORG_ID
+
+
+def test_when_project_is_in_another_org_then_the_token_names_that_org(
+    client: TestClient,
+) -> None:
+    """The user is in both orgs: the claim follows the project, not the user."""
+    resp = client.post(
+        f"/v1/projects/{SECOND_PROJECT_ID}/assistant/token", headers=_headers()
+    )
+    assert resp.status_code == 200, resp.text
+    assert _payload(resp.json()["token"])["org"] == SECOND_ORG_ID
 
 
 @pytest.mark.parametrize("audience", [MCP_URL, PUBLIC_URL])

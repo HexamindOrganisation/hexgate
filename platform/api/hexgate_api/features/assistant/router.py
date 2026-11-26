@@ -52,7 +52,10 @@ async def api_assistant_token(
     if access.mode not in ("read_only", "read_write"):
         raise HTTPException(status_code=403, detail={"code": "assistant_mode_unknown"})
     token, expires_at = mint_assistant_token(
-        user_id=user.id, project_id=project_id, can_write=access.can_write
+        user_id=user.id,
+        project_id=project_id,
+        org_id=access.org_id,
+        can_write=access.can_write,
     )
     # Who and where only: the token itself is a bearer credential.
     _log.info(

@@ -4,7 +4,7 @@ import logging
 
 import uvicorn
 
-from hexgate_assistant.server import create_app
+from hexgate_assistant.server import GRACEFUL_SECONDS, create_app
 from hexgate_assistant.settings import Settings
 
 if __name__ == "__main__":
@@ -21,4 +21,7 @@ if __name__ == "__main__":
         host=settings.bind_host,
         port=settings.port,
         proxy_headers=True,
+        # Without it uvicorn waits for every open turn stream before it runs
+        # the shutdown that stores and unlocks the turns.
+        timeout_graceful_shutdown=GRACEFUL_SECONDS,
     )

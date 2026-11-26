@@ -18,6 +18,7 @@ ENV = [
     "HEXGATE_ASSISTANT_POSTGRES_HOST",
     "HEXGATE_ASSISTANT_POSTGRES_PORT",
     "HEXGATE_ASSISTANT_POSTGRES_DB",
+    "HEXGATE_ASSISTANT_CONTEXT_TOKENS",
 ]
 
 
@@ -36,6 +37,7 @@ def test_from_env_happy_path():
     assert settings.model is None
     assert settings.openrouter_key is None
     assert settings.mcp_url == "http://localhost:8080/mcp"
+    assert settings.context_tokens == 64_000
     assert settings.issuer == "http://localhost:8000"
     assert settings.resource_url == "http://localhost:8090/v1/assistant"
     assert settings.jwks_url == "http://localhost:8000/.well-known/jwks.json"
@@ -59,6 +61,7 @@ def test_when_variables_are_set_then_from_env_uses_them(monkeypatch):
     monkeypatch.setenv("HEXGATE_ASSISTANT_MODEL", "openrouter:anthropic/claude-x")
     monkeypatch.setenv("HEXGATE_ASSISTANT_OPENROUTER_KEY", "sk-or-secret")
     monkeypatch.setenv("HEXGATE_ASSISTANT_MCP_URL", "http://mcp:8080/mcp")
+    monkeypatch.setenv("HEXGATE_ASSISTANT_CONTEXT_TOKENS", "32000")
 
     settings = Settings.from_env()
 
@@ -66,6 +69,7 @@ def test_when_variables_are_set_then_from_env_uses_them(monkeypatch):
     assert settings.model == "openrouter:anthropic/claude-x"
     assert settings.openrouter_key == "sk-or-secret"
     assert settings.mcp_url == "http://mcp:8080/mcp"
+    assert settings.context_tokens == 32_000
     assert settings.issuer == "https://app.hexgate.ai"
     assert settings.resource_url == "https://app.hexgate.ai/v1/assistant"
     assert settings.jwks_url == "http://api:8000/.well-known/jwks.json"
@@ -127,3 +131,13 @@ def test_when_settings_are_printed_then_the_openrouter_key_is_not(monkeypatch):
     monkeypatch.setenv("HEXGATE_ASSISTANT_OPENROUTER_KEY", "sk-or-secret")
 
     assert "sk-or-secret" not in repr(Settings.from_env())
+
+
+@pytest.mark.parametrize("raw", ["0", "-5", "lots"])
+def test_when_context_tokens_is_not_a_positive_number_then_from_env_refuses(
+    monkeypatch, raw
+):
+    monkeypatch.setenv("HEXGATE_ASSISTANT_CONTEXT_TOKENS", raw)
+
+    with pytest.raises(ValueError, match="HEXGATE_ASSISTANT_CONTEXT_TOKENS"):
+        Settings.from_env()

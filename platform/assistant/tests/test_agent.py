@@ -21,6 +21,7 @@ from hexgate_assistant.agent import (
     TurnDeps,
     build_agent,
 )
+from hexgate_assistant.context import estimate_tokens
 from hexgate_assistant.model import build_model
 from tests.fake_mcp import FakeMCP, serve, snapshot_tools
 
@@ -238,3 +239,22 @@ async def test_when_a_model_request_runs_past_its_deadline_then_it_ends(
 
 def test_when_turn_deps_are_printed_then_the_token_is_not():
     assert "tok-secret" not in repr(TurnDeps("tok-secret"))
+
+
+async def test_when_a_tool_result_is_200_kib_then_the_model_gets_8000_tokens_with_both_ends(
+    mcp: FakeMCP,
+):
+    mcp.results["policy_list_files"] = "HEAD" + "x" * 200 * 1024 + "TAIL"
+
+    output = await run(call_once(LIST_FILES), mcp)
+
+    assert estimate_tokens(output) <= 8000
+    assert output.startswith("HEAD") and output.endswith("TAIL")
+
+
+async def test_when_a_policy_file_is_read_then_the_model_gets_it_whole(mcp: FakeMCP):
+    content = "f" * 40_000
+    mcp.results["policy_read_file"] = content
+    read = ToolCallPart("policy_read_file", {"project_id": "p1", "name": "a.yaml"})
+
+    assert await run(call_once(read), mcp) == content

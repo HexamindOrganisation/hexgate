@@ -28,6 +28,8 @@ class AssistantAccess:
     mode: AssistantMode
     # Admin or owner, in an org whose mode is read_write.
     can_write: bool
+    # The project's org, which the assistant's token names.
+    org_id: str
 
 
 async def assistant_access(
@@ -35,20 +37,24 @@ async def assistant_access(
 ) -> AssistantAccess:
     """The org's assistant mode and whether this user may write, read now:
     a role or mode change applies to the next token."""
-    mode, role = (
+    mode, role, org_id = (
         await session.exec(
-            select(Organization.assistant_mode, OrganizationMember.role)
+            select(
+                Organization.assistant_mode,
+                OrganizationMember.role,
+                Project.org_id,
+            )
             .join(Project, Project.org_id == Organization.id)
             .join(OrganizationMember, OrganizationMember.org_id == Organization.id)
             .where(Project.id == project_id, OrganizationMember.user_id == user_id)
         )
     ).one()  # require_org_member has found this membership
     can_write = role in {ROLE_OWNER, ROLE_ADMIN} and mode == "read_write"
-    return AssistantAccess(mode=mode, can_write=can_write)
+    return AssistantAccess(mode=mode, can_write=can_write, org_id=org_id)
 
 
 def mint_assistant_token(
-    *, user_id: str, project_id: str, can_write: bool
+    *, user_id: str, project_id: str, org_id: str, can_write: bool
 ) -> tuple[str, datetime]:
     """A ten-minute token for one user and one project, and when it expires:
     for the assistant, then the MCP server, then the API, each pinned to its
@@ -68,5 +74,6 @@ def mint_assistant_token(
             settings.public_url,
         ],
         now=now,
+        org=org_id,
     )
     return token, datetime.fromtimestamp(now + ACCESS_TOKEN_TTL_SECONDS, UTC)
