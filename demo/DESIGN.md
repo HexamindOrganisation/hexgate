@@ -142,7 +142,7 @@ demo/apps/devops/
   ui/               the web UI: Vite + React + TypeScript + Tailwind v4, like
                     platform/dashboard; the kit builds it into shipyard/web
   pyproject.toml    depends on hexgate (path = ../../.., editable) and fastapi
-  CLAUDE.md         how to run and smoke-test, like demo/bank/CLAUDE.md today
+  CLAUDE.md         how to run and smoke-test
   demo.toml
 demo/reference/devops/
   agent_original.py, agent_secured.py, policy/   the answers, outside the app folder
@@ -304,12 +304,11 @@ capability files).
 
 ## What happens to what exists now
 
-- `demo/bank/`, `demo/reference/`, `SCENARIO.md` and `README.md` stay as they
-  are until the bank demo moves into the kit. The bank demo then becomes
-  `demo/apps/bank/` with its own UI. That is a second piece of work, after
-  DevOps is filmed.
-- `demo/scripts/*.sh` are replaced by the launcher once DevOps runs through
-  it.
+- The bank demo has moved into the kit: it is `demo/apps/bank/` (Tellerdesk),
+  with its own UI, its answers in `demo/reference/bank/` and its scenario in
+  `SCENARIO_BANK.md`. The terminal version (`demo/bank/`, `SCENARIO.md`) is
+  gone.
+- `demo/scripts/*.sh` are gone: the launcher replaced them.
 - `make demo-devops` (the marimo notebook) is not touched. It is a different
   showcase: three agents on LangChain, with the dashboard's Playground.
 

@@ -295,6 +295,16 @@ uv run inspect view --log-dir evals/policy_writing/logs  # the check list and a 
 copied in) in the Docker sandbox of `compose.yaml`, built from this repo, on the
 Claude subscription, not an API key: **every run bills its rate windows**.
 The image carries OPA, so the agent's `hexgate policy test --engine wasm` runs.
+It also carries the docs the skill cites, at the paths it cites them:
+`/workspace/docs` is a symlink to a read-only copy in `/opt/hexgate/docs`,
+which the scorer's listing and snapshot never follow, so the docs are neither
+pulled nor scored. `Dockerfile.dockerignore` lists the pages copied: all of
+`docs/policy/`, the concept, CLI and ADR pages the skill names, but not yet
+`docs/internals/policy-modules.md`: its description of a boundary's default
+posture (line 86) disagrees with the linker, so it is left out until that is
+settled, then added to the list (or its modules guidance moved into
+`docs/policy/`). Runs before this (the baseline and the skill versions
+below) had no docs in the sandbox.
 
 ```bash
 claude setup-token                     # once: prints a long-lived token
