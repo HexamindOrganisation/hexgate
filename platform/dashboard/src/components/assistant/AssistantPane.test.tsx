@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { resetAssistant } from "@/lib/assistant";
@@ -30,6 +30,25 @@ function turnBodies(fetch: ReturnType<typeof stubTurns>) {
   return fetch.mock.calls
     .filter(([u]) => String(u).endsWith("/turns"))
     .map(([, init]) => JSON.parse((init as RequestInit).body as string));
+}
+
+function transcriptOf(container: HTMLElement): HTMLElement {
+  return container.querySelector(".overflow-y-auto") as HTMLElement;
+}
+
+/** jsdom lays nothing out: give the transcript a scrollable height. */
+function stubSize(el: HTMLElement) {
+  Object.defineProperty(el, "scrollHeight", { value: 1000 });
+  Object.defineProperty(el, "clientHeight", { value: 100 });
+}
+
+/** The transcript, scrolled up to its top by the user. */
+function scrolledUp(container: HTMLElement): HTMLElement {
+  const el = transcriptOf(container);
+  stubSize(el);
+  el.scrollTop = 0;
+  fireEvent.scroll(el);
+  return el;
 }
 
 async function ask(text: string) {
@@ -110,6 +129,41 @@ describe("AssistantPane", () => {
     expect(turnBodies(fetch)).toEqual([
       { session_id: null, message: "first", editor: EDITOR },
     ]);
+  });
+
+  it("pins the view to the bottom when a message is sent", async () => {
+    stubTurns([sseResponse({ type: "RUN_FINISHED" })]);
+    const { container } = renderWithProviders(
+      <AssistantPane projectId="p1" editor={EDITOR} />,
+    );
+    const transcript = scrolledUp(container);
+    await ask("hi");
+    await waitFor(() => expect(transcript.scrollTop).toBe(1000));
+  });
+
+  it("neither shows nor scrolls while another tab is active", async () => {
+    stubTurns([sseResponse({ type: "RUN_FINISHED" })]);
+    const { container, rerender } = renderWithProviders(
+      <AssistantPane projectId="p1" editor={EDITOR} active={false} />,
+    );
+    const box = screen.getByRole("textbox", { hidden: true });
+    expect(box).not.toBeVisible();
+    const transcript = transcriptOf(container);
+    stubSize(transcript);
+    // A turn streams in while the pane is hidden: it does not scroll.
+    fireEvent.change(box, { target: { value: "hi" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await screen.findByText("hi")).toBeInTheDocument();
+    expect(transcript.scrollTop).toBe(0);
+    // Back on the tab, it catches up with the bottom.
+    rerender(<AssistantPane projectId="p1" editor={EDITOR} />);
+    expect(screen.getByRole("textbox")).toBeVisible();
+    expect(transcript.scrollTop).toBe(1000);
+  });
+
+  it("takes at most the route's 8000 characters", () => {
+    renderWithProviders(<AssistantPane projectId="p1" editor={EDITOR} />);
+    expect(screen.getByRole("textbox")).toHaveAttribute("maxLength", "8000");
   });
 
   it("starts a new chat", async () => {

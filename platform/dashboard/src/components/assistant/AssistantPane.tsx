@@ -5,6 +5,7 @@ import { Hexagon, RotateCcw } from "lucide-react";
 import { Composer } from "@/components/chat/Composer";
 import { ThinkingGoo } from "@/components/chat/ThinkingGoo";
 import {
+  MAX_MESSAGE,
   useAssistant,
   type AssistantEditor,
   type AssistantMessage,
@@ -30,23 +31,28 @@ const DISALLOWED = ["a", "img"];
 export function AssistantPane({
   projectId,
   editor,
+  active = true,
 }: {
   projectId: string;
   /** What the editor holds, sent with each message. */
   editor: AssistantEditor;
+  /** False while another tab shows: the pane stays mounted, so the draft in
+   * the composer survives, but it is hidden and does not scroll. */
+  active?: boolean;
 }) {
   const { state, streaming, send, newChat } = useAssistant({ projectId });
   const transcriptRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
 
-  // Follow the answer as it streams, unless the user has scrolled up to read.
+  // Follow the answer as it streams, unless the user has scrolled up to read;
+  // on coming back to the tab, catch up with what streamed meanwhile.
   useEffect(() => {
     const el = transcriptRef.current;
-    if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [state.messages]);
+    if (active && el && atBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, [state.messages, active]);
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col" hidden={!active}>
       <div
         ref={transcriptRef}
         onScroll={(e) => {
@@ -70,9 +76,14 @@ export function AssistantPane({
       </div>
       <div className="border-t border-border p-2">
         <Composer
-          onSubmit={(text) => void send(text, editor)}
+          onSubmit={(text) => {
+            // Show the sent message and its answer, even after scrolling up.
+            atBottomRef.current = true;
+            void send(text, editor);
+          }}
           agentName="the assistant"
           disabled={streaming}
+          maxLength={MAX_MESSAGE}
           identity={
             <button
               type="button"

@@ -338,9 +338,22 @@ describe("InspectorTabs Assistant tab", () => {
     expect(await screen.findByText("The cap is 1000.")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /Lints/ }));
-    expect(screen.queryByText("The cap is 1000.")).not.toBeInTheDocument();
+    expect(screen.getByText("The cap is 1000.")).not.toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Assistant" }));
     expect(screen.getByText("what is the cap?")).toBeInTheDocument();
     expect(screen.getByText("The cap is 1000.")).toBeInTheDocument();
+  });
+
+  it("keeps an unsent draft across a switch to Lints", async () => {
+    stubAssistant(true);
+    renderInspector();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Assistant" }),
+    );
+    await userEvent.type(screen.getByRole("textbox"), "half a question");
+    await userEvent.click(screen.getByRole("button", { name: /Lints/ }));
+    expect(screen.getByText(/No lints/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Assistant" }));
+    expect(screen.getByRole("textbox")).toHaveValue("half a question");
   });
 });

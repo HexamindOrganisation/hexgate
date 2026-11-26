@@ -275,6 +275,7 @@ describe("useAssistant", () => {
     [403, /cannot work on this project/],
     [404, /no longer available/],
     [409, /still being answered/],
+    [422, /too long or malformed/],
     [502, /could not reach the platform/],
     [503, /no model/],
   ])("shows the assistant's %i refusal", async (status, message) => {

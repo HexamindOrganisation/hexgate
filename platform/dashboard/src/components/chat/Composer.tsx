@@ -7,12 +7,15 @@ export function Composer({
   agentName,
   identity,
   disabled = false,
+  maxLength,
 }: {
   onSubmit: (text: string) => void;
   agentName: string | null;
   identity: React.ReactNode;
   /** Keeps the text and refuses to send, e.g. while an answer streams. */
   disabled?: boolean;
+  /** The most characters the box takes. */
+  maxLength?: number;
 }) {
   const [value, setValue] = useState("");
   const text = value.trim();
@@ -26,6 +29,7 @@ export function Composer({
     <div className="rounded-2xl border border-border bg-card p-3 shadow-sm transition-colors focus-within:border-primary/60">
       <textarea
         value={value}
+        maxLength={maxLength}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
           // Enter confirming an IME candidate isn't a send (Safari reports

@@ -2,9 +2,9 @@
  * The policy assistant's client: its config, one token per message, the turn
  * stream, and the chat store.
  *
- * The chat lives in a module-level store, not in component state: the
- * inspector unmounts the tabs it is not showing, and a stream must survive a
- * switch to another tab and back. The store belongs to one org and project;
+ * The chat lives in a module-level store, not in component state: a stream
+ * must survive the pane unmounting, as when the user leaves the Policies page
+ * and comes back. The store belongs to one org and project;
  * moving to another, or signing out, empties it.
  *
  * A turn goes to the assistant service, not the api, with a token the api
@@ -275,12 +275,16 @@ const MESSAGES: Record<string, string> = {
   "404": "This conversation is no longer available; start a new chat.",
   "409":
     "Another of your messages is still being answered; wait for it to finish.",
+  "422": "The message was too long or malformed; shorten it and resend.",
   "502": "The assistant could not reach the platform; try again.",
   "503": "The assistant has no model configured.",
 };
 
 /** The most unsaved file names a turn may carry. */
 const MAX_UNSAVED = 50;
+
+/** The most characters a message may have. */
+export const MAX_MESSAGE = 8000;
 
 function messageFor(code: unknown, fallback: string): string {
   return (typeof code === "string" && MESSAGES[code]) || fallback;

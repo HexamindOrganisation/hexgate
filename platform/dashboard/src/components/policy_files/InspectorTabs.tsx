@@ -219,8 +219,12 @@ export function InspectorTabs({
         />
       )}
       <div className="flex-1 overflow-hidden">
-        {tab === "assistant" && (
-          <AssistantPane projectId={projectId} editor={editor} />
+        {assistantEnabled && (
+          <AssistantPane
+            projectId={projectId}
+            editor={editor}
+            active={tab === "assistant"}
+          />
         )}
         {tab === "resolved" && (
           <ResolvedTab
