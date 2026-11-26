@@ -265,11 +265,11 @@ the scheme, not the host), so without it the redirect points at
 
 **The assistant route** is in the same files too: `^~ /v1/assistant/` goes to
 the stage's `HEXGATE_ASSISTANT_PORT`, limited per client IP with its own zone.
-A chat turn is to stream server-sent events for up to five minutes, so the
-location turns buffering off and sets `proxy_read_timeout 330s`; `make
-nginx-check` fails without either. The route's prefix leaves every
-`/v1/projects/` path, where the api will mint the assistant's tokens, on the
-api. The compose derives the assistant's
+A chat turn streams server-sent events for up to five minutes (with a `: ping`
+comment after every 15 s of silence), so the location turns buffering off and
+sets `proxy_read_timeout 330s`; `make nginx-check` fails without either. The
+route's prefix leaves every `/v1/projects/` path, where the api mints the
+assistant's tokens, on the api. The compose derives the assistant's
 resource URL as `HEXGATE_PUBLIC_URL` + `/v1/assistant`, beside the MCP one.
 
 The assistant has its own Postgres login and database (`hexgate_assistant`),
@@ -281,11 +281,11 @@ revokes `CONNECT` from `PUBLIC` on both databases, so that login cannot open
 `hexgate`. The service has no `env_file`, so the stage's other secrets never
 reach it; its own come from `.env.<stage>.assistant` (above), and `make
 compose-check` fails if they reach any other service.
-`HEXGATE_ASSISTANT_ENABLED` (default `false`) will be the api's switch for the
+`HEXGATE_ASSISTANT_ENABLED` (default `false`) is the api's switch for the
 Assistant tab and the assistant's tokens, so the container runs on every stage
 while the feature stays dark. `HEXGATE_ASSISTANT_MODEL` and
 `HEXGATE_ASSISTANT_OPENROUTER_KEY` are optional until a stage is enabled;
-without a model the assistant will run no chat turn. Set a credit limit with a
+without a model every chat turn is refused (503). Set a credit limit with a
 daily reset on the OpenRouter key before enabling a stage.
 
 `$binary_remote_addr`, the limits' key, is the client's address only because
