@@ -34,6 +34,8 @@ CLIENT_ID = "hexgate-dashboard-assistant"
 @dataclass(frozen=True)
 class AssistantToken:
     subject: str
+    # The org the project belongs to; the spend of a turn is counted under it.
+    org: str
     # Never empty: a grant that names no project can do nothing.
     projects: tuple[str, ...]
     scopes: tuple[str, ...]
@@ -130,10 +132,14 @@ def _header_kid(token: str) -> str | None:
 
 def _assistant_token(token: str, claims: dict[str, Any]) -> AssistantToken | None:
     subject = claims["sub"]  # a string: jwt.decode checks its type
+    org = claims.get("org")
     scope = claims.get("scope")
     projects = claims.get("projects")
     if not subject:
         logger.info("token refused: claims: `sub` is empty")
+        return None
+    if not isinstance(org, str) or not org:
+        logger.info("token refused: claims: `org` is missing or not an id")
         return None
     if not isinstance(scope, str):
         logger.info("token refused: claims: `scope` is not a string")
@@ -147,6 +153,7 @@ def _assistant_token(token: str, claims: dict[str, Any]) -> AssistantToken | Non
         return None
     return AssistantToken(
         subject=subject,
+        org=org,
         projects=tuple(projects),
         scopes=tuple(scope.split()),
         expires_at=claims["exp"],

@@ -21,10 +21,15 @@ def clock() -> Clock:
     return Clock()
 
 
+# Every fetch here ends at once or on the test's release; one that never ends
+# must fail its test, not hang the run.
+WAIT_SECONDS = 5
+
+
 async def settle(cache: JwksCache) -> None:
     """Wait for the background refetch a past-TTL `get` started, if any."""
     if cache._task is not None:
-        await cache._task
+        await asyncio.wait_for(cache._task, WAIT_SECONDS)
 
 
 @pytest.fixture
@@ -170,7 +175,7 @@ async def test_when_request_is_cancelled_then_its_fetch_still_serves_others(cach
 
     route = respx.get(JWKS_URL).mock(side_effect=slow_jwks)
     holder = asyncio.create_task(cache.get(key.kid))
-    await started.wait()
+    await asyncio.wait_for(started.wait(), WAIT_SECONDS)
     waiter = asyncio.create_task(cache.get(key.kid))
     await asyncio.sleep(0)
 
@@ -178,7 +183,7 @@ async def test_when_request_is_cancelled_then_its_fetch_still_serves_others(cach
 
     # The fetch outlives the request that started it: the waiter gets the key
     # from that same fetch, and nothing is fetched twice.
-    assert await waiter is not None
+    assert await asyncio.wait_for(waiter, WAIT_SECONDS) is not None
     assert route.call_count == 1
 
 
@@ -205,7 +210,7 @@ async def test_when_unknown_kid_arrives_during_background_refetch_then_joins_it(
     await asyncio.sleep(0)
     release.set()
 
-    assert await pending is not None
+    assert await asyncio.wait_for(pending, WAIT_SECONDS) is not None
     assert route.call_count == 2
 
 

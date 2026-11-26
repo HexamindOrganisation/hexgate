@@ -261,3 +261,20 @@ async def test_record_usage_happy_path(store, db):
         row.output_tokens,
         row.cost_micros,
     ) == (100, 40, 10, 7, 1234)
+
+
+async def test_latest_change_happy_path(store):
+    session = await _open(store)
+    await store.append_event(session, {"name": "change", "value": {"change_id": "a"}})
+    await store.append_event(session, {"name": "usage", "value": {}})
+    await store.append_event(session, {"name": "change", "value": {"change_id": "b"}})
+    await store.append_event(session, {"name": "usage", "value": {}})
+
+    assert await store.latest_change(session) == {"change_id": "b"}
+
+
+async def test_when_a_session_has_no_change_then_latest_change_is_none(store):
+    session = await _open(store)
+    await store.append_event(session, {"name": "usage", "value": {}})
+
+    assert await store.latest_change(session) is None
