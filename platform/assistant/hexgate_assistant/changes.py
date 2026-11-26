@@ -68,6 +68,7 @@ READ_FIRST = (
     "not read before this call. Read each with policy_read_file, then "
     "rebuild the change from what it returns."
 )
+CONFLICT = "Do not call apply_change again this turn; tell the user why."
 STALE = (
     "refused, nothing saved: these files changed since this turn began: "
     "{files}. Do not call apply_change again this turn; tell the user to "
@@ -246,8 +247,8 @@ def _refusal(writes: TurnWrites) -> str | None:
     return None
 
 
-# How the MCP server words the API's stale refusal (hexgate_mcp/api.py).
-_STALE_PREFIX = "409 conflict: "
+# How the MCP server words the API's 409 refusals (hexgate_mcp/api.py).
+_CONFLICT_PREFIX = "409 conflict: "
 # What the platform's MCP server (the official SDK's FastMCP) puts before
 # every error a tool raises.
 _SERVER_PREFIX = "Error executing tool policy_apply: "
@@ -272,7 +273,11 @@ def _refused(message: str, writes: TurnWrites) -> str:
     stale = _stale_files(message)
     if stale is not None:
         return _end(writes, STALE.format(files=", ".join(stale) or "unknown"))
-    return f"refused, nothing saved: {_without_inputs(message)}"
+    refused = f"refused, nothing saved: {_without_inputs(message)}"
+    if message.startswith(_CONFLICT_PREFIX):
+        # Any conflict ends writing: this turn's retry would meet it again.
+        return _end(writes, f"{refused}. {CONFLICT}")
+    return refused
 
 
 def _without_inputs(message: str) -> str:
@@ -308,10 +313,10 @@ def _end(writes: TurnWrites, why: str) -> str:
 
 
 def _stale_files(message: str) -> list[str] | None:
-    if not message.startswith(_STALE_PREFIX):
+    if not message.startswith(_CONFLICT_PREFIX):
         return None
     try:
-        detail = json.loads(message.removeprefix(_STALE_PREFIX))
+        detail = json.loads(message.removeprefix(_CONFLICT_PREFIX))
     except ValueError:
         return None
     if not isinstance(detail, dict) or detail.get("code") != "stale":

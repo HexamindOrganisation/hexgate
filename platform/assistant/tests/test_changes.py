@@ -19,6 +19,7 @@ from hexgate_assistant.agent import INSTRUCTIONS
 from hexgate_assistant.changes import (
     AFTER_SILENCE,
     ATTEMPT_LIMIT,
+    CONFLICT,
     NO_ANSWER,
     NO_REPLY,
     NO_SCOPE,
@@ -265,19 +266,28 @@ async def test_when_a_file_is_stale_then_writing_ends_for_the_turn(settings, mcp
     assert "send their message again" in text
 
 
-@pytest.mark.parametrize(
-    "refusal",
-    ['403 forbidden: {"code":"assistant_mode"}', '409 conflict: {"code":"layout"}'],
-)
 async def test_when_the_platform_refuses_then_nothing_saved_and_the_model_may_retry(
-    settings, mcp, key, refusal
+    settings, mcp, key
 ):
+    refusal = '403 forbidden: {"code":"assistant_mode"}'
     mcp.errors["policy_apply"] = refusal
 
     events = await apply_turn(settings, mcp, key, applying(times=2))
 
     assert len(apply_calls(mcp)) == 2
     assert answer(events) == f"saw: refused, nothing saved: {refusal}"
+
+
+async def test_when_any_conflict_reaches_mcp_then_writing_ends_for_the_turn(
+    settings, mcp, key
+):
+    refusal = '409 conflict: {"code":"layout"}'
+    mcp.errors["policy_apply"] = refusal
+
+    events = await apply_turn(settings, mcp, key, applying(times=2))
+
+    assert len(apply_calls(mcp)) == 1
+    assert answer(events) == f"saw: refused, nothing saved: {refusal}. {CONFLICT}"
 
 
 async def test_when_the_api_does_not_answer_then_the_change_may_be_saved(
