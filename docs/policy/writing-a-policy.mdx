@@ -1,0 +1,151 @@
+---
+title: "Writing a policy"
+description: "The method for turning a plain-language request into a policy that validates and provably does what was asked, without breaking what already works."
+---
+
+This page is the method, whoever follows it: you writing YAML by hand, or an AI
+agent working from the `write-policy` skill or the Hexgate MCP server. It says
+*what* to do at each step. *How* depends on your tools: the `hexgate policy`
+CLI locally, or the MCP server's tools against the platform. The traps to
+check every time are in [Common mistakes](/policy/common-mistakes).
+
+A policy is finished when it **validates** and a set of dry-runs **proves** it
+does what was asked. A policy that was never run is not finished.
+
+## 1. Pin down the inputs
+
+You need four things before writing anything:
+
+- **Tool and argument names, with their types.** Take them from the agent's
+  code or its manifest (what the agent registered). Otherwise use the names
+  the requester gave, or ask.
+- **The roles**: who calls.
+- **The caller attributes** available as `ctx.*`: the ones the integration
+  really sends, as seen in its audit decisions.
+- **The layout**: one file, one file per role under `policies/`, or modules
+  (see *Layouts* below). Keep the project's existing layout.
+
+**Never invent a name.** A misspelled tool is silently denied by default, and a
+misspelled argument fails closed. If a name is unknown, ask, or state the
+assumption explicitly. Validating against the agent's manifest flags tool,
+skill and argument names the agent doesn't have.
+
+## 2. When the policy already exists, record what it allows today
+
+Before changing anything, dry-run the current policy for each role on every
+tool and agent target in the manifest. Every result the request does not
+mention becomes a **must-stay** row of the decision table, re-tested at the
+end. A request worded for one role or one path ("billing may never hand off
+to X") leaves every other role and path as it was.
+
+Agent reach needs care here: whether a handoff or an agent-as-tool call is
+allowed depends on whether the policy declares those gates at all. See
+*Admission and reach* in [Common mistakes](/policy/common-mistakes).
+
+## 3. Restate the intent as a decision table
+
+Before writing YAML, list role × tool × condition → `allow` / `deny` /
+`approval_required`, plus what happens to anything unlisted. Surface every
+ambiguity here: "refunds up to 500: inclusive? which currency?".
+
+**An open choice is not a reason to stop.** When the request leaves
+permissions open (what a role may do, which roles a rule covers), write the
+least-privilege reading now: read-only or nothing, and risky tools (money
+movement, delete, export, external send) denied. Validate and test it like any
+other policy, and list each such choice as an **assumption** in the report,
+with the question that would widen it. Never invent a grant the request didn't
+ask for. Stop and ask without writing only when even the least-privilege
+reading cannot be expressed, for example when the tool names are unknown.
+
+**A request the policy cannot express is different: refuse it, don't
+approximate it.** A count per tool over an hour or a day, a handoff depth, a
+tool the agent doesn't have: change no file, say why it can't be expressed,
+and offer the nearest substitute (a per-run bound, an approval, a limiter in
+the downstream service) without writing it. Write the substitute only once the
+requester accepts it.
+
+## 4. Write the policy
+
+Start deny-by-default and grant the minimum. Put each constraint at the
+narrowest scope that works:
+
+| Location | Applies to |
+|---|---|
+| `tools.<name>.constraints` | that tool only |
+| `default_policy.constraints` | only tools **not** listed under `tools:` |
+| top-level `constraints:` | every key the role can reach, **including** `agent.run` and `agent.*` |
+
+The full shape of a policy is in [YAML shape](/policy/yaml-shape), and every
+operator and function in the [Constraints reference](/policy/constraints).
+
+### Layouts
+
+**Several roles in one file:** a top-level `roles:` map, where a role can
+`inherits: [other]` and a base can be `is_mixin: true`. In a role-keyed file,
+only `version` and `constraints` may sit at file level; everything else,
+`consts` included, goes inside a role or a mixin the roles inherit. A child's
+`tools` entry replaces the parent's entry for that tool, while policy-level
+`constraints:` accumulate. The other layout is **one file per role**, under
+`policies/<role>.yaml`.
+
+Always define a `default` role and keep it least-privilege: unknown or absent
+roles fall back to it. A grant only `default` holds trips the
+`permissive-default` lint; put it in a mixin instead. Details:
+[user scope](/concepts/user-scope).
+
+**Modules** keep security-owned limits apart from team grants:
+
+- `policies/boundaries/*.yaml` hold ceilings and hard denies, for every role;
+- `policies/capabilities/*.yaml` hold grants only (a `deny` there is an error);
+- `roles.yaml` maps each role to its own list of capabilities.
+
+They compose as: fences intersect, grants union, denies win. A tool is allowed
+only if an imported capability grants it; a boundary can narrow a grant, never
+create one. Three things are rejected in modules: policy-level
+`constraints:`, `default_policy.constraints`, and `file_scope`.
+
+A boundary's `default_policy` sets its posture. **Without one, a boundary is a
+ceiling** (the default mode is `deny`): every tool it does not explicitly allow
+becomes unusable for every role, whatever the capabilities grant. To add one
+hard deny and nothing else, give the boundary `default_policy: { mode: allow }`
+(a floor: tools it doesn't name are left to the capabilities, and it only
+denies or fences the ones it names). Write `default_policy` in every
+boundary file, so its posture is stated, not implied. To add a hard deny,
+prefer the existing boundary file.
+
+**Never widen a boundary on a team's request.** A boundary belongs to whoever
+owns it, usually security. If a request needs more than a boundary allows,
+make only the changes that fit under it (if none do, change no file: a grant
+the boundary makes dead is not a change), leave the boundary as it is, and say
+which boundary blocks the request and who must change it. Widen a boundary
+only when the requester says they own it or explicitly asks for a boundary
+change. Add `ceiling + 1 → deny` as a must-stay row.
+
+## 5. Validate, then prove
+
+**Validate** until clean, against the agent's manifest when you have it, with
+warnings treated as failures. A module tree is checked as a whole, and each
+role resolved to see its effective policy.
+
+**Prove** it: turn every row of the decision table into a dry-run, including:
+
+- the must-stay rows from step 2;
+- the negative cases;
+- the boundary values: `== limit`, `limit + 1`, a missing argument, a wrong type;
+- for every deny, especially one you added yourself, one **legitimate value
+  that looks like it**: `a..b.md` next to a `..` guard, `environment.py` next
+  to a `.env` deny. If it is wrongly denied, narrow the constraint rather than
+  reporting the over-block as an accepted risk;
+- a usage cap at `limit - 1` and at `limit`;
+- a caller holding several roles, where the most permissive role wins.
+
+Run the dry-runs on the production engine (WASM) when you can, and say so when
+you couldn't. Every result must match the table. When one doesn't, fix the
+policy, not the table, unless the table was wrong.
+
+## 6. Report
+
+Give the policy, the decision table with each row's actual dry-run result, the
+assumptions from step 3, and any residual risk, for example "egress on HTTPS is
+host-level only" or "`ctx.department` is only as trustworthy as the server code
+that sets it".

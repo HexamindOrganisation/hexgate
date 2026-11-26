@@ -54,6 +54,8 @@
             "group": "Policy",
             "pages": [
               "policy/yaml-shape",
+              "policy/writing-a-policy",
+              "policy/common-mistakes",
               "policy/writing-conditions",
               "policy/constraints",
               "policy/in-code",
