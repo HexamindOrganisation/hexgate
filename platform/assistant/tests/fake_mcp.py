@@ -47,6 +47,10 @@ class FakeMCP:
     delay: float = 0.0
     # Every tool call is refused with this message, as the server refuses one.
     refusal: str | None = None
+    # Per tool: the text it answers instead of "<name> result", and seconds
+    # it sleeps on top of `delay`.
+    results: dict[str, str] = field(default_factory=dict)
+    delays: dict[str, float] = field(default_factory=dict)
 
 
 class _RecordingTool(Tool):
@@ -56,12 +60,11 @@ class _RecordingTool(Tool):
         state = self._state
         headers = get_http_headers(include={"authorization"})
         state.calls.append(Call(self.name, arguments, headers.get("authorization")))
-        await asyncio.sleep(state.delay)
+        await asyncio.sleep(state.delay + state.delays.get(self.name, 0))
         if state.refusal is not None:
             raise ToolError(state.refusal)
-        return ToolResult(
-            content=[TextContent(type="text", text=f"{self.name} result")]
-        )
+        text = state.results.get(self.name, f"{self.name} result")
+        return ToolResult(content=[TextContent(type="text", text=text)])
 
 
 def _server(state: FakeMCP) -> FastMCP:

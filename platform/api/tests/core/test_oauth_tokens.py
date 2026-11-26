@@ -99,6 +99,28 @@ def test_when_minted_then_header_names_the_oauth_key(
     assert header["kid"] == oauth_keystore.oauth_fingerprint()
 
 
+def test_when_org_is_not_passed_then_the_token_has_no_org_claim() -> None:
+    """An OAuth grant passes no org, and its token keeps the claims it had."""
+    payload = jwt.decode(_mint(), options={"verify_signature": False})
+    assert set(payload) == {
+        "iss",
+        "sub",
+        "aud",
+        "client_id",
+        "scope",
+        "projects",
+        "iat",
+        "exp",
+        "jti",
+    }
+
+
+def test_when_org_is_passed_then_the_token_names_it_and_still_verifies() -> None:
+    token = _mint(org="org-1")
+    assert jwt.decode(token, options={"verify_signature": False})["org"] == "org-1"
+    assert _verify(token).sub == "user-1"
+
+
 def test_when_projects_repeat_then_the_claim_lists_each_id_once() -> None:
     """Each id once, so the token stays small."""
     token = _mint(projects=["p1", "p2", "p1"])

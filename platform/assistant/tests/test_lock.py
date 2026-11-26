@@ -159,13 +159,15 @@ async def test_when_the_turn_is_cancelled_twice_then_the_lock_is_released(db):
             await asyncio.sleep(3600)
 
     task = asyncio.create_task(turn())
-    await entered.wait()
+    with anyio.fail_after(5):
+        await entered.wait()
     task.cancel()
     await asyncio.sleep(0)
     assert lock._releases, "the second cancel must land during the release"
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        async with asyncio.timeout(5):
+            await task
 
     with anyio.fail_after(5):
         while await _holder(db) is not None:
