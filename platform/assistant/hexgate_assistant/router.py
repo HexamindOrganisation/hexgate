@@ -2,7 +2,7 @@
 
 A turn that will not run is refused with plain HTTP before any stream opens
 in this order: the token, the model, the body, then the user's lock, the
-session and the turn-start reads. Once it will run, the answer is an AG-UI
+turn-start reads and the session. Once it will run, the answer is an AG-UI
 event stream.
 """
 
