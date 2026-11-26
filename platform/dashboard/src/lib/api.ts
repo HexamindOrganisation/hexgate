@@ -1193,10 +1193,21 @@ export interface AssistantToken {
   can_write: boolean;
 }
 
+/** The platform checks an applied change passed. Mirror of
+ * platform/api apply_checks.py's `CheckId` and `Status`. */
+export type ChangeCheckId =
+  | "yaml"
+  | "composes"
+  | "lints"
+  | "dry_runs"
+  | "boundary"
+  | "bundle";
+export type ChangeCheckStatus = "pass" | "warn" | "fail" | "skipped";
+
 /** One platform check of an applied change, as the api reports it. */
 export interface ChangeCheck {
-  id: string;
-  status: string;
+  id: ChangeCheckId;
+  status: ChangeCheckStatus;
   detail?: string | null;
 }
 

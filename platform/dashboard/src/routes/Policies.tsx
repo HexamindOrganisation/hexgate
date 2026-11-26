@@ -16,7 +16,7 @@ import {
   useRenameFile,
   useResolvedPolicy,
 } from "@/lib/policy_files";
-import { useAssistantChanges } from "@/lib/assistant";
+import { lastChangeTo, useAssistantChanges } from "@/lib/assistant";
 import { useEmptyFolders } from "@/lib/empty_folders";
 import { composeAgentNames, referencesImport } from "@/lib/imports";
 import { baseName, ENTRY_FILE, isModular } from "@/lib/file_tree";
@@ -60,6 +60,8 @@ export function PoliciesPage() {
   const [selection, setSelection] = useState<string | null>(null);
   const [openTabs, setOpenTabs] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  // New files the user has not typed into yet (an empty "untitled" buffer).
+  const [untouchedNew, setUntouchedNew] = useState<string[]>([]);
   const dirtyKeys = useMemo(() => new Set(Object.keys(drafts)), [drafts]);
 
   // Default the open file once files load: the entry file, else the first one.
@@ -92,6 +94,7 @@ export function PoliciesPage() {
   // A deleted file must leave no phantom tab/selection/draft — otherwise its
   // stale buffer could be Saved and re-create the file.
   const onFileDeleted = useCallback((name: string) => {
+    setUntouchedNew((prev) => prev.filter((n) => n !== name));
     setOpenTabs((prev) => prev.filter((t) => t !== name));
     setSelection((sel) => (sel === name ? null : sel));
     setDrafts((prev) => {
@@ -105,29 +108,24 @@ export function PoliciesPage() {
   const onNewFile = useCallback(
     (name: string) => {
       setDrafts((prev) => ({ ...prev, [name]: prev[name] ?? "" }));
+      setUntouchedNew((prev) => [...prev.filter((n) => n !== name), name]);
       openFile(name);
     },
     [openFile],
   );
 
-  // A new file's untouched (empty) buffer stops being a draft once a file of
-  // that name is stored, saved elsewhere (by the assistant): else the tab
-  // would show the empty buffer, unsaved, over the stored file. A buffer the
-  // user typed into keeps its edits. Render-phase, like the project reset.
-  const [knownFiles, setKnownFiles] = useState(files);
-  if (files !== knownFiles) {
-    setKnownFiles(files);
-    const known = new Set(knownFiles.map((f) => f.name));
-    const created = files.filter(
-      (f) => !known.has(f.name) && drafts[f.name] === "",
-    );
-    if (created.length) {
-      setDrafts((prev) => {
-        const next = { ...prev };
-        for (const f of created) delete next[f.name];
-        return next;
-      });
-    }
+  // A new file the user has not typed into stops being a draft once a file
+  // of that name is stored, saved elsewhere (by the assistant): else its tab
+  // would show the empty buffer, unsaved, over the stored file. Render-phase,
+  // like the project reset.
+  const storedNew = untouchedNew.filter((n) => files.some((f) => f.name === n));
+  if (storedNew.length) {
+    setUntouchedNew((prev) => prev.filter((n) => !storedNew.includes(n)));
+    setDrafts((prev) => {
+      const next = { ...prev };
+      for (const n of storedNew) delete next[n];
+      return next;
+    });
   }
 
   // Empty folders live per-device (localStorage); creating a file under a
@@ -187,6 +185,10 @@ export function PoliciesPage() {
   );
 
   const onPersist = useCallback((key: string, text: string, dirty: boolean) => {
+    // An edit or a Save: the buffer is the user's from now on.
+    setUntouchedNew((prev) =>
+      prev.includes(key) ? prev.filter((n) => n !== key) : prev,
+    );
     setDrafts((prev) => {
       if (dirty) return { ...prev, [key]: text };
       if (!(key in prev)) return prev;
@@ -226,6 +228,7 @@ export function PoliciesPage() {
     setSelection(null);
     setOpenTabs([]);
     setDrafts({});
+    setUntouchedNew([]);
     // The first project to resolve keeps the hub link's agent.
     setInspectAgent(scopedProject == null ? params.get("agent") || "*" : "*");
     setDraft(null);
@@ -401,7 +404,7 @@ export function PoliciesPage() {
                 {active !== null && (
                   <AssistantChangeBar
                     key={projectId}
-                    projectId={projectId}
+                    last={lastChangeTo(assistantChanges, active)}
                     file={active}
                     storedHash={files.find((f) => f.name === active)?.text_hash}
                     dirty={dirtyKeys.has(active)}

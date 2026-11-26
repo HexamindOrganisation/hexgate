@@ -33,7 +33,6 @@ const CHANGE: AssistantChange = {
   checks: [
     { id: "yaml", status: "pass" },
     { id: "lints", status: "warn", detail: "unknown-tool on refund_order" },
-    { id: "regression", status: "pass" },
   ],
 };
 
@@ -79,8 +78,6 @@ describe("ChangeCard", () => {
     const lints = screen.getByText("No new lint error").closest("li")!;
     expect(lints.querySelector("[aria-label=warning]")).not.toBeNull();
     expect(lints).toHaveTextContent("unknown-tool on refund_order");
-    // A check the card has no words for shows its id.
-    expect(screen.getByText("regression")).toBeInTheDocument();
   });
 
   it("reads the stored change and shows the first file's diff", async () => {

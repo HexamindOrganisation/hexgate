@@ -54,6 +54,23 @@ export function AssistantPane({
     if (active && el && atBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [state.messages, active]);
 
+  // Content that grows after its message, such as a change card's diff once
+  // it loads, is followed too, unless the user has scrolled up to read.
+  const contentRef = useRef<HTMLDivElement>(null);
+  // The content div exists only once there is a message.
+  const empty = state.messages.length === 0;
+  useEffect(() => {
+    const el = transcriptRef.current;
+    const content = contentRef.current;
+    if (!active || !el || !content || typeof ResizeObserver === "undefined")
+      return;
+    const observer = new ResizeObserver(() => {
+      if (atBottomRef.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [active, empty]);
+
   // Back on the tab after scrolling up: return to where the user was.
   useEffect(() => {
     const el = transcriptRef.current;
@@ -74,12 +91,12 @@ export function AssistantPane({
         }}
         className="flex-1 overflow-y-auto scrollbar-thin px-3 py-3"
       >
-        {state.messages.length === 0 ? (
+        {empty ? (
           <p className="pt-6 text-center text-xs text-muted-foreground">
             Ask about this project's policy, or ask for a change.
           </p>
         ) : (
-          <div className="space-y-4">
+          <div ref={contentRef} className="space-y-4">
             {state.messages.map((m) => (
               <Message key={m.id} message={m} projectId={projectId} />
             ))}

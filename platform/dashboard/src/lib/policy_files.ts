@@ -40,6 +40,12 @@ const matrixKey = (pid: string, agent: string, tools: string[]) =>
 const resolveKey = (pid: string, role: string | null, agent: string | null) =>
   ["policy-resolve", pid, role, agent] as const;
 const checkKey = (pid: string) => ["policy-check", pid] as const;
+const changeKey = (pid: string, id: string) =>
+  ["policy-change", pid, id] as const;
+
+/** Retry only transient errors: a 4xx answer stays the answer. */
+const retryTransient = (n: number, err: unknown) =>
+  !(err instanceof ApiError && err.status < 500) && n < 2;
 
 /** Bust every derived read for a project after a write. The stored files are
  * authoritative; resolve/graph/check/preview all recompute from them. */
@@ -72,25 +78,31 @@ export function usePolicyFiles(projectId: string | null) {
  * written, so it is fetched once. */
 export function usePolicyChange(projectId: string, changeId: string) {
   return useQuery<ChangeRead>({
-    queryKey: ["policy-change", projectId, changeId],
+    queryKey: changeKey(projectId, changeId),
     queryFn: () => api.getPolicyChange(projectId, changeId),
-    // A 404 is final: retry only transient errors.
-    retry: (n, err) => !(err instanceof ApiError && err.status < 500) && n < 2,
+    retry: retryTransient,
     staleTime: Infinity,
   });
 }
 
-/** Refetch the project's files, and every read derived from them, each time
- * `changeId` names a change saved elsewhere (by the assistant), and once on
- * mount when it names one already: the page may have been away while it
- * landed. A clean editor buffer then shows the new text by itself. */
+/** The last change each project's files were refetched for. Module-level,
+ * so a remount of the page does not refetch again for a change it handled. */
+const refetchedFor = new Map<string, string>();
+
+/** Refetch the project's files, and every read derived from them, once per
+ * change saved elsewhere (by the assistant); a change that landed while the
+ * page was away is caught up on mount. A clean editor buffer then shows the
+ * new text by itself. */
 export function useRefetchOnChange(
   projectId: string | null,
   changeId: string | null,
 ) {
   const qc = useQueryClient();
   useEffect(() => {
-    if (projectId && changeId) invalidateFiles(qc, projectId);
+    if (!projectId || !changeId || refetchedFor.get(projectId) === changeId)
+      return;
+    refetchedFor.set(projectId, changeId);
+    invalidateFiles(qc, projectId);
   }, [qc, projectId, changeId]);
 }
 
@@ -115,7 +127,7 @@ export function usePolicyMatrix(
     // Classic (non-compose) projects have no matrix; don't fire the 422.
     enabled: !!projectId && enabled,
     // A policy that doesn't compose stays a 422; retry only transient errors.
-    retry: (n, err) => !(err instanceof ApiError && err.status < 500) && n < 2,
+    retry: retryTransient,
     // No placeholder: another agent's verdicts must never stand in for this
     // one's. Cached, so switching back to an agent shows its grid at once.
     staleTime: 15_000,

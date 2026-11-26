@@ -46,6 +46,8 @@ export function FilesDiff({
   );
   return (
     <CodeMirror
+      // The merge view reads its original once: another file remounts it.
+      key={before ?? ""}
       value={after}
       extensions={extensions}
       editable={false}

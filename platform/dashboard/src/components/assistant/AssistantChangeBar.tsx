@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Hexagon, X } from "lucide-react";
 
-import { lastChangeTo, useAssistantChanges } from "@/lib/assistant";
+import type { AssistantChange } from "@/lib/assistant";
 
 /**
  * The editor's note that the open file holds what the assistant's latest
@@ -11,22 +11,21 @@ import { lastChangeTo, useAssistantChanges } from "@/lib/assistant";
  * project, so the bars closed in one project do not carry over.
  */
 export function AssistantChangeBar({
-  projectId,
+  last,
   file,
   storedHash,
   dirty,
 }: {
-  projectId: string;
+  /** The assistant's latest change to the file and the hash it left. */
+  last: { change: AssistantChange; afterHash: string } | null;
   /** The open file's name. */
   file: string;
   /** The open file's stored `text_hash`; undefined while it is unsaved. */
   storedHash: string | undefined;
   dirty: boolean;
 }) {
-  const changes = useAssistantChanges(projectId);
   // The bars the user closed, as "change_id:file".
   const [closed, setClosed] = useState<string[]>([]);
-  const last = lastChangeTo(changes, file);
   if (!last || dirty || storedHash !== last.afterHash) return null;
   const key = `${last.change.change_id}:${file}`;
   if (closed.includes(key)) return null;

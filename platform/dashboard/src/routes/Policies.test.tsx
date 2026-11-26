@@ -354,7 +354,12 @@ describe("PoliciesPage after the assistant saves a change", () => {
   /** The base routes with the assistant on, policy.yaml at `OLD`, and a
    * turn that saves `name` as `NEW` (hash "h-new"), policy.yaml by default.
    * Returns the routes, so a test can change what the files read answers. */
+  // A refetch is done once per change id, for the whole module: a fresh id
+  // per test keeps one test's change from counting as handled in the next.
+  let changes = 0;
+
   function stubAssistant(name = "policy.yaml"): Record<string, unknown> {
+    const changeId = `chg_${++changes}`;
     const routes: Record<string, unknown> = {
       ...baseRoutes(),
       [`/v1/projects/${PID}/policy-files`]: [
@@ -387,7 +392,7 @@ describe("PoliciesPage after the assistant saves a change", () => {
           type: "CUSTOM",
           name: "change",
           value: {
-            change_id: "chg_1",
+            change_id: changeId,
             summary: SUMMARY,
             files: [
               {
@@ -469,26 +474,47 @@ describe("PoliciesPage after the assistant saves a change", () => {
   });
 
   it("hides the bar once the file no longer holds the assistant's text", async () => {
-    const routes = stubAssistant();
-    // One cache for both visits, as in the app: the return must refetch.
-    const qc = new QueryClient({
-      defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
-    });
-    const { unmount } = renderWithProviders(<PoliciesPage />, { client: qc });
+    stubAssistant();
+    const qc = makeQueryClient();
+    renderWithProviders(<PoliciesPage />, { client: qc });
     await askForChange();
     await screen.findByText("Changed by the assistant");
-    unmount();
 
     // Saved again since, by someone else: the stored text is no longer the
     // one the change left.
-    routes[`/v1/projects/${PID}/policy-files`] = [
-      stored("policy.yaml", "# theirs\n", "h-theirs"),
-    ];
-    renderWithProviders(<PoliciesPage />, { client: qc });
+    act(() =>
+      qc.setQueryData(
+        ["policy-files", PID],
+        [stored("policy.yaml", "# theirs\n", "h-theirs")],
+      ),
+    );
     await waitFor(() =>
       expect(screen.getByLabelText("policy editor")).toHaveValue("# theirs\n"),
     );
     expect(screen.queryByText("Changed by the assistant")).toBeNull();
+  });
+
+  it("does not refetch the files again for a change it handled", async () => {
+    stubAssistant();
+    // One cache for both visits, as in the app.
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
+    });
+    const filesReads = () =>
+      vi
+        .mocked(window.fetch)
+        .mock.calls.filter(([u]) =>
+          String(u).endsWith(`/projects/${PID}/policy-files`),
+        ).length;
+    const { unmount } = renderWithProviders(<PoliciesPage />, { client: qc });
+    await askForChange();
+    await screen.findByText("Changed by the assistant");
+    const reads = filesReads();
+    unmount();
+
+    renderWithProviders(<PoliciesPage />, { client: qc });
+    await screen.findByText("Changed by the assistant");
+    expect(filesReads()).toBe(reads);
   });
 
   it("drops an empty new file's buffer once the assistant saves it", async () => {
@@ -515,18 +541,20 @@ describe("PoliciesPage after the assistant saves a change", () => {
     expect(screen.getByText("Changed by the assistant")).toBeInTheDocument();
   });
 
+  /** Opens a new file from the tree, its name set in one change. */
+  async function newFile(name: string) {
+    fireEvent.click(screen.getByRole("button", { name: /new file/i }));
+    const input = screen.getByPlaceholderText(/e\.g\./i);
+    fireEvent.change(input, { target: { value: name } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(screen.getByTitle(name)).toBeInTheDocument());
+  }
+
   it("drops an empty new file's buffer saved while another tab shows", async () => {
     stubAssistant("extra.yaml");
     renderWithProviders(<PoliciesPage />);
     await waitFor(() => expect(screen.getByText("active")).toBeInTheDocument());
-    await userEvent.click(screen.getByRole("button", { name: /new file/i }));
-    await userEvent.type(
-      screen.getByPlaceholderText(/e\.g\./i),
-      "extra.yaml{Enter}",
-    );
-    await waitFor(() =>
-      expect(screen.getByTitle("extra.yaml")).toBeInTheDocument(),
-    );
+    await newFile("extra.yaml");
     await userEvent.click(screen.getByText("policy.yaml"));
     await waitFor(() =>
       expect(screen.getByLabelText("policy editor")).toHaveValue(OLD),
@@ -541,6 +569,30 @@ describe("PoliciesPage after the assistant saves a change", () => {
     await waitFor(() =>
       expect(screen.getByLabelText("policy editor")).toHaveValue(NEW),
     );
+  });
+
+  it("keeps a new file's buffer the user emptied after typing", async () => {
+    stubAssistant("extra.yaml");
+    const qc = makeQueryClient();
+    renderWithProviders(<PoliciesPage />, { client: qc });
+    await waitFor(() => expect(screen.getByText("active")).toBeInTheDocument());
+    await newFile("extra.yaml");
+    const editor = screen.getByLabelText("policy editor");
+    fireEvent.change(editor, { target: { value: "x" } });
+    fireEvent.change(editor, { target: { value: "" } });
+
+    await askForChange();
+    // The event has been read: the page holds the file the change created.
+    await waitFor(() =>
+      expect(
+        qc
+          .getQueryData<{ name: string }[]>(["policy-files", PID])
+          ?.some((f) => f.name === "extra.yaml"),
+      ).toBe(true),
+    );
+    // Typed into, so the user's: still empty and unsaved over the stored file.
+    expect(screen.getByLabelText("policy editor")).toHaveValue("");
+    expect(screen.getAllByTitle("Unsaved changes").length).toBeGreaterThan(0);
   });
 
   it("closes the bar when dismissed", async () => {

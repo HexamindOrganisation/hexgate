@@ -9,14 +9,13 @@ import {
 
 import { FilesDiff } from "@/components/assistant/FilesDiff";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { ChangeCheck } from "@/lib/api";
+import type { ChangeCheck, ChangeCheckId } from "@/lib/api";
 import type { AssistantChange } from "@/lib/assistant";
 import { usePolicyChange } from "@/lib/policy_files";
 import { cn } from "@/lib/utils";
 
-/** What each platform check proves, in the admin's words. An id this list
- * does not know shows as it is. */
-const CHECK_LABEL: Record<string, string> = {
+/** What each platform check proves, in the admin's words. */
+const CHECK_LABEL: Record<ChangeCheckId, string> = {
   yaml: "Every file parses",
   composes: "The policy composes for every agent",
   lints: "No new lint error",
@@ -70,8 +69,7 @@ export const ChangeCard = memo(function ChangeCard({
 });
 
 function CheckRow({ check }: { check: ChangeCheck }) {
-  const status =
-    STATUS_ICON[check.status as keyof typeof STATUS_ICON] ?? STATUS_ICON.warn;
+  const status = STATUS_ICON[check.status];
   const { Icon } = status;
   return (
     <li className="flex items-start gap-1.5">
@@ -80,7 +78,7 @@ function CheckRow({ check }: { check: ChangeCheck }) {
         className={cn("mt-px size-3.5 shrink-0", status.tone)}
       />
       <div className="min-w-0">
-        <p>{CHECK_LABEL[check.id] ?? check.id}</p>
+        <p>{CHECK_LABEL[check.id]}</p>
         {check.detail && (
           <p className="break-words text-muted-foreground">{check.detail}</p>
         )}
@@ -125,8 +123,6 @@ function ChangeFiles({
         <TabsContent value={picked} className="mt-0 border-t border-border/60">
           {file ? (
             <FilesDiff
-              // A new file's diff starts from its own text, not the last one.
-              key={file.name}
               before={file.before_content}
               after={file.after_content}
             />
