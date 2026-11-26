@@ -6,6 +6,7 @@ import {
   Info,
   ListChecks,
   Network,
+  Sparkles,
 } from "lucide-react";
 
 import type {
@@ -14,14 +15,16 @@ import type {
   PolicyMatrix,
   ResolvedPolicy,
 } from "@/lib/api";
+import { AssistantPane } from "@/components/assistant/AssistantPane";
 import { Badge } from "@/components/ui/badge";
 import { AgentGraphPicker } from "./AgentGraphPicker";
 import { TestPanel } from "./TestPanel";
 import { cn } from "@/lib/utils";
 import { MATRIX_MODE_TONE } from "@/lib/policy_files";
 import { verdictLabel } from "@/lib/policy";
+import { useAssistantConfig, type AssistantEditor } from "@/lib/assistant";
 
-type Tab = "resolved" | "lints" | "test";
+type Tab = "assistant" | "resolved" | "lints" | "test";
 
 function modeBadge(mode: string | undefined) {
   if (mode === "allow" || mode === "deny" || mode === "approval_required") {
@@ -111,8 +114,9 @@ function sortToolRows(names: string[]) {
 }
 
 /**
- * Right pane: the composed policy (Resolved), analyzer lints (Lints), and the
- * decision tester (Test), plus a policy-graph launcher. Resolved + Lints
+ * Right pane: the policy assistant (Assistant, when the platform enables it),
+ * the composed policy (Resolved), analyzer lints (Lints), and the decision
+ * tester (Test), plus a policy-graph launcher. Resolved + Lints
  * reflect the unsaved draft when one is active (the page feeds preview results
  * through); otherwise stored state.
  */
@@ -128,7 +132,7 @@ export function InspectorTabs({
   agentNames,
   inspectAgent,
   onInspectAgentChange,
-  unsaved = false,
+  editor,
 }: {
   projectId: string;
   resolved: ResolvedPolicy | undefined | null;
@@ -142,10 +146,14 @@ export function InspectorTabs({
   agentNames: string[];
   inspectAgent: string;
   onInspectAgentChange: (agent: string) => void;
-  /** Unsaved edits: the graph opens in a new tab so they survive. */
-  unsaved?: boolean;
+  /** The open file and the files with unsaved edits. With unsaved edits the
+   * graph opens in a new tab so they survive. */
+  editor: AssistantEditor;
 }) {
-  const [tab, setTab] = useState<Tab>("resolved");
+  const [picked, setPicked] = useState<Tab>("resolved");
+  const assistantEnabled = useAssistantConfig(projectId).data?.enabled ?? false;
+  // The tab picked stays picked; it shows only while the platform enables it.
+  const tab = picked === "assistant" && !assistantEnabled ? "resolved" : picked;
   const [graphOpen, setGraphOpen] = useState(false);
   const errorCount = lints.filter((l) => l.severity === "error").length;
   // Roles come from whatever resolved — a compose project has no separate role
@@ -158,15 +166,23 @@ export function InspectorTabs({
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-1 px-2 py-2 border-b border-border">
+        {assistantEnabled && (
+          <TabButton
+            active={tab === "assistant"}
+            onClick={() => setPicked("assistant")}
+            Icon={Sparkles}
+            label="Assistant"
+          />
+        )}
         <TabButton
           active={tab === "resolved"}
-          onClick={() => setTab("resolved")}
+          onClick={() => setPicked("resolved")}
           Icon={ListChecks}
           label="Resolved"
         />
         <TabButton
           active={tab === "lints"}
-          onClick={() => setTab("lints")}
+          onClick={() => setPicked("lints")}
           Icon={AlertTriangle}
           label="Lints"
           count={lints.length}
@@ -174,7 +190,7 @@ export function InspectorTabs({
         />
         <TabButton
           active={tab === "test"}
-          onClick={() => setTab("test")}
+          onClick={() => setPicked("test")}
           Icon={FlaskConical}
           label="Test"
         />
@@ -198,11 +214,20 @@ export function InspectorTabs({
         // Graphs are per agent: pick one and open its hub.
         <AgentGraphPicker
           projectId={projectId}
-          newTab={unsaved}
+          newTab={editor.unsaved.length > 0}
           onClose={() => setGraphOpen(false)}
         />
       )}
       <div className="flex-1 overflow-hidden">
+        {assistantEnabled && (
+          <AssistantPane
+            // A draft belongs to its project: another project starts empty.
+            key={projectId}
+            projectId={projectId}
+            editor={editor}
+            active={tab === "assistant"}
+          />
+        )}
         {tab === "resolved" && (
           <ResolvedTab
             resolved={resolved}

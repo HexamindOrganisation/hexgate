@@ -2,9 +2,9 @@
  * The policy assistant's client: its config, one token per message, the turn
  * stream, and the chat store.
  *
- * The chat lives in a module-level store, not in component state: the
- * inspector unmounts the tabs it is not showing, and a stream must survive a
- * switch to another tab and back. The store belongs to one org and project;
+ * The chat lives in a module-level store, not in component state: a stream
+ * must survive the pane unmounting, as when the user leaves the Policies page
+ * and comes back. The store belongs to one org and project;
  * moving to another, or signing out, empties it.
  *
  * A turn goes to the assistant service, not the api, with a token the api
@@ -252,7 +252,9 @@ export function applyEvent(
     case "RUN_FINISHED":
       return endTurn(state);
     case "RUN_ERROR":
-      return endTurn(state, messageFor(event.code, event.message));
+      // The server words every run error for the user, and its code alone
+      // does not say which (a step or a length limit, for one).
+      return endTurn(state, event.message);
     default:
       return state;
   }
@@ -260,9 +262,8 @@ export function applyEvent(
 
 // ——— Refusals and errors, in the user's words ———
 
-/** One table for every way a message can fail: the token route's codes, the
- * assistant's refusals (plain HTTP, keyed by status) and the run's error
- * codes. */
+/** The ways a message can be refused before its turn runs: the token route's
+ * codes and the assistant's refusals (plain HTTP, keyed by status). */
 const MESSAGES: Record<string, string> = {
   assistant_disabled: "The assistant is not enabled on this platform.",
   user_not_verified: "Verify your email address to use the assistant.",
@@ -274,13 +275,14 @@ const MESSAGES: Record<string, string> = {
   "404": "This conversation is no longer available; start a new chat.",
   "409":
     "Another of your messages is still being answered; wait for it to finish.",
+  "422":
+    "The message is over 8 000 characters or malformed; shorten it and resend.",
+  "502": "The assistant could not reach the platform; try again.",
   "503": "The assistant has no model configured.",
-  timeout: "The answer took too long and was stopped.",
-  limit_reached: "This answer reached its step limit and was stopped.",
-  budget: "Your daily assistant budget is used up.",
-  context_full: "This conversation is full; start a new chat.",
-  provider: "The model provider failed; try again.",
 };
+
+/** The most unsaved file names a turn may carry. */
+const MAX_UNSAVED = 50;
 
 function messageFor(code: unknown, fallback: string): string {
   return (typeof code === "string" && MESSAGES[code]) || fallback;
@@ -395,11 +397,13 @@ async function readStream(
   }
 }
 
-async function runTurn(
+/** Posts the turn and returns its open stream; throws when the turn is
+ * refused before any stream opens. */
+async function openTurn(
   projectId: string,
   body: string,
   turn: AbortController,
-): Promise<void> {
+): Promise<ReadableStream<Uint8Array>> {
   let res: Response;
   try {
     res = await postTurn(projectId, body, turn.signal);
@@ -410,7 +414,14 @@ async function runTurn(
     res = await postTurn(projectId, body, turn.signal);
   }
   if (!res.body) throw new TurnRefused(res.status);
-  await readStream(res.body, turn);
+  return res.body;
+}
+
+async function readTurn(
+  stream: ReadableStream<Uint8Array>,
+  turn: AbortController,
+): Promise<void> {
+  await readStream(stream, turn);
   updateFromTurn(turn, (s) =>
     isStreaming(s)
       ? endTurn(s, "The connection closed before the answer finished.")
@@ -418,20 +429,23 @@ async function runTurn(
   );
 }
 
-/** Sends a message on the store's project. Ignored while a turn runs. */
+/** Sends a message on the store's project. Ignored while a turn runs.
+ * Resolves once the turn ends: false when the message was refused or
+ * ignored, so the caller can give its text back; true when its stream had
+ * opened or the turn was cancelled. */
 async function sendMessage(
   message: string,
   editor: AssistantEditor,
-): Promise<void> {
+): Promise<boolean> {
   const state = useStore.getState();
-  if (!scope || isStreaming(state)) return;
+  if (!scope || isStreaming(state)) return false;
   const projectId = scope.projectId;
   const turn = new AbortController();
   activeTurn = turn;
   const body = JSON.stringify({
     session_id: state.sessionId,
     message,
-    editor,
+    editor: { ...editor, unsaved: editor.unsaved.slice(0, MAX_UNSAVED) },
   });
   useStore.setState({
     messages: [
@@ -445,10 +459,20 @@ async function sendMessage(
       },
     ],
   });
-  try {
-    await runTurn(projectId, body, turn);
-  } catch (err) {
+  const fail = (err: unknown) =>
     updateFromTurn(turn, (s) => endTurn(s, errorMessage(err)));
+  try {
+    let stream: ReadableStream<Uint8Array>;
+    try {
+      stream = await openTurn(projectId, body, turn);
+    } catch (err) {
+      // Cancelled (New chat, another project, logout): nothing to give back.
+      if (turn.signal.aborted) return true;
+      fail(err);
+      return false;
+    }
+    await readTurn(stream, turn).catch(fail);
+    return true;
   } finally {
     if (turn === activeTurn) activeTurn = null;
   }
