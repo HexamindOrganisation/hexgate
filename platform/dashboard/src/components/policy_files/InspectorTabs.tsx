@@ -221,6 +221,8 @@ export function InspectorTabs({
       <div className="flex-1 overflow-hidden">
         {assistantEnabled && (
           <AssistantPane
+            // A draft belongs to its project: another project starts empty.
+            key={projectId}
             projectId={projectId}
             editor={editor}
             active={tab === "assistant"}

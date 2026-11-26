@@ -42,20 +42,32 @@ export function AssistantPane({
   const { state, streaming, send, newChat } = useAssistant({ projectId });
   const transcriptRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
+  // Where the user left the transcript: hiding it (display: none) resets
+  // its scroll position, so it is put back when the tab shows again.
+  const scrollTopRef = useRef(0);
 
   // Follow the answer as it streams, unless the user has scrolled up to read;
-  // on coming back to the tab, catch up with what streamed meanwhile.
+  // back on the tab, catch up with what streamed meanwhile.
   useEffect(() => {
     const el = transcriptRef.current;
     if (active && el && atBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [state.messages, active]);
+
+  // Back on the tab after scrolling up: return to where the user was.
+  useEffect(() => {
+    const el = transcriptRef.current;
+    if (active && el && !atBottomRef.current)
+      el.scrollTop = scrollTopRef.current;
+  }, [active]);
 
   return (
     <div className="h-full flex flex-col" hidden={!active}>
       <div
         ref={transcriptRef}
         onScroll={(e) => {
+          if (!active) return;
           const el = e.currentTarget;
+          scrollTopRef.current = el.scrollTop;
           atBottomRef.current =
             el.scrollHeight - el.scrollTop - el.clientHeight < 120;
         }}

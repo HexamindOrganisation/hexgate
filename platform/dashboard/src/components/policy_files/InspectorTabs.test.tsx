@@ -344,6 +344,40 @@ describe("InspectorTabs Assistant tab", () => {
     expect(screen.getByText("The cap is 1000.")).toBeInTheDocument();
   });
 
+  it("starts another project's chat with an empty composer", async () => {
+    stubAssistant(true);
+    const client = makeQueryClient();
+    // Both projects' config is cached, so the pane stays mounted.
+    for (const pid of ["p1", "p2"]) {
+      client.setQueryData(["assistant-config", pid], {
+        enabled: true,
+        mode: "read_write",
+        can_write: true,
+        verified: true,
+      });
+    }
+    const { rerender } = renderInspector({}, client);
+    await userEvent.click(screen.getByRole("button", { name: "Assistant" }));
+    await userEvent.type(screen.getByRole("textbox"), "for p1 only");
+    rerender(
+      <InspectorTabs
+        projectId="p2"
+        resolved={RESOLVED}
+        matrix={MATRIX}
+        lints={[]}
+        draft={null}
+        resolves
+        modular
+        previewing={false}
+        agentNames={[]}
+        inspectAgent="*"
+        onInspectAgentChange={noop}
+        editor={EDITOR}
+      />,
+    );
+    expect(screen.getByRole("textbox")).toHaveValue("");
+  });
+
   it("keeps an unsent draft across a switch to Lints", async () => {
     stubAssistant(true);
     renderInspector();

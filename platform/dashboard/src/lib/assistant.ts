@@ -430,8 +430,9 @@ async function readTurn(
 }
 
 /** Sends a message on the store's project. Ignored while a turn runs.
- * Resolves once the turn ends: true when its stream had opened, false when
- * the message was refused or ignored, so the caller can give its text back. */
+ * Resolves once the turn ends: false when the message was refused or
+ * ignored, so the caller can give its text back; true when its stream had
+ * opened or the turn was cancelled. */
 async function sendMessage(
   message: string,
   editor: AssistantEditor,
@@ -465,6 +466,8 @@ async function sendMessage(
     try {
       stream = await openTurn(projectId, body, turn);
     } catch (err) {
+      // Cancelled (New chat, another project, logout): nothing to give back.
+      if (turn.signal.aborted) return true;
       fail(err);
       return false;
     }

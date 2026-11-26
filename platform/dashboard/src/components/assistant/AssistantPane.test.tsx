@@ -185,6 +185,42 @@ describe("AssistantPane", () => {
     expect(screen.getByRole("textbox")).toHaveValue("");
   });
 
+  it("returns to where the user was when the tab shows again", () => {
+    stubTurns([]);
+    const { container, rerender } = renderWithProviders(
+      <AssistantPane projectId="p1" editor={EDITOR} />,
+    );
+    const transcript = transcriptOf(container);
+    stubSize(transcript);
+    transcript.scrollTop = 300;
+    fireEvent.scroll(transcript);
+    rerender(<AssistantPane projectId="p1" editor={EDITOR} active={false} />);
+    // The browser resets a hidden element's scroll position.
+    transcript.scrollTop = 0;
+    rerender(<AssistantPane projectId="p1" editor={EDITOR} />);
+    expect(transcript.scrollTop).toBe(300);
+  });
+
+  it("keeps a message cancelled by New chat out of the composer", async () => {
+    vi.spyOn(window, "fetch").mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/assistant/token")) {
+        return Response.json({ token: "t", expires_at: "x", can_write: true });
+      }
+      // The turn never answers; New chat aborts it.
+      return new Promise<Response>((_, reject) =>
+        init?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError")),
+        ),
+      );
+    });
+    renderWithProviders(<AssistantPane projectId="p1" editor={EDITOR} />);
+    await ask("never mind");
+    await userEvent.click(screen.getByRole("button", { name: /New chat/ }));
+    expect(screen.queryByText("never mind")).not.toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByRole("textbox")).toHaveValue("");
+  });
+
   it("starts a new chat", async () => {
     stubTurns([sseResponse({ type: "RUN_FINISHED" })]);
     renderWithProviders(<AssistantPane projectId="p1" editor={EDITOR} />);
