@@ -22,6 +22,7 @@ import { useActive } from "./active";
 import {
   api,
   ApiError,
+  type ChangeRead,
   type PolicyFileDraft,
   type PolicyFileRead,
   type PolicyMatrixCell,
@@ -49,6 +50,13 @@ function invalidateDerived(qc: ReturnType<typeof useQueryClient>, pid: string) {
   qc.invalidateQueries({ queryKey: ["policy-preview", pid] });
 }
 
+/** Refetch the files themselves, written outside this cache, and every read
+ * derived from them. */
+function invalidateFiles(qc: ReturnType<typeof useQueryClient>, pid: string) {
+  qc.invalidateQueries({ queryKey: filesKey(pid) });
+  invalidateDerived(qc, pid);
+}
+
 /** Every compose file in the project. Disabled while `projectId` is null so
  * pages can pass the resolved scope id directly. */
 export function usePolicyFiles(projectId: string | null) {
@@ -58,6 +66,32 @@ export function usePolicyFiles(projectId: string | null) {
     enabled: !!projectId,
     staleTime: 30_000,
   });
+}
+
+/** One applied change, read back whole. A change row never changes once
+ * written, so it is fetched once. */
+export function usePolicyChange(projectId: string, changeId: string) {
+  return useQuery<ChangeRead>({
+    queryKey: ["policy-change", projectId, changeId],
+    queryFn: () => api.getPolicyChange(projectId, changeId),
+    // A 404 is final: retry only transient errors.
+    retry: (n, err) => !(err instanceof ApiError && err.status < 500) && n < 2,
+    staleTime: Infinity,
+  });
+}
+
+/** Refetch the project's files, and every read derived from them, each time
+ * `changeId` names a change saved elsewhere (by the assistant), and once on
+ * mount when it names one already: the page may have been away while it
+ * landed. A clean editor buffer then shows the new text by itself. */
+export function useRefetchOnChange(
+  projectId: string | null,
+  changeId: string | null,
+) {
+  const qc = useQueryClient();
+  useEffect(() => {
+    if (projectId && changeId) invalidateFiles(qc, projectId);
+  }, [qc, projectId, changeId]);
 }
 
 /** Chip / cell colours for an engine matrix mode. */
@@ -230,10 +264,7 @@ export function useRenameFile(projectId: string) {
       await api.deletePolicyFile(projectId, oldName);
       return { oldName, newName, importers: importers.length };
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: filesKey(projectId) });
-      invalidateDerived(qc, projectId);
-    },
+    onSuccess: () => invalidateFiles(qc, projectId),
   });
 }
 

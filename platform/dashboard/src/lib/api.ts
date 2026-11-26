@@ -1077,6 +1077,11 @@ export const api = {
       `/v1/projects/${projectId}/policy/graph${qs({ role })}`,
     ),
 
+  getPolicyChange: (projectId: string, changeId: string) =>
+    request<ChangeRead>(
+      `/v1/projects/${projectId}/policy/changes/${encodeURIComponent(changeId)}`,
+    ),
+
   previewPolicy: (projectId: string, draft: PolicyFileDraft, agent?: string) =>
     request<PolicyPreviewResponse>(`/v1/projects/${projectId}/policy/preview`, {
       method: "POST",
@@ -1186,6 +1191,37 @@ export interface AssistantToken {
   token: string;
   expires_at: string;
   can_write: boolean;
+}
+
+/** One platform check of an applied change, as the api reports it. */
+export interface ChangeCheck {
+  id: string;
+  status: string;
+  detail?: string | null;
+}
+
+/** One file of an applied change; `before_content` is null for a file the
+ * change created. Mirror of platform/api schemas.py:ChangeFileOut. */
+export interface ChangeFile {
+  name: string;
+  before_content: string | null;
+  before_hash: string | null;
+  after_content: string;
+  after_hash: string;
+}
+
+/** One applied policy change, as stored: the fields of schemas.py:ChangeRead
+ * the dashboard reads. `effect` is the per-role diff computed before the
+ * save. */
+export interface ChangeRead {
+  id: string;
+  project_id: string;
+  session_id: string | null;
+  summary: string;
+  created_at: string;
+  files: ChangeFile[];
+  checks: ChangeCheck[];
+  effect: unknown;
 }
 
 /** The api's assistant routes: both take the session cookie, so a 401 is an

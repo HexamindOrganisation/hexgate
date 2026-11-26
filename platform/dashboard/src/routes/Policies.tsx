@@ -12,9 +12,11 @@ import {
   usePolicyFiles,
   usePolicyMatrix,
   usePolicyPreview,
+  useRefetchOnChange,
   useRenameFile,
   useResolvedPolicy,
 } from "@/lib/policy_files";
+import { useAssistantChanges } from "@/lib/assistant";
 import { useEmptyFolders } from "@/lib/empty_folders";
 import { composeAgentNames, referencesImport } from "@/lib/imports";
 import { baseName, ENTRY_FILE, isModular } from "@/lib/file_tree";
@@ -29,6 +31,7 @@ import {
 import { FileTree } from "@/components/policy_files/FileTree";
 import { EditorPane } from "@/components/policy_files/EditorPane";
 import { InspectorTabs } from "@/components/policy_files/InspectorTabs";
+import { AssistantChangeBar } from "@/components/assistant/AssistantChangeBar";
 
 const MAX_TABS = 6;
 
@@ -106,6 +109,26 @@ export function PoliciesPage() {
     },
     [openFile],
   );
+
+  // A new file's untouched (empty) buffer stops being a draft once a file of
+  // that name is stored, saved elsewhere (by the assistant): else the tab
+  // would show the empty buffer, unsaved, over the stored file. A buffer the
+  // user typed into keeps its edits. Render-phase, like the project reset.
+  const [knownFiles, setKnownFiles] = useState(files);
+  if (files !== knownFiles) {
+    setKnownFiles(files);
+    const known = new Set(knownFiles.map((f) => f.name));
+    const created = files.filter(
+      (f) => !known.has(f.name) && drafts[f.name] === "",
+    );
+    if (created.length) {
+      setDrafts((prev) => {
+        const next = { ...prev };
+        for (const f of created) delete next[f.name];
+        return next;
+      });
+    }
+  }
 
   // Empty folders live per-device (localStorage); creating a file under a
   // prefix reconciles it out of the cache automatically (see useEmptyFolders).
@@ -208,6 +231,11 @@ export function PoliciesPage() {
     setDraft(null);
     setDraftParses(true);
   }
+
+  // A change the assistant saved rewrites stored files: refetch them, and a
+  // clean buffer shows the new text. One with unsaved edits keeps them.
+  const assistantChanges = useAssistantChanges(projectId);
+  useRefetchOnChange(projectId, assistantChanges.at(-1)?.change_id ?? null);
 
   const debouncedDraft = useDebouncedValue(draft, 600);
   const draftActive = draft !== null;
@@ -370,6 +398,15 @@ export function PoliciesPage() {
                     );
                   })}
                 </div>
+                {active !== null && (
+                  <AssistantChangeBar
+                    key={projectId}
+                    projectId={projectId}
+                    file={active}
+                    storedHash={files.find((f) => f.name === active)?.text_hash}
+                    dirty={dirtyKeys.has(active)}
+                  />
+                )}
                 <div className="flex-1 overflow-hidden">
                   {active === null ? (
                     <div className="h-full grid place-items-center px-6 text-center">

@@ -2,6 +2,7 @@ import { memo, useEffect, useRef } from "react";
 import { defaultRehypePlugins, Streamdown } from "streamdown";
 import { Hexagon, RotateCcw } from "lucide-react";
 
+import { ChangeCard } from "@/components/assistant/ChangeCard";
 import { Composer } from "@/components/chat/Composer";
 import { ThinkingGoo } from "@/components/chat/ThinkingGoo";
 import {
@@ -80,7 +81,7 @@ export function AssistantPane({
         ) : (
           <div className="space-y-4">
             {state.messages.map((m) => (
-              <Message key={m.id} message={m} />
+              <Message key={m.id} message={m} projectId={projectId} />
             ))}
           </div>
         )}
@@ -114,8 +115,10 @@ export function AssistantPane({
 /** Memoised: a streamed token re-renders only the turn it lands in. */
 const Message = memo(function Message({
   message,
+  projectId,
 }: {
   message: AssistantMessage;
+  projectId: string;
 }) {
   if (message.role === "user") {
     return (
@@ -147,6 +150,9 @@ const Message = memo(function Message({
               {message.content}
             </Streamdown>
           </div>
+        )}
+        {turn?.change && (
+          <ChangeCard projectId={projectId} change={turn.change} />
         )}
         {turn?.streaming && !message.content && <ThinkingGoo />}
         {turn?.error && <p className="text-xs text-deny">{turn.error}</p>}

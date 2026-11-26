@@ -19,7 +19,9 @@ import userEvent from "@testing-library/user-event";
 
 import { PoliciesPage } from "./Policies";
 import { useActive } from "@/lib/active";
-import { renderWithProviders } from "@/test/render";
+import { resetAssistant } from "@/lib/assistant";
+import { makeQueryClient, renderWithProviders } from "@/test/render";
+import { sseResponse } from "@/test/sse";
 
 // The real editor is CodeMirror, which jsdom can't drive by keystroke. Swap it
 // for a plain controlled textarea so a test can dirty the buffer. No Policies
@@ -94,8 +96,11 @@ function stubFetch(routes: Record<string, unknown>): void {
       const path = (typeof input === "string" ? input : input.toString()).split(
         "?",
       )[0];
+      const route = routes[path];
+      // A function answers with its own response (a turn's stream).
+      if (typeof route === "function") return route();
       if (path in routes) {
-        return new Response(JSON.stringify(routes[path]), {
+        return new Response(JSON.stringify(route), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -334,5 +339,216 @@ describe("PoliciesPage", () => {
         expect(screen.getByLabelText("policy editor")).toHaveValue(P2_POLICY),
       { timeout: 3000 },
     );
+  });
+});
+
+describe("PoliciesPage after the assistant saves a change", () => {
+  const OLD = "import: [ caps.yaml ]\n";
+  const NEW = "import: [ caps.yaml ]\n# lowered by the assistant\n";
+  const SUMMARY = "Lower the refund cap";
+
+  function stored(name: string, content: string, hash: string) {
+    return { ...file(name, content), text_hash: hash };
+  }
+
+  /** The base routes with the assistant on, policy.yaml at `OLD`, and a
+   * turn that saves `name` as `NEW` (hash "h-new"), policy.yaml by default.
+   * Returns the routes, so a test can change what the files read answers. */
+  function stubAssistant(name = "policy.yaml"): Record<string, unknown> {
+    const routes: Record<string, unknown> = {
+      ...baseRoutes(),
+      [`/v1/projects/${PID}/policy-files`]: [
+        stored("policy.yaml", OLD, "h-old"),
+        stored("caps.yaml", "tools: {}\n", "h-caps"),
+      ],
+      [`/v1/projects/${PID}/assistant/config`]: {
+        enabled: true,
+        mode: "read_write",
+        can_write: true,
+        verified: true,
+      },
+      [`/v1/projects/${PID}/assistant/token`]: {
+        token: "t",
+        expires_at: "x",
+        can_write: true,
+      },
+    };
+    routes[`/v1/assistant/projects/${PID}/turns`] = () => {
+      // The save lands on the api before the event reaches the page.
+      const before = routes[`/v1/projects/${PID}/policy-files`] as {
+        name: string;
+      }[];
+      routes[`/v1/projects/${PID}/policy-files`] = [
+        ...before.filter((f) => f.name !== name),
+        stored(name, NEW, "h-new"),
+      ];
+      return sseResponse(
+        {
+          type: "CUSTOM",
+          name: "change",
+          value: {
+            change_id: "chg_1",
+            summary: SUMMARY,
+            files: [
+              {
+                name,
+                before_hash: before.some((f) => f.name === name)
+                  ? "h-old"
+                  : null,
+                after_hash: "h-new",
+              },
+            ],
+            checks: [{ id: "yaml", status: "pass" }],
+          },
+        },
+        { type: "RUN_FINISHED" },
+      );
+    };
+    stubFetch(routes);
+    return routes;
+  }
+
+  async function askForChange() {
+    await userEvent.type(
+      // The tab appears once the assistant's config is read.
+      await screen.findByLabelText("Message the agent", {}, { timeout: 5000 }),
+      "lower it{Enter}",
+    );
+  }
+
+  beforeEach(() => {
+    act(() => {
+      useActive.setState({ activeOrgId: ORG.id, activeProjectId: PID });
+    });
+  });
+
+  afterEach(() => {
+    resetAssistant();
+    vi.restoreAllMocks();
+  });
+
+  it("refetches the files and a clean buffer shows the new text", async () => {
+    stubAssistant();
+    renderWithProviders(<PoliciesPage />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("policy editor")).toHaveValue(OLD),
+    );
+    expect(screen.queryByText("Changed by the assistant")).toBeNull();
+
+    await askForChange();
+    await waitFor(() =>
+      expect(screen.getByLabelText("policy editor")).toHaveValue(NEW),
+    );
+    expect(screen.getByText("Changed by the assistant")).toBeInTheDocument();
+    expect(
+      screen.getByText(SUMMARY, { selector: "[title]" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps unsaved edits and shows no bar on that file", async () => {
+    stubAssistant();
+    const qc = makeQueryClient();
+    renderWithProviders(<PoliciesPage />, { client: qc });
+    const editor = await screen.findByLabelText("policy editor");
+    await waitFor(() => expect(editor).toHaveValue(OLD));
+    fireEvent.change(editor, { target: { value: "# mine\n" } });
+
+    await askForChange();
+    // The event has been read: the page holds the files the change left.
+    await waitFor(() =>
+      expect(
+        qc
+          .getQueryData<
+            { name: string; text_hash: string }[]
+          >(["policy-files", PID])
+          ?.find((f) => f.name === "policy.yaml")?.text_hash,
+      ).toBe("h-new"),
+    );
+    expect(screen.getByLabelText("policy editor")).toHaveValue("# mine\n");
+    expect(screen.queryByText("Changed by the assistant")).toBeNull();
+  });
+
+  it("hides the bar once the file no longer holds the assistant's text", async () => {
+    const routes = stubAssistant();
+    // One cache for both visits, as in the app: the return must refetch.
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
+    });
+    const { unmount } = renderWithProviders(<PoliciesPage />, { client: qc });
+    await askForChange();
+    await screen.findByText("Changed by the assistant");
+    unmount();
+
+    // Saved again since, by someone else: the stored text is no longer the
+    // one the change left.
+    routes[`/v1/projects/${PID}/policy-files`] = [
+      stored("policy.yaml", "# theirs\n", "h-theirs"),
+    ];
+    renderWithProviders(<PoliciesPage />, { client: qc });
+    await waitFor(() =>
+      expect(screen.getByLabelText("policy editor")).toHaveValue("# theirs\n"),
+    );
+    expect(screen.queryByText("Changed by the assistant")).toBeNull();
+  });
+
+  it("drops an empty new file's buffer once the assistant saves it", async () => {
+    stubAssistant("extra.yaml");
+    renderWithProviders(<PoliciesPage />);
+    await waitFor(() => expect(screen.getByText("active")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /new file/i }));
+    await userEvent.type(
+      screen.getByPlaceholderText(/e\.g\./i),
+      "extra.yaml{Enter}",
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText("policy editor")).toHaveValue(""),
+    );
+
+    await askForChange();
+    await waitFor(() =>
+      expect(screen.getByLabelText("policy editor")).toHaveValue(NEW),
+    );
+    // Saved, so not unsaved: back on the tab, the stored text shows.
+    await waitFor(() =>
+      expect(screen.queryByTitle("Unsaved changes")).toBeNull(),
+    );
+    expect(screen.getByText("Changed by the assistant")).toBeInTheDocument();
+  });
+
+  it("drops an empty new file's buffer saved while another tab shows", async () => {
+    stubAssistant("extra.yaml");
+    renderWithProviders(<PoliciesPage />);
+    await waitFor(() => expect(screen.getByText("active")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /new file/i }));
+    await userEvent.type(
+      screen.getByPlaceholderText(/e\.g\./i),
+      "extra.yaml{Enter}",
+    );
+    await waitFor(() =>
+      expect(screen.getByTitle("extra.yaml")).toBeInTheDocument(),
+    );
+    await userEvent.click(screen.getByText("policy.yaml"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("policy editor")).toHaveValue(OLD),
+    );
+
+    await askForChange();
+    await waitFor(() =>
+      expect(screen.queryByTitle("Unsaved changes")).toBeNull(),
+    );
+    // The editor's tab: the change card names the file too.
+    await userEvent.click(screen.getAllByTitle("extra.yaml")[0]);
+    await waitFor(() =>
+      expect(screen.getByLabelText("policy editor")).toHaveValue(NEW),
+    );
+  });
+
+  it("closes the bar when dismissed", async () => {
+    stubAssistant();
+    renderWithProviders(<PoliciesPage />);
+    await askForChange();
+    await screen.findByText("Changed by the assistant");
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByText("Changed by the assistant")).toBeNull();
   });
 });

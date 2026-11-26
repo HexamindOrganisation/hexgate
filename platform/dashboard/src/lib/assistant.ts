@@ -17,6 +17,7 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 
 import type {
   ChatMessageData,
@@ -24,7 +25,13 @@ import type {
   ChatTurn,
 } from "@/components/chat/types";
 import { useActive } from "./active";
-import { ApiError, assistantApi, send, UnauthenticatedError } from "./api";
+import {
+  ApiError,
+  assistantApi,
+  send,
+  UnauthenticatedError,
+  type ChangeCheck,
+} from "./api";
 import { randomId } from "./utils";
 
 export type { AssistantConfig } from "./api";
@@ -36,7 +43,7 @@ export interface AssistantChange {
   change_id: string;
   summary: string;
   files: { name: string; before_hash: string | null; after_hash: string }[];
-  checks: { id: string; status: string; detail?: string | null }[];
+  checks: ChangeCheck[];
 }
 
 export type AssistantEvent =
@@ -488,6 +495,38 @@ export function useAssistantConfig(projectId: string | null) {
     enabled: !!projectId,
     staleTime: 30_000,
   });
+}
+
+/** The changes the chat's turns saved, oldest first. */
+export function changesOf(messages: AssistantMessage[]): AssistantChange[] {
+  return messages.flatMap((m) => (m.turn?.change ? [m.turn.change] : []));
+}
+
+/** The latest of `changes` that wrote `name`, with the hash it left. */
+export function lastChangeTo(
+  changes: AssistantChange[],
+  name: string,
+): { change: AssistantChange; afterHash: string } | null {
+  for (let i = changes.length - 1; i >= 0; i--) {
+    const file = changes[i].files.find((f) => f.name === name);
+    if (file) return { change: changes[i], afterHash: file.after_hash };
+  }
+  return null;
+}
+
+/** The changes the chat has saved on `projectId`, oldest first. None while
+ * the store holds no chat, or another project's. Compared item by item, so a
+ * streamed token does not re-render the caller. */
+export function useAssistantChanges(
+  projectId: string | null,
+): AssistantChange[] {
+  return useStore(
+    useShallow((s) =>
+      projectId !== null && scope?.projectId === projectId
+        ? changesOf(s.messages)
+        : [],
+    ),
+  );
 }
 
 /** The chat for the active org's project. Another org or project empties it. */

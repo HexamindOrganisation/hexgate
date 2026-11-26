@@ -1,0 +1,54 @@
+import { useState } from "react";
+import { Hexagon, X } from "lucide-react";
+
+import { lastChangeTo, useAssistantChanges } from "@/lib/assistant";
+
+/**
+ * The editor's note that the open file holds what the assistant's latest
+ * change to it wrote, with that change's summary. Shown only while the stored
+ * text is still the change's (its hash) and the buffer has no unsaved edits;
+ * a buffer with edits keeps them, and says nothing here. Mount it keyed by
+ * project, so the bars closed in one project do not carry over.
+ */
+export function AssistantChangeBar({
+  projectId,
+  file,
+  storedHash,
+  dirty,
+}: {
+  projectId: string;
+  /** The open file's name. */
+  file: string;
+  /** The open file's stored `text_hash`; undefined while it is unsaved. */
+  storedHash: string | undefined;
+  dirty: boolean;
+}) {
+  const changes = useAssistantChanges(projectId);
+  // The bars the user closed, as "change_id:file".
+  const [closed, setClosed] = useState<string[]>([]);
+  const last = lastChangeTo(changes, file);
+  if (!last || dirty || storedHash !== last.afterHash) return null;
+  const key = `${last.change.change_id}:${file}`;
+  if (closed.includes(key)) return null;
+  return (
+    <div className="flex shrink-0 items-center gap-2 border-y border-border/60 bg-action/10 px-3 py-1 text-[11px]">
+      <Hexagon className="size-3 shrink-0 text-action" />
+      <span className="shrink-0 font-medium">Changed by the assistant</span>
+      <span
+        className="truncate text-muted-foreground"
+        title={last.change.summary}
+      >
+        {last.change.summary}
+      </span>
+      <button
+        type="button"
+        onClick={() => setClosed((prev) => [...prev, key])}
+        title="Dismiss"
+        aria-label="Dismiss"
+        className="ml-auto shrink-0 rounded p-0.5 hover:bg-accent"
+      >
+        <X className="size-3" />
+      </button>
+    </div>
+  );
+}
