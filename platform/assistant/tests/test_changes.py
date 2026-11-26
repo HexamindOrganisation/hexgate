@@ -1,18 +1,20 @@
 """apply_change through a whole turn: the route, the agent and a fake MCP
 server whose `policy_apply` answers as the platform's does."""
 
+import asyncio
 import json
 
 import pytest
 from fastmcp.exceptions import ToolError
 from pydantic_ai.messages import (
     ModelMessage,
+    ModelRequest,
     ModelResponse,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
 )
-from pydantic_ai.models.function import AgentInfo
+from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from hexgate_assistant import changes, runner
 from hexgate_assistant.agent import INSTRUCTIONS
@@ -23,12 +25,18 @@ from hexgate_assistant.changes import (
     NO_ANSWER,
     NO_REPLY,
     NO_SCOPE,
+    NO_TIME,
     READ_FIRST,
-    call_summary,
-    read_hash,
+    STALE,
+    TOO_LARGE_TO_EDIT,
+    UNREADABLE,
+    Read,
+    reads_in,
+    redact,
     redact_calls,
 )
 from hexgate_assistant.context import definition_tokens, estimate_tokens
+from hexgate_assistant.deps import Applied
 from hexgate_assistant.models import AssistantMessage
 from tests.fake_mcp import serve
 from tests.test_runner import (
@@ -37,12 +45,16 @@ from tests.test_runner import (
 from tests.test_runner import (
     GRAPH,
     PROJECT,
+    TURN_TEST_SECONDS,
+    TURNS,
     kinds,
     platform,
     rows,
     scripted,
     turn,
 )
+
+BODY = {"session_id": None, "message": "hi"}
 
 # In every file the model writes: found nowhere it must not be.
 SENTINEL = "SENTINEL-c0ffee-7d1f"
@@ -322,7 +334,7 @@ async def test_when_our_limit_ends_first_then_the_server_text_never_reaches_the_
     assert len(apply_calls(mcp)) == 1
     text = answer(events)
     assert NO_ANSWER not in text
-    assert text == f"saw: {NO_REPLY} {AFTER_SILENCE}"
+    assert text == f"saw: {NO_REPLY}. {AFTER_SILENCE}"
 
 
 async def test_when_a_change_returns_then_no_later_request_or_stored_row_has_its_files(
@@ -359,17 +371,21 @@ async def test_when_a_change_returns_then_no_later_request_or_stored_row_has_its
     assert SENTINEL in apply_calls(mcp)[0]["files"][0]["content"]
 
 
-async def test_when_the_turn_ends_on_the_call_then_the_stored_row_has_no_files(
-    settings, mcp, key, db, monkeypatch
+async def test_when_the_server_stops_during_the_apply_then_the_stored_row_has_no_files(
+    settings, mcp, key, db
 ):
-    # The deadline cuts the apply while it runs: no request follows it, so
-    # only the store's own pass can take the contents out.
-    monkeypatch.setattr(runner, "TURN_DEADLINE", runner.TURN_DEADLINE / 30)  # 10 s
+    # The shutdown cancels the turn while the apply runs: no request follows
+    # it, so only the store's own pass can take the file text out.
     mcp.delays["policy_apply"] = 30
+    async with platform(settings, mcp, key, scripted(applying())) as (client, turns):
+        client.headers["Authorization"] = f"Bearer {key.mint(scope=APPLY_SCOPE_TOKEN)}"
+        response = asyncio.create_task(client.post(TURNS, json=BODY))
+        async with asyncio.timeout(TURN_TEST_SECONDS):
+            while not apply_calls(mcp):
+                await asyncio.sleep(0.05)
+    # Leaving the block ran the app's shutdown.
+    response.cancel()
 
-    events = await apply_turn(settings, mcp, key, applying())
-
-    assert events[-1]["code"] == "timeout"
     stored = [m for r in await rows(db, AssistantMessage) for m in r.content]
     calls = [
         p["args"]
@@ -405,10 +421,66 @@ async def test_when_apply_change_streams_then_the_browser_gets_names_only(
         "CUSTOM",
         "TOOL_CALL_RESULT",
     ]
-    assert json.loads(events[start + 1]["delta"]) == {
-        "files": ["caps/refund.yaml", "caps/new.yaml"],
-        "summary": "lower the refund cap",
-    }
+    assert json.loads(events[start + 1]["delta"]) == REDACTED
+
+
+async def stored_text(db) -> str:
+    return json.dumps([r.content for r in await rows(db, AssistantMessage)])
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        # Imitating a redacted call, file text included.
+        ToolCallPart("apply_change", {**ARGS, "change_id": None}, "a1"),
+        # A name close to the tool's: refused as unknown, its files carried.
+        ToolCallPart("apply_changes", ARGS, "a1"),
+    ],
+)
+async def test_when_a_call_carries_files_under_any_shape_then_they_go_nowhere(
+    settings, mcp, key, db, call
+):
+    events = await apply_turn(settings, mcp, key, script(READ, call))
+
+    assert SENTINEL not in json.dumps(events)
+    assert SENTINEL not in await stored_text(db)
+
+
+async def test_when_the_tool_name_arrives_in_pieces_then_the_browser_gets_names_only(
+    settings, mcp, key, db
+):
+    mcp.results["policy_apply"] = APPLIED
+    requests = 0
+
+    async def stream(messages: list[ModelMessage], _info: AgentInfo):
+        nonlocal requests
+        requests += 1
+        if requests == 1:
+            yield {
+                0: DeltaToolCall(
+                    name="policy_read_file",
+                    json_args=READ.args_as_json_str(),
+                    tool_call_id="r0",
+                )
+            }
+        elif requests == 2:
+            yield {0: DeltaToolCall(name="apply", tool_call_id="a1")}
+            yield {0: DeltaToolCall(name="_change", json_args=json.dumps(ARGS))}
+        else:
+            yield "done"
+
+    async with platform(settings, mcp, key, FunctionModel(stream_function=stream)) as (
+        client,
+        turns,
+    ):
+        client.headers["Authorization"] = f"Bearer {key.mint(scope=APPLY_SCOPE_TOKEN)}"
+        events = await turn(client, turns)
+
+    assert len(apply_calls(mcp)) == 1
+    assert SENTINEL not in json.dumps(events)
+    assert SENTINEL not in await stored_text(db)
+    shown = [json.loads(e["delta"]) for e in events if e["type"] == "TOOL_CALL_ARGS"]
+    assert shown[-1] == {"change_id": None, "files": NAMES, "summary": ARGS["summary"]}
 
 
 async def test_when_a_change_was_applied_then_the_next_turn_names_it(
@@ -450,23 +522,44 @@ async def test_when_turns_run_then_the_prefix_counts_apply_change(settings, mcp,
     ) + definition_tokens(definitions)
 
 
+NAMES = ["caps/refund.yaml", "caps/new.yaml"]
+REDACTED = {"change_id": None, "files": NAMES, "summary": "lower the refund cap"}
+
+
 @pytest.mark.parametrize(
-    ("args", "expected"),
+    ("tool", "args", "expected"),
     [
+        ("apply_change", ARGS, REDACTED),
+        # Imitating a redacted call: its change_id is never kept.
+        ("apply_change", {**ARGS, "change_id": "chg_fake"}, REDACTED),
+        # Another name, the same shape.
+        ("apply_changes", ARGS, {"files": NAMES, "summary": "lower the refund cap"}),
         (
-            ARGS,
-            {
-                "files": ["caps/refund.yaml", "caps/new.yaml"],
-                "summary": "lower the refund cap",
-            },
+            "policy_check",
+            {"project_id": "p", "drafts": FILES},
+            {"project_id": "p", "drafts": NAMES},
         ),
-        ({"INVALID_JSON": "{"}, {"files": [], "summary": ""}),
-        ({"files": "x", "summary": 3}, {"files": [], "summary": ""}),
-        ({"files": [{"content": "c"}, "y"]}, {"files": [], "summary": ""}),
+        # Cut short: whole files, for all anyone can tell.
+        (
+            "apply_change",
+            {"INVALID_JSON": '{"files": [{"content": "x'},
+            {**REDACTED, "files": [], "summary": ""},
+        ),
     ],
 )
-def test_call_summary_happy_path(args, expected):
-    assert call_summary(args) == expected
+def test_redact_happy_path(tool, args, expected):
+    assert redact(tool, args) == expected
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"project_id": "p", "name": "x"},
+        {"change_id": "chg_1", "files": NAMES, "summary": "s"},
+    ],
+)
+def test_when_no_file_text_is_carried_then_redact_keeps_the_arguments(args):
+    assert redact("apply_change", args) is args
 
 
 def test_redact_calls_happy_path():
@@ -477,14 +570,13 @@ def test_redact_calls_happy_path():
     )
     read = ModelResponse(parts=[ToolCallPart("policy_read_file", {"name": "x"}, "r")])
 
-    once = redact_calls([applied, unanswered, read], {"a1": "chg_1"})
-    # A later request (or turn) without the id map keeps the first answer.
-    twice = redact_calls(once, {})
+    once = redact_calls([applied, unanswered, read], Applied("chg_1", "a1"))
+    # A later request (or turn), which knows no applied call, keeps them.
+    twice = redact_calls(once, None)
 
-    names = {"files": ["caps/refund.yaml", "caps/new.yaml"], "summary": ARGS["summary"]}
     assert [p.args for m in twice for p in m.parts] == [
-        {"change_id": "chg_1", **names},
-        {"change_id": None, **names},
+        {**REDACTED, "change_id": "chg_1"},
+        REDACTED,
         {"name": "x"},
     ]
     assert twice[2] is read
@@ -544,30 +636,69 @@ async def test_when_a_change_was_applied_then_the_next_turn_reads_again_first(
     assert len(change_events(first)) == len(change_events(second)) == 1
 
 
-async def test_when_a_file_is_saved_mid_turn_then_the_reads_stop_at_the_attempt_cap(
+async def test_when_a_file_is_saved_mid_turn_then_the_apply_after_the_read_is_stale(
     settings, mcp, key
 ):
-    # Saved after the turn began: every read now differs from the snapshot.
+    # Saved after the turn began: this turn's read differs from the snapshot.
     mcp.results["policy_read_file"] = read_result("h-later")
-    model = script(*[p for n in (1, 2, 3, 4) for p in (READ, apply_call(n))])
 
-    events = await apply_turn(settings, mcp, key, model)
+    events = await apply_turn(
+        settings, mcp, key, script(READ, apply_call(1), apply_call(2))
+    )
 
     assert apply_calls(mcp) == []
-    assert answer(events) == f"saw: {ATTEMPT_LIMIT}"
+    # Writing ended: the second call gets the same answer, still no call.
+    assert answer(events) == f"saw: {STALE.format(files='caps/refund.yaml')}"
 
 
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        (read_result("h1"), ("caps/refund.yaml", "h1")),
-        ("file too large for the assistant", None),
-        (json.dumps({"name": "m", "text_hash": "h", "tier": "boundary"}), None),
-        (json.dumps({"name": "x"}), None),
-    ],
-)
-def test_read_hash_happy_path(text, expected):
-    assert read_hash(text) == expected
+async def test_when_a_file_is_too_large_to_read_then_it_is_too_large_to_edit(
+    settings, mcp, key
+):
+    mcp.results["policy_read_file"] = json.dumps(
+        {"name": "caps/refund.yaml", "content": "x" * 70_000, "text_hash": "h-refund"}
+    )
+
+    events = await apply_turn(settings, mcp, key, applying())
+
+    assert apply_calls(mcp) == []
+    assert (
+        answer(events) == f"saw: {TOO_LARGE_TO_EDIT.format(files='caps/refund.yaml')}"
+    )
+
+
+async def test_when_too_little_of_the_turn_is_left_then_the_apply_does_not_start(
+    settings, mcp, key, monkeypatch
+):
+    # 30 s in all: less than an apply may take (APPLY_START_SECONDS).
+    monkeypatch.setattr(runner, "TURN_DEADLINE", runner.TURN_DEADLINE / 10)
+
+    events = await apply_turn(settings, mcp, key, applying())
+
+    assert apply_calls(mcp) == []
+    assert answer(events) == f"saw: {NO_TIME}"
+
+
+def test_reads_in_happy_path():
+    def read(call_id: str, args: dict, result: str) -> list:
+        return [
+            ModelResponse(parts=[ToolCallPart("policy_read_file", args, call_id)]),
+            ModelRequest(parts=[ToolReturnPart("policy_read_file", result, call_id)]),
+        ]
+
+    messages = [
+        *read("r1", {"name": "caps/refund.yaml"}, read_result("h1")),
+        *read("r2", {"name": "big.yaml"}, "file too large for the assistant (…)"),
+        # A module (it has a tier) and a refusal: not reads of a file.
+        *read("r3", {"name": "m.yaml", "tier": "boundary"}, read_result("hm")),
+        *read("r4", {"name": "gone.yaml"}, "no policy file 'gone.yaml'"),
+        # This turn starts here: a later read of the same file wins.
+        *read("r5", {"name": "caps/refund.yaml"}, read_result("h2")),
+    ]
+
+    assert reads_in(messages, turn_start=8) == {
+        "caps/refund.yaml": Read("h2", this_turn=True),
+        "big.yaml": Read(None, this_turn=False),
+    }
 
 
 async def test_when_the_api_refuses_the_files_then_their_contents_are_not_echoed(
@@ -614,3 +745,28 @@ def test_refusal_text_happy_path():
     assert changes._refusal_text(ExceptionGroup("g", [refusal])) == "409 conflict: {}"
     assert changes._refusal_text(ExceptionGroup("g", [refusal, OSError()])) is None
     assert changes._refusal_text(TimeoutError()) is None
+
+
+async def test_when_an_applied_answer_cannot_be_read_then_the_change_may_be_saved(
+    settings, mcp, key
+):
+    mcp.results["policy_apply"] = json.dumps({"applied": True})
+
+    events = await apply_turn(settings, mcp, key, applying(times=2))
+
+    assert len(apply_calls(mcp)) == 1
+    assert change_events(events) == []
+    assert answer(events) == f"saw: {UNREADABLE}. {AFTER_SILENCE}"
+
+
+async def test_when_failed_checks_run_long_then_the_cut_offers_no_narrower_call(
+    settings, mcp, key
+):
+    detail = "x" * 40_000
+    mcp.results["policy_apply"] = FAILED.replace('"bad"', json.dumps(detail))
+
+    events = await apply_turn(settings, mcp, key, applying())
+
+    text = answer(events)
+    assert "bytes of check details cut" in text
+    assert "narrower" not in text

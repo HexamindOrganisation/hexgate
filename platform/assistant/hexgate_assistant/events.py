@@ -15,11 +15,9 @@ from pydantic_ai.messages import (
     TextPart,
     TextPartDelta,
     ToolCallPart,
-    ToolCallPartDelta,
 )
 
-from hexgate_assistant.changes import TOOL_NAME as APPLY_TOOL
-from hexgate_assistant.changes import call_summary, redact_retry
+from hexgate_assistant.changes import redact, redact_retry
 from hexgate_assistant.context import keep_ends
 
 Event = dict[str, Any]
@@ -62,11 +60,9 @@ class EventTranslator:
         # index in the model's response.
         self._texts: dict[int, str] = {}
         # The tool call id of each call being streamed, by the same index.
+        # Its arguments are held until the call is complete: only then can
+        # they be told apart from whole files (see `changes.redact`).
         self._calls: dict[int, str] = {}
-        # The indexes of `apply_change` calls: their arguments carry whole
-        # files, so the browser is sent only their names and summary, once
-        # the call is complete.
-        self._names_only: set[int] = set()
 
     def translate(self, event: AgentStreamEvent) -> Iterator[Event]:
         if isinstance(event, PartStartEvent):
@@ -97,34 +93,19 @@ class EventTranslator:
                 "toolCallId": part.tool_call_id,
                 "toolCallName": part.tool_name,
             }
-            if part.tool_name == APPLY_TOOL:
-                self._names_only.add(event.index)
-            elif part.args:
-                # Streamed arguments arrive as raw text, possibly cut short.
-                args = (
-                    part.args if isinstance(part.args, str) else part.args_as_json_str()
-                )
-                yield _args(part.tool_call_id, args)
 
     def _delta(self, event: PartDeltaEvent) -> Iterator[Event]:
         delta = event.delta
         if isinstance(delta, TextPartDelta) and event.index in self._texts:
             if delta.content_delta:
                 yield _text(self._texts[event.index], delta.content_delta)
-        elif isinstance(delta, ToolCallPartDelta) and event.index in self._calls:
-            if delta.args_delta and event.index not in self._names_only:
-                args = delta.args_delta
-                text = args if isinstance(args, str) else json.dumps(args)
-                yield _args(self._calls[event.index], text)
 
     def _end(self, event: PartEndEvent) -> Iterator[Event]:
         if (message_id := self._texts.pop(event.index, None)) is not None:
             yield {"type": "TEXT_MESSAGE_END", "messageId": message_id}
         elif (call_id := self._calls.pop(event.index, None)) is not None:
-            if event.index in self._names_only and isinstance(event.part, ToolCallPart):
-                self._names_only.discard(event.index)
-                summary = call_summary(event.part.args_as_dict())
-                yield _args(call_id, json.dumps(summary))
+            if isinstance(event.part, ToolCallPart) and event.part.args:
+                yield _args(call_id, _shown_args(event.part))
             yield {"type": "TOOL_CALL_END", "toolCallId": call_id}
 
     def _result(self, event: FunctionToolResultEvent) -> Event:
@@ -140,6 +121,16 @@ class EventTranslator:
             ),
             "role": "tool",
         }
+
+
+def _shown_args(part: ToolCallPart) -> str:
+    """A complete call's arguments as the browser is sent them: as the model
+    wrote them (raw text, possibly cut short), or without file text."""
+    args = part.args_as_dict()
+    shown = redact(part.tool_name, args)
+    if shown is not args:
+        return json.dumps(shown)
+    return part.args if isinstance(part.args, str) else part.args_as_json_str()
 
 
 def _text(message_id: str, delta: str) -> Event:

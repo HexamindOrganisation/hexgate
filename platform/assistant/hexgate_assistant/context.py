@@ -83,23 +83,26 @@ WHOLE_RESULT_TOOLS = frozenset({"policy_reference", "policy_read_file"})
 WHOLE_RESULT_BYTES = 64 * 1024
 
 
-def cap_tool_result(tool: str, text: str) -> str:
-    """A tool result as the model receives it."""
+# How a policy file refused for its size is answered: the start of it.
+TOO_LARGE = "file too large for the assistant"
+# What a result cut short says in its middle, by default.
+NARROWER = (
+    "\n[… {cut} bytes cut from the middle of this result: call the tool "
+    "again with a narrower request to read them …]\n"
+)
+
+
+def cap_tool_result(tool: str, text: str, marker: str = NARROWER) -> str:
+    """A tool result as the model receives it; `marker` marks a cut."""
     size = _whole_result_size(tool, text)
     if tool in WHOLE_RESULT_TOOLS and size <= WHOLE_RESULT_BYTES:
         return text
     if tool == "policy_read_file":
         return (
-            f"file too large for the assistant (over "
-            f"{WHOLE_RESULT_BYTES // 1024} KiB: {size // 1024} KiB); "
-            "edit it in the editor"
+            f"{TOO_LARGE} (over {WHOLE_RESULT_BYTES // 1024} KiB: "
+            f"{size // 1024} KiB); edit it in the editor"
         )
-    return keep_ends(
-        text,
-        TOOL_RESULT_TOKENS * BYTES_PER_TOKEN,
-        "\n[… {cut} bytes cut from the middle of this result: call the tool "
-        "again with a narrower request to read them …]\n",
-    )
+    return keep_ends(text, TOOL_RESULT_TOKENS * BYTES_PER_TOKEN, marker)
 
 
 def _whole_result_size(tool: str, text: str) -> int:

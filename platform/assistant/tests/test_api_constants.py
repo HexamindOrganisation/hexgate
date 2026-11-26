@@ -6,10 +6,11 @@ from pathlib import Path
 
 from hexgate_assistant.auth import ACCESS_TOKEN_TYPE
 from hexgate_assistant.changes import (
-    _SERVER_PREFIX,
     APPLY_CALL_SECONDS,
     APPLY_TIMEOUT_SECONDS,
+    CONFLICT_PREFIX,
     NO_ANSWER,
+    SERVER_PREFIX,
 )
 from hexgate_assistant.context import TRUNCATED_MARKER
 
@@ -54,4 +55,13 @@ def test_server_prefix_happy_path():
     # The platform's MCP server's own test pins the prefix its SDK puts on
     # every tool error; the copy here must match it.
     pinned = (MCP.parent / "tests" / "test_policy_apply.py").read_text()
-    assert f'f"{_SERVER_PREFIX}' in pinned
+    assert f'f"{SERVER_PREFIX}' in pinned
+
+
+def test_conflict_prefix_happy_path():
+    # The MCP server words a refusal "<status> <reason>: <detail>", the
+    # reason from TOOL_ERRORS.
+    api = MCP / "api.py"
+    reasons = ast.literal_eval(_api_constant(api, "TOOL_ERRORS"))
+    assert CONFLICT_PREFIX == f"409 {reasons[409]}: "
+    assert 'f"{response.status_code} {reason}: {_detail(response)}"' in api.read_text()

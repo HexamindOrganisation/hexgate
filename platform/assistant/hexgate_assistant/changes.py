@@ -1,20 +1,21 @@
 """`apply_change`: the model's one write tool.
 
-The model sends whole files, a summary and samples; our code adds each
-file's base hash from the turn-start snapshot and calls the MCP server's
-`policy_apply`, which runs every platform check and saves only if all of
-them pass. The model is never offered `policy_apply` itself, so the limits
-below cannot be stepped around.
+The model sends whole files, a summary and samples; our code calls the MCP
+server's `policy_apply` with each existing file's base hash, the hash of the
+model's latest read of it, and the platform runs every check and saves only
+if all of them pass. The model is never offered `policy_apply` itself, so
+the limits below cannot be stepped around.
 
-Per turn: at most `MAX_ATTEMPTS` calls and one applied change. A stale
-answer (a file changed since the turn began) or an answer that never came
-ends writing for the turn, since a retry would send the same hashes.
+Per turn: at most `MAX_ATTEMPTS` calls and one applied change. A file read
+before someone saved it again is refused without a call, so a whole-file
+rewrite never undoes that save; a file that changed after this turn began,
+a 409 or an answer that never came ends writing for the turn.
 """
 
 import json
 import logging
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from fastmcp.exceptions import ToolError
@@ -30,25 +31,26 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
-from hexgate_assistant.context import call_text, cap_tool_result
-from hexgate_assistant.deps import TurnDeps, TurnWrites
+from hexgate_assistant.context import TOO_LARGE, call_text, cap_tool_result
+from hexgate_assistant.deps import Applied, TurnDeps, TurnWrites
 
 logger = logging.getLogger(__name__)
 
 TOOL_NAME = "apply_change"
 READ_TOOL = "policy_read_file"
-APPLY_SCOPE = "policy:apply"
 MAX_ATTEMPTS = 3
 
 # The MCP tool's own limit on its call to the API (copied from
 # hexgate_mcp/tools/policy_apply.py, since this package never imports it).
 APPLY_TIMEOUT_SECONDS = 30.0
 # Ours on the MCP call, above the server's: the server's limit must end
-# first, so a slow apply comes back as its "failed to answer" while the API
-# may still commit. Ours ending first, or at the same moment, would report a
-# change the API then saves as a plain failure. The margin covers the
-# server's connect phase, which httpx times apart from the read.
+# first, so a slow apply comes back as its "did not answer; the change may
+# be saved" while the API may still commit. The margin covers the server's
+# connect phase, which httpx times apart from the read.
 APPLY_CALL_SECONDS = APPLY_TIMEOUT_SECONDS + 15
+# An apply starts only with this long left in the turn: a turn's deadline
+# cutting the call would leave a change the API commits with no record.
+APPLY_START_SECONDS = APPLY_CALL_SECONDS + 5
 
 NO_SCOPE = (
     "refused, nothing saved: this turn may not write. Show the user the "
@@ -63,10 +65,18 @@ ATTEMPT_LIMIT = (
     f"attempt limit reached: {MAX_ATTEMPTS} attempts this turn. Stop and "
     "tell the user what failed."
 )
+NO_TIME = (
+    "refused, nothing saved: not enough time left in this turn to apply a "
+    "change. Tell the user to send their message again."
+)
 READ_FIRST = (
     "refused, nothing saved: {files}: changed since you last read it, or "
-    "not read before this call. Read each with policy_read_file, then "
+    "not read before this call. Read it again with policy_read_file, then "
     "rebuild the change from what it returns."
+)
+TOO_LARGE_TO_EDIT = (
+    "refused, nothing saved: {files}: too large for the assistant to edit. "
+    "Tell the user to make this change in the editor."
 )
 CONFLICT = "Do not call apply_change again this turn; tell the user why."
 STALE = (
@@ -80,15 +90,19 @@ NO_ANSWER = (
     "the Hexgate API did not answer; the change may be saved: read the files "
     "again with policy_read_file before retrying"
 )
-# After either kind of silence. A retry this turn would send the hashes read
-# at turn start again, which is a 409 stale whether or not it was saved.
+# After any silence. The re-read and retry belong in the next message: a
+# file read again in this turn would differ from the turn's snapshot.
 AFTER_SILENCE = (
-    "Within this turn a retry would send the same file hashes, so do not "
-    "call apply_change again; tell the user to look at the "
-    "Policies page and send their message again if the change is not there."
+    "That re-read and retry belong in the user's next message: do not call "
+    "apply_change again in this turn. Tell the user to look at the Policies "
+    "page and send their message again if the change is not there."
 )
 # Our own limit ran out before the server answered.
-NO_REPLY = "the MCP server did not reply in time; the change may be saved."
+NO_REPLY = "the MCP server did not reply in time; the change may be saved"
+# An answer that says applied but cannot be read as a change.
+UNREADABLE = "the platform's answer could not be read; the change may be saved"
+# A long `applied: false` answer, cut short: no narrower call exists.
+CUT_CHECKS = "\n[… {cut} bytes of check details cut …]\n"
 
 
 class ChangeFile(BaseModel):
@@ -123,7 +137,9 @@ def build_apply_tool(mcp_url: str) -> Tool[TurnDeps]:
     ) -> str:
         """Save a change to the project's policy files, once every platform
         check passes: 1 to 10 whole files, each added or replaced, never
-        deleted. `summary` is one sentence on what the change is for.
+        deleted. Read each existing file with policy_read_file in this
+        conversation first and build it from that text; on "read it again",
+        read and retry. `summary` is one sentence on what the change is for.
         `samples` (up to 20) are tool calls whose outcome proves the change
         does what was asked, each with the outcome it must get.
         `applied: true` means it is saved; `applied: false` means a check
@@ -131,115 +147,168 @@ def build_apply_tool(mcp_url: str) -> Tool[TurnDeps]:
         writes = ctx.deps.writes
         if writes is None:
             return NO_SCOPE
+        call = _Call(mcp_url, ctx, writes, files, summary, samples)
         async with writes.lock:
-            text = await _attempt(
-                mcp_url, ctx.deps, reads_in(ctx.messages), files, summary, samples
-            )
-            if writes.change_id is not None and writes.applied_call is None:
-                writes.applied_call = ctx.tool_call_id
-        return cap_tool_result(TOOL_NAME, text)
+            text = await call.attempt()
+        return cap_tool_result(TOOL_NAME, text, CUT_CHECKS)
 
     return Tool(apply_change, name=TOOL_NAME)
 
 
-async def _attempt(
-    mcp_url: str,
-    deps: TurnDeps,
-    reads: Mapping[str, str],
-    files: list[ChangeFile],
-    summary: str,
-    samples: list[ChangeSample] | None,
-) -> str:
-    """One call's answer to the model, the MCP call made only when every
-    counter allows it."""
-    writes = deps.writes
-    assert writes is not None
-    refusal = _refusal(writes)
-    if refusal is not None:
-        return refusal
-    writes.attempts += 1
-    unread = _unread(files, deps.snapshot, reads)
-    if unread:
-        return READ_FIRST.format(files=", ".join(unread))
-    arguments = {
-        "project_id": writes.project_id,
-        # An existing file's base: the hash the model read it at, which
-        # `_unread` has just found equal to the turn's. Null for a new one.
-        "files": [
-            {**f.model_dump(), "base_hash": deps.snapshot.get(f.name)} for f in files
-        ],
-        "summary": summary,
-        "samples": None if samples is None else [s.model_dump() for s in samples],
-        "session_id": writes.session_id,
-    }
-    # Its own MCP session, for its own read timeout; refusals raised as
-    # ToolError, not turned into retries.
-    mcp: MCPToolset[None] = MCPToolset(
-        mcp_url,
-        auth=deps.token,
-        read_timeout=APPLY_CALL_SECONDS,
-        tool_error_behavior="error",
-    )
-    try:
-        text = await call_text(mcp, "policy_apply", arguments)
-    except Exception as exc:
-        refusal = _refusal_text(exc)
+@dataclass
+class _Call:
+    """One `apply_change` call: its counters checked, then the MCP call."""
+
+    mcp_url: str
+    ctx: RunContext[TurnDeps]
+    writes: TurnWrites
+    files: list[ChangeFile]
+    summary: str
+    samples: list[ChangeSample] | None
+
+    async def attempt(self) -> str:
+        """The answer to the model, the MCP call made only when every
+        counter allows it."""
+        refusal = _refusal(self.writes)
         if refusal is not None:
-            return _refused(refusal, writes)
-        # A timeout or a connection lost: whether the API committed is
-        # unknown.
-        logger.warning("policy_apply gave no answer (%s)", type(exc).__name__)
-        return _silence(NO_REPLY, writes)
-    _record(text, summary, writes)
-    return text
+            return refusal
+        self.writes.attempts += 1
+        left = self.ctx.remaining_time()
+        if left is not None and left < APPLY_START_SECONDS:
+            return NO_TIME
+        refusal = self._read_refusal()
+        if refusal is not None:
+            return refusal
+        return await self._apply()
+
+    def _read_refusal(self) -> str | None:
+        """Refused without a call: an existing file the model did not build
+        from its text as the turn found it."""
+        snapshot = self.ctx.deps.snapshot
+        reads = reads_in(self.ctx.messages, self.writes.turn_start)
+        existing = [f.name for f in self.files if f.name in snapshot]
+        too_large = [n for n in existing if n in reads and reads[n].text_hash is None]
+        if too_large:
+            return TOO_LARGE_TO_EDIT.format(files=", ".join(too_large))
+        differs = [
+            n for n in existing if n not in reads or reads[n].text_hash != snapshot[n]
+        ]
+        # Read in this turn and still not the turn's text: saved since.
+        moved = [n for n in differs if n in reads and reads[n].this_turn]
+        if moved:
+            return _end(self.writes, STALE.format(files=", ".join(moved)))
+        if differs:
+            return READ_FIRST.format(files=", ".join(differs))
+        return None
+
+    async def _apply(self) -> str:
+        writes = self.writes
+        snapshot = self.ctx.deps.snapshot
+        arguments = {
+            "project_id": writes.project_id,
+            # An existing file's base: the hash the model read it at, which
+            # `_read_refusal` has just found equal to the turn's. Null for a
+            # new one.
+            "files": [
+                {**f.model_dump(), "base_hash": snapshot.get(f.name)}
+                for f in self.files
+            ],
+            "summary": self.summary,
+            "samples": None
+            if self.samples is None
+            else [s.model_dump() for s in self.samples],
+            "session_id": writes.session_id,
+        }
+        # Its own MCP session, for its own read timeout; refusals raised as
+        # ToolError, not turned into retries.
+        mcp: MCPToolset[None] = MCPToolset(
+            self.mcp_url,
+            auth=self.ctx.deps.token,
+            read_timeout=APPLY_CALL_SECONDS,
+            tool_error_behavior="error",
+        )
+        try:
+            text = await call_text(mcp, "policy_apply", arguments)
+        except Exception as exc:
+            refusal = _refusal_text(exc)
+            if refusal is not None:
+                return _refused(refusal, writes)
+            # A timeout or a connection lost: whether the API committed is
+            # unknown.
+            logger.warning("policy_apply gave no answer (%s)", type(exc).__name__)
+            return _silence(NO_REPLY, writes)
+        return self._record(text)
+
+    def _record(self, text: str) -> str:
+        """The answer to an MCP result. An applied change is kept and its
+        `change` event sent; one that cannot be read may be saved."""
+        try:
+            response = json.loads(text)
+        except ValueError:
+            return _silence(UNREADABLE, self.writes)
+        if not isinstance(response, dict) or not response.get("applied"):
+            return text
+        try:
+            event = {
+                "change_id": response["change_id"],
+                "summary": self.summary,
+                "files": response["files"],
+                "checks": [
+                    {"id": c["id"], "status": c["status"], "detail": c.get("detail")}
+                    for c in response["checks"]
+                ],
+            }
+        except (KeyError, TypeError):
+            return _silence(UNREADABLE, self.writes)
+        self.writes.applied = Applied(event["change_id"], self.ctx.tool_call_id)
+        self.writes.on_change(event)
+        return text
 
 
-def _unread(
-    files: list[ChangeFile], snapshot: Mapping[str, str], reads: Mapping[str, str]
-) -> list[str]:
-    """The existing files the model did not build from their text as the
-    turn found it: never read, or read before someone (or an earlier change)
-    saved them again. Its whole-file rewrite would silently undo that save."""
-    return [
-        f.name
-        for f in files
-        if f.name in snapshot and reads.get(f.name) != snapshot[f.name]
-    ]
+@dataclass(frozen=True)
+class Read:
+    """The model's latest read of a file."""
+
+    # None: refused as too large, so never read whole.
+    text_hash: str | None
+    this_turn: bool
 
 
-def read_hash(text: str) -> tuple[str, str] | None:
-    """(name, text_hash) of a `policy_read_file` result the model was given
-    whole; None for a refusal, a policy module or a result cut short."""
+def reads_in(messages: list[ModelMessage], turn_start: int) -> dict[str, Read]:
+    """{file name: its latest read} in `messages`, a read in a message at or
+    after `turn_start` made in this turn."""
+    names: dict[str, str] = {}
+    reads: dict[str, Read] = {}
+    for index, message in enumerate(messages):
+        for part in message.parts:
+            if isinstance(part, ToolCallPart) and part.tool_name == READ_TOOL:
+                args = part.args_as_dict()
+                if isinstance(args.get("name"), str) and args.get("tier") is None:
+                    names[part.tool_call_id] = args["name"]
+            elif isinstance(part, ToolReturnPart) and part.tool_call_id in names:
+                text = part.model_response_str()
+                text_hash = _text_hash(text)
+                if text_hash is not None or text.startswith(TOO_LARGE):
+                    name = names[part.tool_call_id]
+                    reads[name] = Read(text_hash, index >= turn_start)
+    return reads
+
+
+def _text_hash(text: str) -> str | None:
+    """The text_hash of a `policy_read_file` result the model was given
+    whole; None for anything else."""
     try:
         record = json.loads(text)
     except ValueError:
         return None
-    if not isinstance(record, dict) or "tier" in record:
-        return None
-    name, text_hash = record.get("name"), record.get("text_hash")
-    if isinstance(name, str) and isinstance(text_hash, str):
-        return name, text_hash
+    if isinstance(record, dict) and isinstance(record.get("text_hash"), str):
+        return record["text_hash"]
     return None
 
 
-def reads_in(messages: list[ModelMessage]) -> dict[str, str]:
-    """{file name: text_hash} of the latest whole read of each file in
-    `messages`."""
-    reads: dict[str, str] = {}
-    for message in messages:
-        if not isinstance(message, ModelRequest):
-            continue
-        for part in message.parts:
-            if isinstance(part, ToolReturnPart) and part.tool_name == READ_TOOL:
-                found = read_hash(part.model_response_str())
-                if found is not None:
-                    reads[found[0]] = found[1]
-    return reads
-
-
 def _refusal(writes: TurnWrites) -> str | None:
-    if writes.change_id is not None:
-        return ALREADY_APPLIED.format(change_id=writes.change_id)
+    if writes.applied is not None:
+        return ALREADY_APPLIED.format(change_id=writes.applied.change_id)
     if writes.ended is not None:
         return writes.ended
     if writes.attempts >= MAX_ATTEMPTS:
@@ -248,10 +317,10 @@ def _refusal(writes: TurnWrites) -> str | None:
 
 
 # How the MCP server words the API's 409 refusals (hexgate_mcp/api.py).
-_CONFLICT_PREFIX = "409 conflict: "
+CONFLICT_PREFIX = "409 conflict: "
 # What the platform's MCP server (the official SDK's FastMCP) puts before
 # every error a tool raises.
-_SERVER_PREFIX = "Error executing tool policy_apply: "
+SERVER_PREFIX = "Error executing tool policy_apply: "
 
 
 def _refusal_text(exc: BaseException) -> str | None:
@@ -259,7 +328,7 @@ def _refusal_text(exc: BaseException) -> str | None:
     client raises it bare, or in an exception group from the MCP session's
     task group."""
     if isinstance(exc, ToolError):
-        return str(exc).removeprefix(_SERVER_PREFIX)
+        return str(exc).removeprefix(SERVER_PREFIX)
     if isinstance(exc, BaseExceptionGroup):
         matched, rest = exc.split(ToolError)
         if matched is not None and rest is None:
@@ -274,7 +343,7 @@ def _refused(message: str, writes: TurnWrites) -> str:
     if stale is not None:
         return _end(writes, STALE.format(files=", ".join(stale) or "unknown"))
     refused = f"refused, nothing saved: {_without_inputs(message)}"
-    if message.startswith(_CONFLICT_PREFIX):
+    if message.startswith(CONFLICT_PREFIX):
         # Any conflict ends writing: this turn's retry would meet it again.
         return _end(writes, f"{refused}. {CONFLICT}")
     return refused
@@ -303,7 +372,7 @@ def drop_inputs(value: Any) -> Any:
 
 
 def _silence(what: str, writes: TurnWrites) -> str:
-    return _end(writes, f"{what.rstrip('.')}. {AFTER_SILENCE}")
+    return _end(writes, f"{what}. {AFTER_SILENCE}")
 
 
 def _end(writes: TurnWrites, why: str) -> str:
@@ -313,10 +382,10 @@ def _end(writes: TurnWrites, why: str) -> str:
 
 
 def _stale_files(message: str) -> list[str] | None:
-    if not message.startswith(_CONFLICT_PREFIX):
+    if not message.startswith(CONFLICT_PREFIX):
         return None
     try:
-        detail = json.loads(message.removeprefix(_CONFLICT_PREFIX))
+        detail = json.loads(message.removeprefix(CONFLICT_PREFIX))
     except ValueError:
         return None
     if not isinstance(detail, dict) or detail.get("code") != "stale":
@@ -324,108 +393,109 @@ def _stale_files(message: str) -> list[str] | None:
     return [str(f) for f in detail.get("files", [])]
 
 
-def _record(text: str, summary: str, writes: TurnWrites) -> None:
-    """On an applied change, keep its id and send its `change` event."""
-    try:
-        response = json.loads(text)
-    except ValueError:
-        return
-    if not response.get("applied"):
-        return
-    writes.change_id = response["change_id"]
-    writes.on_change(
-        {
-            "change_id": response["change_id"],
-            "summary": summary,
-            "files": response["files"],
-            "checks": [
-                {"id": c["id"], "status": c["status"], "detail": c.get("detail")}
-                for c in response["checks"]
-            ],
+# ——— File contents reach the model once ———
+
+
+def redact(
+    tool: str, args: Mapping[str, Any], change_id: str | None = None
+) -> Mapping[str, Any]:
+    """A tool call's arguments as they are kept and shown once the call is
+    made: when any carries whole files (a list of items with `content`, as
+    `apply_change` and the draft checks take them), each such list becomes
+    its file names. An `apply_change` call becomes `{change_id, files,
+    summary}`; `change_id` is ours, the one its applied result gave, never
+    one in `args`. Any other call is returned as it is.
+
+    Decided by shape, not by name, so a call under another name, or one that
+    imitates a redacted call, keeps no file text either."""
+    if not _carries_files(args):
+        return args
+    if "INVALID_JSON" in args and tool != TOOL_NAME:
+        return {}
+    if tool == TOOL_NAME:
+        files, summary = args.get("files"), args.get("summary")
+        return {
+            "change_id": change_id,
+            "files": _names(files) if isinstance(files, list) else [],
+            "summary": summary if isinstance(summary, str) else "",
         }
+    return {
+        k: _names(v) if _file_items(v) else v
+        for k, v in args.items()
+        if k != "change_id"
+    }
+
+
+def _carries_files(args: Mapping[str, Any]) -> bool:
+    raw = args.get("INVALID_JSON")
+    if isinstance(raw, str):
+        # Arguments cut short: whole files, for all anyone can tell.
+        return '"content"' in raw
+    return any(_file_items(v) for v in args.values())
+
+
+def _file_items(value: Any) -> bool:
+    return isinstance(value, list) and any(
+        isinstance(item, dict) and "content" in item for item in value
     )
 
 
-def call_summary(args: Mapping[str, Any]) -> dict[str, Any]:
-    """An `apply_change` call's arguments without file contents: the file
-    names and the summary. `args` is what the model sent, so any shape."""
-    files = args.get("files")
-    names = [
-        f["name"]
-        for f in (files if isinstance(files, list) else [])
-        if isinstance(f, dict) and isinstance(f.get("name"), str)
+def _names(items: list[Any]) -> list[str]:
+    return [
+        item["name"]
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
     ]
-    summary = args.get("summary")
-    return {"files": names, "summary": summary if isinstance(summary, str) else ""}
 
 
 def redact_calls(
-    messages: list[ModelMessage], applied: Mapping[str, str]
+    messages: list[ModelMessage], applied: Applied | None
 ) -> list[ModelMessage]:
-    """`messages` with every `apply_change` call's arguments replaced by
-    `{change_id, files, summary}`: the id of the change it applied
-    (`applied[call id]`) or None, and its :func:`call_summary`. A call
-    already replaced, from an earlier request or turn, is kept as it is."""
+    """`messages` with every tool call's arguments :func:`redact`ed, and
+    every retry's validation errors without the arguments they echo."""
     return [
-        _redact(m, applied) if isinstance(m, ModelResponse) else _redact_retries(m)
+        _redact_response(m, applied)
+        if isinstance(m, ModelResponse)
+        else _redact_retries(m)
         for m in messages
     ]
 
 
-def _redact_retries(request: ModelRequest) -> ModelRequest:
-    """A request with each `apply_change` retry's validation errors
-    stripped of the arguments they echo."""
-    parts = [redact_retry(p) for p in request.parts]
-    return request if parts == list(request.parts) else replace(request, parts=parts)
-
-
-def redact_retry[P](part: P) -> P:
-    """`part`, or when it answers an `apply_change` call with validation
-    errors (a retry), the same part without each error's `input`: it holds
-    the files."""
-    if (
-        isinstance(part, ToolReturnPart | RetryPromptPart)
-        and part.tool_name == TOOL_NAME
-        and isinstance(part.content, list)
-    ):
-        return replace(part, content=drop_inputs(part.content))
-    return part
-
-
-def _redact(response: ModelResponse, applied: Mapping[str, str]) -> ModelResponse:
+def _redact_response(response: ModelResponse, applied: Applied | None) -> ModelResponse:
     parts = [
-        replace(
-            p,
-            args={
-                "change_id": applied.get(p.tool_call_id),
-                **call_summary(p.args_as_dict()),
-            },
-        )
-        if _carries_files(p)
-        else p
+        _redact_call(p, applied) if isinstance(p, ToolCallPart) else p
         for p in response.parts
     ]
     return response if parts == response.parts else replace(response, parts=parts)
 
 
-def _carries_files(part: object) -> bool:
-    return (
-        isinstance(part, ToolCallPart)
-        and part.tool_name == TOOL_NAME
-        and "change_id" not in part.args_as_dict()
+def _redact_call(part: ToolCallPart, applied: Applied | None) -> ToolCallPart:
+    args = part.args_as_dict()
+    mine = applied is not None and applied.call_id == part.tool_call_id
+    kept = redact(part.tool_name, args, applied.change_id if mine else None)
+    return part if kept is args else replace(part, args=dict(kept))
+
+
+def _redact_retries(request: ModelRequest) -> ModelRequest:
+    parts = [redact_retry(p) for p in request.parts]
+    return request if parts == list(request.parts) else replace(request, parts=parts)
+
+
+def redact_retry[P](part: P) -> P:
+    """`part`, or when it answers a call with validation errors (a retry),
+    the same part without each error's `input`: it can hold whole files."""
+    retry = isinstance(part, RetryPromptPart) or (
+        isinstance(part, ToolReturnPart) and part.outcome == "retried"
     )
-
-
-def applied_calls(writes: TurnWrites | None) -> dict[str, str]:
-    """{call id: change id} for the call that applied this turn's change."""
-    if writes is None or writes.applied_call is None or writes.change_id is None:
-        return {}
-    return {writes.applied_call: writes.change_id}
+    if retry and isinstance(part.content, list):
+        return replace(part, content=drop_inputs(part.content))
+    return part
 
 
 async def redact_history(
     ctx: RunContext[TurnDeps], messages: list[ModelMessage]
 ) -> list[ModelMessage]:
-    """Before every model request: a call's file contents are sent to the
-    model once, in the request that made it."""
-    return redact_calls(messages, applied_calls(ctx.deps.writes))
+    """Before every model request: the file text of every call made so far
+    leaves the history; the model sent it, and needs it no more."""
+    writes = ctx.deps.writes
+    return redact_calls(messages, None if writes is None else writes.applied)

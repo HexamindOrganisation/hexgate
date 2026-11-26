@@ -45,12 +45,7 @@ from hexgate_assistant.agent import (
     function_tools,
 )
 from hexgate_assistant.auth import AssistantToken
-from hexgate_assistant.changes import (
-    APPLY_SCOPE,
-    applied_calls,
-    redact_calls,
-    redact_history,
-)
+from hexgate_assistant.changes import redact_calls, redact_history
 from hexgate_assistant.context import (
     CONTEXT_FULL_MESSAGE,
     BudgetGuard,
@@ -82,6 +77,8 @@ PING_SECONDS = 15
 # How long a turn waits for its messages and usage to be stored, whatever
 # ends it: inside the shutdown's own wait (server.SHUTDOWN_SECONDS).
 STORE_SECONDS = 4
+# The scope that lets a turn write: without it apply_change refuses.
+APPLY_SCOPE = "policy:apply"
 # A new session's title: the start of its first message.
 TITLE_CHARS = 80
 # Which instructions a session started under.
@@ -326,6 +323,8 @@ class _Run:
         started_at: datetime,
     ) -> None:
         thread_id = str(self._session.id)
+        if self._writes is not None:
+            self._writes.turn_start = len(history)
         self._send(events.run_started(thread_id, self._turn_id))
         deadline = (started_at + TURN_DEADLINE - utcnow()).total_seconds()
         with capture_run_messages() as captured:
@@ -341,8 +340,8 @@ class _Run:
                     timeout=max(deadline, 0),
                     event_stream_handler=self._forward,
                     capabilities=[
-                        # First: the budget is measured without the contents
-                        # an applied call no longer carries.
+                        # First: the budget is measured without the file
+                        # text the calls made so far no longer carry.
                         ProcessHistory(redact_history),
                         ProcessHistory(
                             BudgetGuard(self._turns.budget, self._turns.prefix_tokens)
@@ -396,7 +395,7 @@ class _Run:
         model = self._turns.agent.model
         assert isinstance(model, Model)
         # The last call's contents too, when no request followed its result.
-        new = redact_calls(new, applied_calls(self._writes))
+        new = redact_calls(new, None if self._writes is None else self._writes.applied)
         try:
             await self._turns.store.append_messages(
                 self._session, without_instructions(new)

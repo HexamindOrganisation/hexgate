@@ -7,6 +7,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+@dataclass(frozen=True)
+class Applied:
+    """A saved change and the tool call that saved it."""
+
+    change_id: str
+    call_id: str
+
+
 @dataclass
 class TurnWrites:
     """What `apply_change` knows and counts within one turn."""
@@ -15,12 +23,14 @@ class TurnWrites:
     session_id: str | None
     # Called with the `change` event's value once a change is saved.
     on_change: Callable[[dict[str, Any]], None]
+    # Where this turn's messages start in the run's history: a read made
+    # before it was made in an earlier turn.
+    turn_start: int = 0
     attempts: int = 0
-    change_id: str | None = None
+    # The change this turn applied, once it did.
+    applied: "Applied | None" = None
     # Why writing ended for the rest of the turn, as the model is told.
     ended: str | None = None
-    # The tool call that applied `change_id`.
-    applied_call: str | None = None
     # One call at a time: two parallel calls would both pass the counters.
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
