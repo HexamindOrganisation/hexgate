@@ -37,7 +37,14 @@ COPY hexgate ./hexgate
 RUN uv sync --frozen --no-dev
 ENV VIRTUAL_ENV=/opt/hexgate/.venv PATH=/opt/hexgate/.venv/bin:$PATH
 
+# The docs the write-policy skill cites, at the paths it cites them (docs/…),
+# outside the project: /workspace/docs is a symlink to them, and the scorer's
+# listing (`find -type f`) and snapshot never follow it, so they are neither
+# pulled nor scored. Root-owned, so the agent can read them but not edit them.
+COPY docs /opt/hexgate/docs
+
 # The agent runs unprivileged, in an empty workspace Inspect fills per sample.
-RUN useradd --create-home agent && mkdir /workspace && chown agent:agent /workspace
+RUN useradd --create-home agent && mkdir /workspace && chown agent:agent /workspace \
+    && ln -s /opt/hexgate/docs /workspace/docs
 USER agent
 WORKDIR /workspace
