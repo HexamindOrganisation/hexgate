@@ -181,7 +181,8 @@ class BudgetGuard:
 
 @dataclass(frozen=True)
 class ProjectState:
-    """The project as the turn found it, read once through MCP."""
+    """The project as the turn found it: its id, and what was read once
+    through MCP."""
 
     # Every project tool takes it as `project_id`, and the model copies it
     # from the card: the tools do not fill it in.
@@ -354,7 +355,8 @@ def editor_text(editor: Editor) -> str:
 
 # Each part of the user message is at most this long, so a long name list
 # cannot crowd out the message. The card keeps to it by construction (three
-# NAMES_LINE_BYTES lines and a short header); the cut below never reaches it.
+# NAMES_LINE_BYTES lines and a short header holding the project's UUID); the
+# cut below never reaches it.
 CARD_TOKENS = 1000
 CHANGE_TOKENS = 500
 EDITOR_TOKENS = 1000
