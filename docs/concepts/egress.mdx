@@ -44,34 +44,8 @@ decisions.
 
 ## Write the policy
 
-In code, `net_allow` renders the host allowlist into constraints:
-
-```python
-policy = (
-    PolicyBuilder(default="deny")
-    .net_allow(hosts=["api.github.com", "raw.githubusercontent.com"])
-    .build()
-)
-```
-
-The same rule in YAML, where egress is the `net.http_request` tool:
-
-```yaml
-roles:
-  agent:
-    default_policy: { mode: deny }
-    tools:
-      net.http_request:
-        mode: allow
-        constraints:
-          - args.host in ["api.github.com", "raw.githubusercontent.com"]
-          - args.scheme in ["https"]
-```
-
-Pass `subdomains=["example.com"]` to match the apex and any `*.example.com`. A
-host restriction is required: `net_allow()` with only a scheme or port filter
-raises, since a rule with no host clause would allow every host. Use
-`any_host=True` when you do want that.
+How to allow hosts in a policy, in code or YAML, is in
+[Egress rules](/policy/egress).
 
 ## What the proxy sees
 
@@ -92,14 +66,8 @@ do (see [Limits](#limits)).
 
 ## Layering
 
-Egress control sits alongside the other enforcement points. Deploy whichever
-combination fits the threat model.
-
-| Layer | Question | Mechanism |
-|---|---|---|
-| Tool policy | May this caller invoke this tool at all? | adapter / `enforce_policy(...)` |
-| Egress | May the process reach this host? | `egress_guard(...)` |
-| Sandbox | What can a spawned shell do? | OS-level via `srt` |
+Where egress control sits next to tool policy and the sandbox is in
+[Egress rules](/policy/egress#layering).
 
 ## Limits
 

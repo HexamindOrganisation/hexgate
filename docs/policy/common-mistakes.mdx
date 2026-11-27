@@ -45,7 +45,7 @@ What follows:
   policy's last entry of its kind, deleting it turns that gate off and reopens
   what it closed, while a dry-run still reports deny.
 
-Background: [agent-level enforcement](/concepts/agent-level-enforcement).
+The rules themselves are in [Agent admission and reach](/policy/agents); why the gates exist and how each framework enforces them, in [agent-level enforcement](/concepts/agent-level-enforcement).
 
 ## Egress
 
@@ -72,8 +72,8 @@ tools:
 
 Always include a host clause. For subdomains, write
 `endswith(args.host, ".example.com")` **with the leading dot**, which stops
-`evilexample.com` from matching. Details:
-[egress](/concepts/egress).
+`evilexample.com` from matching. Writing the rule in code or YAML, and how
+egress layers with the other checks: [Egress rules](/policy/egress).
 
 ## Safe patterns
 

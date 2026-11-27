@@ -139,21 +139,11 @@ it's Hexgate's; if `hooks`, it's the framework's.
 
 ## Turning a guard off from the policy
 
-The code decides what a guard does. The policy can only switch it on or off, with
-a top-level `guards:` block keyed by the guard's name (its function's
-`__name__`):
+The code decides what a guard does; the policy can only switch it on or off,
+with a top-level `guards:` block. The rules for that block are in
+[YAML shape](/policy/yaml-shape#guards).
 
-```yaml
-guards:
-  block_secrets:
-    enabled: false   # skipped on every call
-```
-
-- A guard the policy doesn't mention runs. `enabled` is required in each entry.
-- The block is agent-wide. A `guards:` under a tool entry is rejected, and every
-  role must set the same values, or `hexgate policy validate` fails.
-- With `--manifest`, `validate` also fails on a name the agent doesn't declare
-  (`unknown-guard`) or one two of its guards share (`ambiguous-guard`).
+## Declaring guards in the manifest
 
 For the policy (and the dashboard) to know an agent's guards, its manifest has to
 declare them. `create_agent(guards=...)` does that for you. For an agent you build
