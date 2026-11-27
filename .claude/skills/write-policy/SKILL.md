@@ -32,11 +32,12 @@ disagree:
 | Document shape, modes | `docs/policy/yaml-shape.mdx` |
 | Constraint grammar, `run.*`, `agent_usage.*`, `user_usage.*` | `docs/policy/constraints.mdx` |
 | Worked condition examples | `docs/policy/writing-conditions.mdx` |
-| Roles, `policies/` dir, inheritance | `docs/concepts/user-scope.mdx` |
-| Egress | `docs/concepts/egress.mdx` |
-| Admission / agent reach | `docs/concepts/agent-level-enforcement.mdx` |
+| Roles, `ctx.*`, `policies/` dir, inheritance | `docs/policy/roles-and-attributes.mdx` |
+| Egress | `docs/policy/egress.mdx` |
+| Admission / agent reach | `docs/policy/agents.mdx` |
+| What validation checks, dry-run rules | `docs/policy/testing-a-policy.mdx` |
 | Cross-run quotas, fail mode | `docs/adr/R-USAGE-001-cross-run-usage-is-soft-and-fails-open.md` |
-| CLI | `docs/cli/policy.mdx` |
+| CLI commands | `docs/cli/policy.mdx` |
 | Schema (authoritative) | `hexgate/security/models.py`, `hexgate/security/constraints.py` |
 | Examples | `examples/demo_policy.yaml`, `deploy/demo_policies/` |
 
