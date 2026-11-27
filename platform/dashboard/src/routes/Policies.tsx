@@ -16,7 +16,11 @@ import {
   useRenameFile,
   useResolvedPolicy,
 } from "@/lib/policy_files";
-import { lastChangeTo, useAssistantChanges } from "@/lib/assistant";
+import {
+  lastChangeTo,
+  useAssistantChanges,
+  useClosedChangeBars,
+} from "@/lib/assistant";
 import { useEmptyFolders } from "@/lib/empty_folders";
 import { composeAgentNames, referencesImport } from "@/lib/imports";
 import { baseName, ENTRY_FILE, isModular } from "@/lib/file_tree";
@@ -242,6 +246,7 @@ export function PoliciesPage() {
   // clean buffer shows the new text. One with unsaved edits keeps them.
   const assistantChanges = useAssistantChanges(projectId);
   useRefetchOnChange(projectId, assistantChanges.at(-1)?.change_id ?? null);
+  const closedBars = useClosedChangeBars(projectId);
 
   const debouncedDraft = useDebouncedValue(draft, 600);
   const draftActive = draft !== null;
@@ -406,11 +411,12 @@ export function PoliciesPage() {
                 </div>
                 {active !== null && (
                   <AssistantChangeBar
-                    key={projectId}
                     last={lastChangeTo(assistantChanges, active)}
                     file={active}
                     storedHash={files.find((f) => f.name === active)?.text_hash}
                     dirty={dirtyKeys.has(active)}
+                    closed={closedBars.closed}
+                    onDismiss={closedBars.close}
                   />
                 )}
                 <div className="flex-1 overflow-hidden">

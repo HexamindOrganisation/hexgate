@@ -14,7 +14,7 @@
  * redirect, since a 401 there means the session itself has expired.
  */
 
-import { useEffect } from "react";
+import { useCallback, useEffect, useReducer } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
@@ -527,6 +527,31 @@ export function useAssistantChanges(
         : [],
     ),
   );
+}
+
+/** The change bars closed on each project, as "change_id:file". Module-level,
+ * so a bar stays closed after its file's tab closes or the page unmounts. */
+const closedBars = new Map<string, Set<string>>();
+const NONE_CLOSED: ReadonlySet<string> = new Set();
+
+/** The change bars closed on `projectId`, and `close` to close one. */
+export function useClosedChangeBars(projectId: string | null): {
+  closed: ReadonlySet<string>;
+  close: (key: string) => void;
+} {
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
+  const close = useCallback(
+    (key: string) => {
+      if (projectId === null) return;
+      const set = closedBars.get(projectId) ?? new Set<string>();
+      closedBars.set(projectId, set.add(key));
+      rerender();
+    },
+    [projectId],
+  );
+  const closed =
+    (projectId !== null && closedBars.get(projectId)) || NONE_CLOSED;
+  return { closed, close };
 }
 
 /** The chat for the active org's project. Another org or project empties it. */

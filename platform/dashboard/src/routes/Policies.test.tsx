@@ -636,4 +636,20 @@ describe("PoliciesPage after the assistant saves a change", () => {
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByText("Changed by the assistant")).toBeNull();
   });
+
+  it("keeps a dismissed bar closed when the page is opened again", async () => {
+    stubAssistant();
+    const qc = makeQueryClient();
+    const { unmount } = renderWithProviders(<PoliciesPage />, { client: qc });
+    await askForChange();
+    await screen.findByText("Changed by the assistant");
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    unmount();
+
+    renderWithProviders(<PoliciesPage />, { client: qc });
+    await waitFor(() =>
+      expect(screen.getByLabelText("policy editor")).toHaveValue(NEW),
+    );
+    expect(screen.queryByText("Changed by the assistant")).toBeNull();
+  });
 });
