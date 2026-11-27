@@ -78,8 +78,21 @@ $ hexgate policy test policy.yaml --roles support,billing --tool refund_order --
   granted by: billing
 ```
 
-How the two flags treat undefined names and an empty set, and the 32-role cap,
-are in [Validation and dry-run rules](/policy/testing-a-policy#several-roles-in-a-dry-run).
+The two flags differ on undefined names, deliberately:
+
+- `--role nope` **fails**: a single undefined role is almost always a typo.
+- `--roles support,nope` **warns and continues**, evaluating `nope` against the
+  `default` policy. That is what happens at runtime, and a dry-run that refused
+  would disagree with production.
+- `--roles ""` **fails**: an empty set names no roles. Scripting this as
+  `--roles "$ROLES"` with an unset variable would otherwise dry-run the
+  `default` policy and exit 0, passing CI while asserting nothing. Pass
+  `--roles default` if the fallback policy is what you meant to test.
+
+At most 32 distinct roles are evaluated, matching the enforcer; past that the
+dry-run warns on stderr and evaluates the first 32, as production would. How
+several roles combine is in
+[Validation and dry-run rules](/policy/testing-a-policy#several-roles-in-a-dry-run).
 
 ## Validating
 
@@ -113,9 +126,9 @@ How a key you don't pass is treated is in
 `--run-facts` feeds `run.*` constraints (this run's counters),
 `--agent-usage` feeds `agent_usage.*` constraints (this agent across runs) and
 `--user-usage` feeds `user_usage.*` constraints (one end user across agents).
-Each takes a JSON object; how a path you don't pass is read is in
-[Validation and dry-run rules](/policy/testing-a-policy#missing-values-in-a-dry-run).
-To dry-run a limit at its threshold:
+Each takes a JSON object, and a path you don't pass reads zero, as on a run's
+first call or in a fresh process. That is how you dry-run a limit at its
+threshold:
 
 ```bash
 hexgate policy test policy.yaml --role default --tool send_email \

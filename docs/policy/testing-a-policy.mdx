@@ -9,33 +9,16 @@ whatever runs them: the `hexgate policy` CLI (commands and flags in
 
 ## Several roles in a dry-run
 
-A dry-run can evaluate one role or a whole set. A set is evaluated exactly as the
-runtime does: every role is evaluated and the most permissive outcome wins, so
-the output also names the role that granted the call (see
+A caller holding several roles is evaluated as the runtime does: every role is
+evaluated and the most permissive outcome wins, `allow` over
+`approval_required` over `deny` (see
 [Roles and caller attributes](/policy/roles-and-attributes#multiple-roles-most-permissive-wins)).
-
-The two forms differ on undefined names, deliberately:
-
-- `--role nope` **fails** — a single undefined role is almost always a typo.
-- `--roles support,nope` **warns and continues**, evaluating `nope` against the
-  `default` policy. That is what happens at runtime, and a dry-run that refused
-  would disagree with production.
-- `--roles ""` **fails** — an empty set names no roles. Scripting this as
-  `--roles "$ROLES"` with an unset variable would otherwise dry-run the
-  `default` policy and exit 0, passing CI while asserting nothing. Pass
-  `--roles default` if the fallback policy is what you meant to test.
-
-At most 32 distinct roles are evaluated, matching the enforcer; past that the
-dry-run warns on stderr and evaluates the first 32, as production would.
+The runtime evaluates at most 32 distinct roles per caller.
 
 ## Missing values in a dry-run
 
-- A `ctx.*` key you don't pass is treated as missing and fails closed, exactly as
-  at runtime when the request scope omits it.
-- For `run.*` (this run's counters), `agent_usage.*` (this agent across runs) and
-  `user_usage.*` (one end user across agents), a path you don't pass reads zero,
-  as on a run's first call or in a fresh process. That is how you dry-run a limit
-  at its threshold.
+A `ctx.*` key you don't pass is treated as missing and fails closed, exactly as
+at runtime when the request scope omits it.
 
 ## What validation checks
 

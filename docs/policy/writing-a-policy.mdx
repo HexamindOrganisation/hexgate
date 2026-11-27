@@ -139,8 +139,9 @@ role resolved to see its effective policy.
   reporting the over-block as an accepted risk;
 - a usage cap at `limit - 1` and at `limit`. If your dry-run can't supply
   usage values, report those rows as "not run". Never edit a cap to make a
-  dry-run pass: without a usage value the cap denies even below the limit;
-- a caller holding several roles, where the most permissive role wins. If your
+  dry-run pass;
+- a caller holding several roles, where the most permissive role wins (`allow`
+  over `approval_required` over `deny`). If your
   dry-run takes one role at a time, run each role and take the most permissive
   result, and say so in the report.
 
