@@ -375,9 +375,9 @@ per-case scores for the other rows. Failed every epoch: `agent_as_tool`,
 
 The `write-policy` skill was then tuned on the failures of the cases that are
 not held out, one commit per version, with `MODEL=claude-sonnet-5-5`, 3
-epochs and `MAX_SANDBOXES=4`: v2, v3, v4 and v5 had a full run on the same 35
-cases as the baseline (v5's also covered the two revoke cases below), v1 only
-a run on the cases it targeted. Held-out cases
+epochs and `MAX_SANDBOXES=4`: v2 to v6 had a full run on the same 35 cases as
+the baseline (from v5 on, also on the two revoke cases below), v1 only a run
+on the cases it targeted. Held-out cases
 were scored, never read. To rerun a version:
 `git checkout <commit> && make policy-eval CASES= EPOCHS=3 MAX_SANDBOXES=4 MODEL=claude-sonnet-5-5`.
 If these commits are ever squashed away on main, they stay reachable with
@@ -391,6 +391,7 @@ If these commits are ever squashed away on main, they stay reachable with
 | v3 | `6772540a` | the least-privilege rule covers open permissions only; refuse a request the policy cannot express (a per-tool hourly count, a handoff depth, a missing tool) and offer the substitute without writing it |
 | v4 | `95ebad96` | admission and reach are two separate gates: adding `admission` does not touch reach |
 | v5 | `072433d7` | handoff reach is on while any `agents:` entry exists, agent-as-tool reach only while a `via: tool` entry does; once it is on, the delegation tool's own `tools:` rule no longer applies, and while it is off a permissive `default_policy` lets any role call the delegation tool; revoke reach with `mode: deny`, not by deleting the entry |
+| v6 | `e908462d` | the knowledge moves out of the skill into `docs/policy/writing-a-policy.mdx` and `docs/policy/common-mistakes.mdx`, which the MCP server's `policy_reference` also serves; the skill reads both before writing and keeps only the CLI commands, flags and workarounds |
 
 Full runs (mean ± stderr / pass^3 ± stderr; samples that hit a network error
 are left out: 2 in v2, 1 in v3):
@@ -402,16 +403,27 @@ are left out: 2 in v2, 1 in v3):
 | v3 | 0.924 ± 0.041 / 0.886 ± 0.055 | 0.940 ± 0.039 / 0.893 ± 0.060 | 0.857 ± 0.143 / 0.857 ± 0.143 |
 | v4 | 0.943 ± 0.040 / 0.943 ± 0.040 | 0.964 ± 0.036 / 0.964 ± 0.036 | 0.857 ± 0.143 / 0.857 ± 0.143 |
 | v5 | 0.943 ± 0.040 / 0.943 ± 0.040 | 0.964 ± 0.036 / 0.964 ± 0.036 | 0.857 ± 0.143 / 0.857 ± 0.143 |
+| v5, docs in the sandbox | 0.943 ± 0.040 / 0.943 ± 0.040 | 0.964 ± 0.036 / 0.964 ± 0.036 | 0.857 ± 0.143 / 0.857 ± 0.143 |
+| v6, docs in the sandbox | 0.952 ± 0.034 / 0.943 ± 0.040 | 0.964 ± 0.036 / 0.964 ± 0.036 | 0.905 ± 0.095 / 0.857 ± 0.143 |
 
 v5 scored every one of the 35 cases exactly as v4 did, and passed the two
 revoke cases 6 of 6, so 105 of 111 samples over its 37 cases (0.946 mean and
-pass^3).
+pass^3). With the docs the skill cites copied into the sandbox (see *Run
+Claude Code*), v5 scored every case exactly the same again. v6, measured with
+the docs in the sandbox as it needs them, changed one case: the held-out
+`unknown_argument` passed one epoch of 3, for 106 of 111 (0.955 mean, 0.946
+pass^3). Every v6 sample read both shared pages.
 
 v1 had no full run: on the six cases it targeted it passed 11 of 18 samples
 (v0: 3). Partial runs: v2 15 of 18 on the same six, v3 12 of 15 on
 `must_refuse`, v4 12 of 12 on `admission`, `admission_with_global_cap`,
 `agent_as_tool` and `handoff_approval`, v5 18 of 18 on those four and the two
-revoke cases.
+revoke cases. After its full run, v6's `writing-a-policy.mdx` gained two
+dry-run fallbacks for tools that take one role at a time or no usage values,
+such as the MCP server's `policy_dry_run`; the skill text did not change. On
+the five cases about usage caps and several roles it passed 15 of 15, every
+case as before, and the samples that ran dry-runs still tested several roles
+at once with `--roles`.
 
 Two cases came after v4's full run, so the tables above don't count them:
 `robustness/revoke_last_tool_reach` and `robustness/revoke_last_handoff`
@@ -423,17 +435,18 @@ explicit `mode: deny` keeps it on. Their `wrong_answer/` is the deletion, and
 their `preserve.yaml` holds the shared project's preserved calls, so an
 answer that revokes correctly but breaks another call fails too. v4 passed
 both, 6 of 6, writing the explicit deny and saying why; it did so first with
-shorter preserve files, then again with the full ones. v5 also passed both,
-6 of 6, in its full run.
+shorter preserve files, then again with the full ones. v5 and v6 also passed
+both, 6 of 6, in their full runs.
 
-v4 and v5 still fail two cases, every epoch: `reach_in_modules`, whose decision 4
+v4, v5 and v6 still fail `reach_in_modules` every epoch, whose decision 4
 expects `default` and `support` to lose their handoff to billing-bot while
 `agent_as_tool`'s preserved calls, on another project that also starts with
 no reach rules, expect the same roles to keep theirs: each case can be passed
 on its own, but no single consistent rule about untouched handoffs passes
-both; and `unknown_argument` (held out), failed in every run that included
-it. The median sample took 115 s and $0.075 at list price in v4, 114 s and
-$0.078 in v5, against 60 s and $0.061 in v0.
+both. The held-out `unknown_argument` failed in every run that included it
+until v6, which passed it once in 3. The median sample took 115 s and $0.075
+at list price in v4, 114 s and $0.078 in v5, 109 s and $0.096 in v6 (two more
+turns, to read the shared pages), against 60 s and $0.061 in v0.
 
 The logs are not committed. They are kept in the Hexamind Google Drive under
 `01 - Hexamind/04 - Projects/21 - HexGate/evals/policy_writing/version_<v>/`,
@@ -452,6 +465,7 @@ with its real task and id:
 | `admission-reach4` | `admission`, `admission_with_global_cap`, `agent_as_tool`, `handoff_approval` |
 | `revoke-last2` | `revoke_last_tool_reach`, `revoke_last_handoff` |
 | `admission-reach-revoke6` | the four of `admission-reach4` and the two of `revoke-last2` |
+| `victor5` | `rate_limit_unsupported`, `admission`, `admission_with_global_cap`, `l2b_roles_no_meaning`, `l2_roles_hierarchy` |
 
 A copy can be checked by its SHA-256:
 
@@ -469,6 +483,9 @@ A copy can be checked by its SHA-256:
 | v4, two revoke cases | `2026-11-24T11-12-46-00-00_policy-writing_sonnet-5-5-epoch-3-revoke-last2-8ad48caa_Ub2NZ9L42A98Ha5RZYYivx.eval` | `2c082c8e88847f885e112782c692cc7121de458faa5be18e5d072bc4e3b7794d` |
 | v5, six cases | `2026-11-24T11-27-04-00-00_policy-writing_sonnet-5-5-epoch-3-admission-reach-revoke6-072433d7_oUrmoHqdeNRgwT6GniHZbJ.eval` | `96808ae03bc751a60286d3624c2c6baf2ec3e8c463b52e0b9699473a768aab1e` |
 | v5, all | `2026-11-24T11-45-08-00-00_policy-writing_sonnet-5-5-epoch-3-all-072433d7_5rbJq6fYubTs7fvjvLvP72.eval` | `254eac933b9ce95ac575d6051c731a48f596ae864c7b3bf5d8288c0a011e600e` |
+| v5, all, docs in the sandbox | `2026-11-25T13-59-37-00-00_policy-writing_sonnet-5-5-epoch-3-all-f48eed06_4qMuKyL6wt2scWLcVGuYNR.eval` | `fa396d84e41fa798dfbf49c596bb8d654c789849f4f7a2b721288048f8b606a1` |
+| v6, all, docs in the sandbox | `2026-11-26T15-04-15-00-00_policy-writing_sonnet-5-5-epoch-3-all-e908462d_SHjAruvj7w5e4yG7KVyYpD.eval` | `ecf5e96f8c0cd98312bb5915948322e1edb813a1d865519ac786dbafc2dba374` |
+| v6, five cases, dry-run fallbacks | `2026-11-27T14-56-31-00-00_policy-writing_sonnet-5-5-epoch-3-victor5-0f883a32_cEffxhCNvkogYAnuUUYhWL.eval` | `832d52cd1a2f2fe5e85f3011e7e1bec9684764af77b0a82262fc442f35d71ec4` |
 
 ## Adding a case
 

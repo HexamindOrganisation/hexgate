@@ -1,0 +1,140 @@
+---
+title: "Common mistakes"
+description: "The traps to check every time you write or change a policy: agent reach, egress, safe patterns, scope, usage caps and trust."
+---
+
+Each item below is a mistake that validates, or looks right, and still does the
+wrong thing. Check them every time you write or change a policy; the method
+they fit into is in [Writing a policy](/policy/writing-a-policy).
+
+## Admission and reach
+
+Admission (may this role run the agent, `agent.run`), handoff reach
+(`agent.handoff:<target>`) and agent-as-tool reach (`agent.tool:<target>`) are
+**separate gates**. Each is on only while the policy declares it, and then it
+applies to every role:
+
+- **Admission** is on while some role has an `admission` entry. A role without
+  one is then refused.
+- **Handoff reach** is on while some role has an `agents:` entry. An unlisted
+  handoff target is then denied, for every role.
+- **Agent-as-tool reach** is on only while some role has a `via: tool` entry.
+  The call is then decided under `agent.tool:<target>`, and the delegation
+  tool's own `tools:` rule (its mode, approval and constraints) **no longer
+  applies**, so put any approval or constraint on the reach entry, which takes
+  `mode` and `constraints` like a tool rule.
+
+While no role has an `agents:` entry, a handoff passes at runtime, whatever a
+dry-run of `agent.handoff:*` reports. While no role has a `via: tool` entry,
+the delegation tool's `tools:` rule decides (for example `billing_bot`), so
+the call is open to the roles granted that tool, and to every role whose
+`default_policy` allows unlisted tools.
+
+What follows:
+
+- **Adding `admission` does not touch reach.** Don't add `agents:` entries
+  because you added admission.
+- **The first entry of each kind turns that gate on and closes every path of
+  that kind it doesn't list.** Any `agents:` entry turns handoff reach on; only
+  a `via: tool` entry turns agent-as-tool reach on. When you add the first one,
+  re-grant exactly the paths of that kind that were open before, unless the
+  request removes them: handoffs (open while handoff reach was off), and
+  agent-as-tool for the roles that could call the delegation tool. Give each
+  its own `via`; never default to `via: [tool, handoff]`.
+- **Revoke with `mode: deny`, never by deleting the entry.** If it was the
+  policy's last entry of its kind, deleting it turns that gate off and reopens
+  what it closed, while a dry-run still reports deny.
+
+Background: [agent-level enforcement](/concepts/agent-level-enforcement).
+
+## Egress
+
+Outbound traffic is gated as synthetic tools, not as a separate section:
+
+- `net.http_request` exposes `args.host`, `args.scheme` and `args.port`;
+  `args.path` and `args.query` only on plain HTTP.
+- `net.tcp_connect` exposes `args.host`, `args.port` and `args.protocol`
+  (`"tcp"`).
+
+```yaml
+tools:
+  net.http_request:
+    mode: allow
+    constraints:
+      - args.host in ["api.github.com"] or args.host == "example.com" or endswith(args.host, ".example.com")
+      - args.scheme in ["https"]
+  net.tcp_connect:
+    mode: allow
+    constraints:
+      - args.host == "db.internal"
+      - args.port in [5432]
+```
+
+Always include a host clause. For subdomains, write
+`endswith(args.host, ".example.com")` **with the leading dot**, which stops
+`evilexample.com` from matching. Details:
+[egress](/concepts/egress).
+
+## Safe patterns
+
+- **Quote strings.** Write `args.env == "prod"`; `args.env == prod` fails
+  validation with "bare identifier 'prod' … did you forget quotes?".
+- **Anchor regexes.** `matches` is unanchored: `matches(args.id, "inv_")` also
+  accepts `xxinv_yy`. Write `^inv_[0-9]+$`.
+- **Guard paths by segment.** A path prefix such as
+  `startswith(args.file_path, "src/")` needs a traversal guard anchored on path
+  segments: `not matches(args.file_path, "(^|/)\\.\\.(/|$)")`. Never
+  `not contains(args.file_path, "..")`, which also denies `src/a..b.md`.
+- **No `file_scope`.** It is rejected by the WASM build, which is what
+  production runs. Use constraints instead:
+  `startswith(args.file_path, "src/")`, or
+  `every(args.paths, startswith(., "src/"))`.
+
+## Scope
+
+- **`args.*` at policy level.** Top-level constraints reach every key,
+  including `agent.run` and tools without that argument, which then fail closed
+  and can lock the agent out at admission. Keep `args.*` on the tool, or scope
+  it to the tool that has the argument:
+  `tool != "refund_order" or args.amount <= 500`. Exempting only agent keys
+  (`startswith(tool, "agent.") or …`) still fails every other tool without an
+  `amount`.
+- **Run caps in `default_policy.constraints`.** They miss every tool listed
+  under `tools:`. Put run caps in top-level `constraints:`.
+- **`mode: deny` with constraints.** Deny wins regardless. Constraints only
+  narrow a grant; they never grant.
+- **Strict types.** `true` is not `1`, a number compared with a string fails
+  closed, and a missing field fails closed.
+
+## Usage caps
+
+- **Cross-run limits are soft.** Per-window caps exist as `agent_usage.*` and
+  `user_usage.*` ([Constraints reference](/policy/constraints)), but nothing in a
+  policy enforces "at most N" exactly, and none counts one tool alone. `run.*`
+  resets every run (`run.tool_calls < 3` at 10 runs an hour admits 30), so
+  offer it only as a per-run bound. For a hard cross-run limit, offer
+  `approval_required` (a person decides each call) or a limiter in the
+  downstream service. Say so whenever someone asks for "at most N".
+- **Pair a user cap with an agent ceiling.** When you add a `user_usage.*` cap,
+  add an `agent_usage.*` ceiling too, unless the policy has one: a rotated or
+  anonymous ID still counts against the ceiling. `user_id` must come from the
+  server's authenticated session, never from a value the end user sends: a
+  user who picks their ID can rotate it.
+- **Negated caps fail open.** Under `on_unavailable: deny`,
+  `not (agent_usage.x >= N)` passes on a missing value, and so does a boundary
+  `deny` on `agent_usage.x >= N`, which runs under `not`. Write
+  `agent_usage.x < N` in a grant; validation flags both as
+  `negated-usage-cap`. The same holds for `user_usage.*`, and under `deny` an
+  anonymous caller fails every user cap.
+- **Tell the app which cap fired.** A user cap and an agent cap refuse a run
+  with the same `AgentNotAdmittedError`. The integrator branches on
+  `exc.quota_scopes`: `UsageScopeKind.USER` means telling the user (a 429),
+  `UsageScopeKind.AGENT` means alerting whoever owns the agent. A user cap
+  that failed because the user's usage was unavailable
+  (`exc.decision.usage_states`) is an outage under `deny`, not a limit: alert,
+  don't 429. The full recipe is in the [Constraints reference](/policy/constraints).
+
+## Trust
+
+`ctx.*` and `role` are only as trustworthy as the server code that sets them.
+Say so whenever a grant hinges on them.
