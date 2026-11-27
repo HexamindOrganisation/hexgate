@@ -59,7 +59,8 @@ The per-tool algorithm (`_fold_tool` in `hexgate/security/linker.py`):
 
 1. A capability that denies the tool → **`LinkError`** (capabilities may only grant).
 2. An **unconditional** boundary deny → **DENY**, absolute. Nothing below can undo it.
-3. A **ceiling** boundary (`default_policy: deny`) that does not list the tool →
+3. A **ceiling** boundary (`default_policy: deny`, the default when the file
+   omits it) that does not list the tool with `allow` or `approval_required` →
    **implicit deny** (the tool is ineligible); the exclusion is recorded so the
    analyzer can later flag any capability grant for it as shadowed.
 4. No capability grants the tool → **implicit deny** (eligible but ungranted).
@@ -81,12 +82,34 @@ Summarised in one line:
 
 A boundary's `default_policy` sets its posture:
 
-- **Ceiling** (`default_policy: deny`) — an allowlist. A tool it does not name is
-  ineligible, so a capability grant for it has no effect.
-- **Floor** (`default_policy: allow`, the less-surprising default today) — only
-  subtracts what it names; unlisted tools pass through to the capabilities.
+- **Ceiling** (`default_policy: deny`) — an allowlist. A tool it does not grant
+  (unlisted, or listed only under a conditional `deny`) is ineligible, so a capability grant for it has no effect. **This is the default:**
+  `default_policy` defaults to `{ mode: deny }`, so a boundary file that omits it
+  is a ceiling.
+- **Floor** (any other `default_policy`, usually `allow`, which must be written
+  explicitly) — only subtracts what it names; unlisted tools pass through to the
+  capabilities. A floor's `default_policy` mode is not applied to those tools:
+  `default_policy: { mode: approval_required }` on a boundary does **not** gate
+  unlisted tools on approval — list them explicitly instead.
 
 Both use the same machinery; only step 3 above differs.
+
+A boundary meant to forbid one tool and nothing else must therefore opt into the
+floor:
+
+```yaml
+# policies/boundaries/no_delete.yaml
+version: 1
+default_policy: { mode: allow }   # floor: unlisted tools stay eligible
+tools:
+  delete_customer: { mode: deny }
+```
+
+Without the `default_policy` line the same file is a ceiling that names no grant,
+so every other tool becomes ineligible for every role. Each tool a capability
+grants is then listed as shadowed by `hexgate policy resolve --dir <root>` and
+flagged `dead-grant` by `hexgate policy check`; tools no module names are denied
+too, but do not appear in that list.
 
 ### Constraint algebra
 
