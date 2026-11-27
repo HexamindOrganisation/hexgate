@@ -1,0 +1,53 @@
+---
+title: "Egress rules"
+description: "Allowing outbound HTTP(S) by destination host in a policy, in code or YAML, and where egress control sits among the other enforcement points."
+---
+
+Outbound HTTP(S) is gated as a tool, `net.http_request`, decided on the
+destination host. How the egress proxy works, what it sees on HTTPS versus plain
+HTTP, and its limits are in [network egress](/concepts/egress).
+
+## Write the policy
+
+In code, `net_allow` renders the host allowlist into constraints:
+
+```python
+policy = (
+    PolicyBuilder(default="deny")
+    .net_allow(hosts=["api.github.com", "raw.githubusercontent.com"])
+    .build()
+)
+```
+
+The same rule in YAML, where egress is the `net.http_request` tool:
+
+```yaml
+roles:
+  agent:
+    default_policy: { mode: deny }
+    tools:
+      net.http_request:
+        mode: allow
+        constraints:
+          - args.host in ["api.github.com", "raw.githubusercontent.com"]
+          - args.scheme in ["https"]
+```
+
+Pass `subdomains=["example.com"]` to match the apex and any `*.example.com`. A
+host restriction is required: `net_allow()` with only a scheme or port filter
+raises, since a rule with no host clause would allow every host. Use
+`any_host=True` when you do want that.
+
+The arguments each request exposes, and the subdomain trap when writing the rule
+by hand, are in [Common mistakes](/policy/common-mistakes).
+
+## Layering
+
+Egress control sits alongside the other enforcement points. Deploy whichever
+combination fits the threat model.
+
+| Layer | Question | Mechanism |
+|---|---|---|
+| Tool policy | May this caller invoke this tool at all? | adapter / `enforce_policy(...)` |
+| Egress | May the process reach this host? | `egress_guard(...)` |
+| Sandbox | What can a spawned shell do? | OS-level via `srt` |

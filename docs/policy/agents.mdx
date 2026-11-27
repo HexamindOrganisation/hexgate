@@ -1,0 +1,71 @@
+---
+title: "Agent admission and reach"
+description: "The admission and agents blocks: who may run an agent, which agents it may reach and how, closed-world and opt-in, approvals and the handoff depth cap."
+---
+
+Who may run an agent, and which other agents it may reach, is written in the
+policy next to its tools. Why these gates exist, how each framework enforces
+them and their limits are in [agent-level enforcement](/concepts/agent-level-enforcement).
+
+## Write the policy
+
+Agent rules sit next to `tools:` in a role and read the same way — a `mode` plus
+optional `constraints`:
+
+```yaml
+roles:
+  support:
+    default_policy: { mode: deny }
+
+    admission:                     # may a "support" caller run THIS agent?
+      mode: allow
+
+    agents:                        # which agents may "support" reach, and how?
+      billing-bot:
+        via: [tool, handoff]       # both modes are governed by this rule
+        mode: approval_required    # a human okays it either way
+      refund-bot:
+        via: [tool]                # callable as a tool; handoff is denied
+        mode: allow
+      admin-bot:
+        mode: deny                 # off limits, in any mode
+      # anything not listed here is denied (closed-world)
+```
+
+Under the hood each rule lowers to an ordinary tool key — `admission` to
+`agent.run`, and each `agents` target to `agent.tool:<name>` / `agent.handoff:<name>` —
+so the same `decide()` that gates every tool call runs on them, and the same
+policy authoring (including modular boundaries, capabilities, and roles) composes
+them. A deny written at a boundary is authoritative; grants union.
+
+## Closed-world, and opt-in
+
+- **Unlisted means denied.** Once you declare agent rules, any agent you did not
+  list is denied. You name what is in; everything else falls to deny. There is
+  no default block to set.
+- **It is opt-in.** An agent whose policy has no `admission` and no `agents`
+  block is not gated at all — it runs exactly as before. The gates engage only
+  once a block is present.
+- **Declare `admission` on every role that should get in.** Because admission is
+  closed-world, once any role declares it the gate is on for every caller, and a
+  role you did not grant admission is refused. Across several roles the check is
+  permissive: any role that grants admission admits the caller.
+
+How each gate engages in detail, and the traps that follow (agent-as-tool reach,
+revoking, re-granting what was open), are in
+[Common mistakes](/policy/common-mistakes).
+
+## Approvals and the depth cap
+
+An `approval_required` agent rule uses the same [human-approval](/concepts/approval-required)
+path a tool does. On a handoff the model is told the transfer was refused or is
+pending and can re-plan; on admission the run waits for a yes before it starts.
+
+A handoff transfers control forward, so a chain of handoffs can run away. Set a
+per-run cap on the runner to bound it:
+
+```python
+from hexgate.adapters.openai import HexgateRunner
+
+runner = HexgateRunner(max_handoff_depth=3)  # refuse the 4th handoff in a chain
+```

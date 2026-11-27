@@ -1,0 +1,145 @@
+---
+title: "Roles and caller attributes"
+description: "Gating on ctx.* caller attributes, how several roles combine (most permissive wins), keeping default least-privilege, and one policy file per role."
+---
+
+A policy decides per caller: by the caller's roles, and by attributes the
+integration attaches to the request. How the integration sets them
+(`HexgateContext`, a FastAPI pattern, what the audit stores) is in
+[request context](/concepts/user-scope).
+
+## Caller attributes (`ctx.*`)
+
+Beyond the role, a request context can carry an open **attributes** bag that
+policy constraints read through the `ctx.*` namespace — turning role-based access
+into attribute-based (ABAC) filtering:
+
+```yaml
+# the billing policy can now gate on caller attributes, not just role
+tools:
+  refund_order:
+    mode: allow
+    constraints:
+      - args.amount <= 500
+      - 'ctx.department == "finance"'
+      - "ctx.clearance_level >= 3"
+```
+
+A missing `ctx.<key>` fails closed (deny), like any absent reference.
+
+<Warning>
+**Attributes are exactly as trustworthy as the code that sets them.** `ctx.*`
+may gate `deny` decisions, but it carries the **same trust contract as
+`user_roles`**: populate `attributes` from trusted server-side data (your
+auth/session/IdP), never from raw client input. Hexgate does not independently
+verify attribute values.
+</Warning>
+
+## Multiple roles: most permissive wins
+
+Every role in `user_roles` is evaluated and the outcomes are combined, so
+**access is granted if any single role grants it**:
+
+```
+ALLOW  >  NEEDS_APPROVAL  >  DENY
+```
+
+A caller with `user_roles=["support", "billing"]` can do everything `support` can
+do plus everything `billing` can do. Adding a role can only ever widen access,
+never narrow it. Evaluation stops at the first role that allows the call, and the
+role that granted it is recorded on the decision as `deciding_role` (`granted
+by:` in `hexgate chat`, and on the `Decision` your approval handler and any
+decision observer receive).
+
+<Warning>
+**Approval is not sticky.** If one role allows a tool outright and another would
+gate it on approval, the call runs with **no approval prompt** — `ALLOW` beats
+`NEEDS_APPROVAL`. With:
+
+```yaml
+roles:
+  support:
+    tools:
+      refund_order: { mode: approval_required }
+  billing:
+    tools:
+      refund_order: { mode: allow }
+```
+
+`user_roles=["support"]` prompts for approval, but
+`user_roles=["support", "billing"]` does not. If a tool must always be gated, no
+role may grant it outright.
+</Warning>
+
+<Warning>
+**Keep `default` least-privilege.** `default` is the fallback for any role name
+the policy doesn't define, and every unrecognised name in `user_roles` still
+contributes `default`'s permissions to the union. A caller who controls their own
+role list can therefore always reach whatever `default` grants, simply by
+carrying a name you never defined. If `default` allows a tool, treat that as
+"every caller can call this tool".
+
+`default` is a **fallback, not a floor** — a caller whose role *is* defined never
+inherits `default`'s permissions. For a baseline genuinely shared by every role,
+write it as a mixin and `inherits` it, so it is explicit in the YAML.
+
+`hexgate policy validate` warns (`permissive-default`) when the `default` role
+grants something no named role grants, and (`implicit-default`) when a policy
+declares roles but names none of them `default` — the loader then aliases one,
+handing its whole grant set to every undefined name. Run it with
+`--max-severity warning` in CI to make either a hard failure.
+</Warning>
+
+Two practical limits: at most **32** distinct roles are evaluated per call (extra
+roles are ignored, with a warning — they can only ever have widened access), and
+each role costs one policy evaluation, so the first role that allows the call is
+the cheapest outcome.
+
+## Role policies: one file per role
+
+Agents that need per-role behaviour ship a `policies/` directory instead of a
+single `policy.yaml`:
+
+```text
+agent/
+├── agent.yaml
+├── system.md
+└── policies/
+    ├── default.yaml          # fallback when no role matches
+    ├── read_only.yaml        # mixin — is_mixin: true
+    ├── support.yaml          # inherits: [read_only]
+    └── billing.yaml          # inherits: [read_only, support]
+```
+
+Each role file is a complete `AgentPolicy`. Inheritance is left-to-right, child
+wins on conflicts:
+
+```yaml
+# policies/read_only.yaml  (mixin — safe base)
+version: 1
+is_mixin: true
+default_policy:
+  mode: deny
+tools:
+  view_orders:  { mode: allow }
+  list_tickets: { mode: allow }
+```
+
+```yaml
+# policies/billing.yaml
+version: 1
+inherits: [read_only]
+tools:
+  refund_order:
+    mode: allow
+    constraints:
+      - args.amount <= 500
+      - args.currency == "USD"
+  wire_transfer:
+    mode: approval_required
+    constraints:
+      - args.amount <= 100000
+```
+
+See [constraints](/policy/constraints) for the expression grammar (including
+`ctx.*`) and a role-scoped end-to-end walkthrough.

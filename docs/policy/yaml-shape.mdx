@@ -108,6 +108,51 @@ until you write one. In a project
 that uses policy modules, a new agent starts deny-all instead and no starter is
 generated.
 
+## MCP tools
+
+Qualified name format: `mcp-<server>-<tool>`. Hyphens (not colons or
+dots) so the name passes OpenAI Function Calling's regex
+`^[a-zA-Z0-9_-]{1,64}$`. The server name is caller-supplied and
+validated against `^[a-z0-9-]{1,32}$` so qualified names stay under the
+64-char OpenAI limit even for medium-long MCP tool names.
+
+Reference MCP tools in `policy.yaml` by their qualified names:
+
+```yaml
+roles:
+  default:
+    tools:
+      "mcp-slack-list_channels": { mode: allow }
+      "mcp-slack-send_message":
+        mode: approval_required
+      "mcp-github-create_issue":
+        mode: allow
+        constraints: ['args.repo == "hexgate"']
+```
+
+How MCP servers are attached to an agent is in [MCP](/concepts/mcp).
+
+## Guards
+
+The code decides what a guard does. The policy can only switch it on or off, with
+a top-level `guards:` block keyed by the guard's name (its function's
+`__name__`):
+
+```yaml
+guards:
+  block_secrets:
+    enabled: false   # skipped on every call
+```
+
+- A guard the policy doesn't mention runs. `enabled` is required in each entry.
+- The block is agent-wide. A `guards:` under a tool entry is rejected, and every
+  role must set the same values, or `hexgate policy validate` fails.
+- With `--manifest`, `validate` also fails on a name the agent doesn't declare
+  (`unknown-guard`) or one two of its guards share (`ambiguous-guard`).
+
+What guards are, and how an agent declares them in its manifest, is in
+[guards](/concepts/guards).
+
 ## Applying a policy in code
 
 `create_agent(...)` stays close to LangChain; policy enforcement is applied after
@@ -145,7 +190,7 @@ inject policy later.
 Agents that need per-role behaviour ship a `policies/` directory (one file per
 role, with inheritance) instead of a single `policy.yaml`. A legacy single-file
 `policy.yaml` is treated as the `default` role — no migration needed. See
-[Request context + roles](/concepts/user-scope#role-policies-one-file-per-role) for the
+[Roles and caller attributes](/policy/roles-and-attributes#role-policies-one-file-per-role) for the
 multi-file shape. Through `inherits:`, `tools`, `agents`, `skills`, `guards` and
 `consts` merge by name: a child's entry replaces the parent's entry of the same
 name, and the rest is inherited. Policy-level `constraints` accumulate instead

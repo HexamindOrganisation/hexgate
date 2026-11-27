@@ -25,25 +25,9 @@ async with MCPToolset(slack) as mcp:
 
 ## Tool naming
 
-Qualified name format: `mcp-<server>-<tool>`. Hyphens (not colons or
-dots) so the name passes OpenAI Function Calling's regex
-`^[a-zA-Z0-9_-]{1,64}$`. The server name is caller-supplied and
-validated against `^[a-z0-9-]{1,32}$` so qualified names stay under the
-64-char OpenAI limit even for medium-long MCP tool names.
-
-Reference MCP tools in `policy.yaml` by their qualified names:
-
-```yaml
-roles:
-  default:
-    tools:
-      "mcp-slack-list_channels": { mode: allow }
-      "mcp-slack-send_message":
-        mode: approval_required
-      "mcp-github-create_issue":
-        mode: allow
-        constraints: ['args.repo == "hexgate"']
-```
+MCP tools are named `mcp-<server>-<tool>`, and a policy references them by that
+qualified name: see [YAML shape](/policy/yaml-shape#mcp-tools) for the format
+and an example.
 
 ## Transports
 
