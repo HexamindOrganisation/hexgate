@@ -1,8 +1,9 @@
 """The model the assistant talks to, built once at start-up from its model
 string.
 
-An ``openrouter:`` model runs on our key and is pinned to its own vendor:
-no fallback to another provider, none that keeps or trains on the data.
+An ``openrouter:`` model runs on our key and is pinned to its vendor's
+listed providers (the vendor itself and the clouds that host its models): no
+fallback to another provider, none that keeps or trains on the data.
 An ``openai:`` model (OpenAI's Responses API) or an ``openai-chat:`` model
 (Chat Completions: OpenAI, or a self-hosted OpenAI-compatible server such as
 vLLM or Ollama) goes to Pydantic AI's own lookup, which reads OpenAI's
@@ -40,8 +41,12 @@ MAX_RETRY_WAIT_SECONDS = 30
 # before the "/"). The two names are not always the same, so each vendor is
 # listed by hand once its slugs are checked against OpenRouter's provider
 # list. A vendor missing here is refused at start-up, never routed by guess.
+# Anthropic's list also names the clouds that host its models: the request
+# asks for zero data retention (zdr), and OpenRouter answers 404 when no
+# listed endpoint offers it. Anthropic's own endpoint does not, so its models
+# run on Amazon Bedrock and Google Vertex, whose endpoints do.
 PROVIDERS_BY_VENDOR: dict[str, list[str]] = {
-    "anthropic": ["anthropic"],
+    "anthropic": ["anthropic", "amazon-bedrock", "google-vertex"],
     "openai": ["openai"],
 }
 
@@ -78,7 +83,7 @@ def build_model(
 
 
 def provider_routing(slug: str) -> OpenRouterProviderConfig:
-    """Route ``vendor/model`` to the vendor's own providers alone, with no
+    """Route ``vendor/model`` to the vendor's listed providers alone, with no
     fallback and no data kept by them."""
     vendor, sep, model = slug.partition("/")
     if not sep or not vendor or not model:
