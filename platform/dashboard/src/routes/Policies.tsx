@@ -108,10 +108,13 @@ export function PoliciesPage() {
   const onNewFile = useCallback(
     (name: string) => {
       setDrafts((prev) => ({ ...prev, [name]: prev[name] ?? "" }));
-      setUntouchedNew((prev) => [...prev.filter((n) => n !== name), name]);
+      // Reopening a new file that already has a draft keeps it the user's.
+      if (drafts[name] === undefined) {
+        setUntouchedNew((prev) => [...prev.filter((n) => n !== name), name]);
+      }
       openFile(name);
     },
-    [openFile],
+    [openFile, drafts],
   );
 
   // A new file the user has not typed into stops being a draft once a file

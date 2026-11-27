@@ -69,7 +69,8 @@ export const ChangeCard = memo(function ChangeCard({
 });
 
 function CheckRow({ check }: { check: ChangeCheck }) {
-  const status = STATUS_ICON[check.status];
+  // The wire may carry a status or id newer than this build knows.
+  const status = STATUS_ICON[check.status] ?? STATUS_ICON.skipped;
   const { Icon } = status;
   return (
     <li className="flex items-start gap-1.5">
@@ -78,7 +79,7 @@ function CheckRow({ check }: { check: ChangeCheck }) {
         className={cn("mt-px size-3.5 shrink-0", status.tone)}
       />
       <div className="min-w-0">
-        <p>{CHECK_LABEL[check.id]}</p>
+        <p>{CHECK_LABEL[check.id] ?? check.id}</p>
         {check.detail && (
           <p className="break-words text-muted-foreground">{check.detail}</p>
         )}

@@ -595,6 +595,39 @@ describe("PoliciesPage after the assistant saves a change", () => {
     expect(screen.getAllByTitle("Unsaved changes").length).toBeGreaterThan(0);
   });
 
+  it("keeps a typed new file's draft when it is opened again by New file", async () => {
+    stubAssistant("extra.yaml");
+    const qc = makeQueryClient();
+    renderWithProviders(<PoliciesPage />, { client: qc });
+    await waitFor(() => expect(screen.getByText("active")).toBeInTheDocument());
+    await newFile("extra.yaml");
+    fireEvent.change(screen.getByLabelText("policy editor"), {
+      target: { value: "mine" },
+    });
+    fireEvent.click(
+      within(screen.getByTitle("extra.yaml")).getByTitle("Close tab"),
+    );
+    await waitFor(() => expect(screen.queryByTitle("extra.yaml")).toBeNull());
+    await newFile("extra.yaml");
+    expect(screen.getByLabelText("policy editor")).toHaveValue("mine");
+
+    await askForChange();
+    await waitFor(() =>
+      expect(
+        qc
+          .getQueryData<{ name: string }[]>(["policy-files", PID])
+          ?.some((f) => f.name === "extra.yaml"),
+      ).toBe(true),
+    );
+    // Still the page's draft: the tab keeps its unsaved mark.
+    expect(
+      within(screen.getAllByTitle("extra.yaml")[0]).getByTitle(
+        "Unsaved changes",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("policy editor")).toHaveValue("mine");
+  });
+
   it("closes the bar when dismissed", async () => {
     stubAssistant();
     renderWithProviders(<PoliciesPage />);

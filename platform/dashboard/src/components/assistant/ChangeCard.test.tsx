@@ -80,6 +80,18 @@ describe("ChangeCard", () => {
     expect(lints).toHaveTextContent("unknown-tool on refund_order");
   });
 
+  it("shows a check id or status this build does not know", () => {
+    stubChange(Response.json(STORED));
+    const checks = [
+      { id: "edits", status: "queued" },
+    ] as unknown as AssistantChange["checks"];
+    renderWithProviders(
+      <ChangeCard projectId="p1" change={{ ...CHANGE, checks }} />,
+    );
+    const row = screen.getByText("edits").closest("li")!;
+    expect(row.querySelector("[aria-label=skipped]")).not.toBeNull();
+  });
+
   it("reads the stored change and shows the first file's diff", async () => {
     const fetch = stubChange(Response.json(STORED));
     renderWithProviders(<ChangeCard projectId="p1" change={CHANGE} />);
