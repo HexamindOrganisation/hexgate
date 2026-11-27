@@ -81,6 +81,8 @@ async def test_when_the_model_calls_a_tool_then_mcp_runs_it_with_the_turn_token(
     output = await run(call_once(LIST_FILES, seen), mcp)
 
     offered = {t.name: t.parameters_json_schema for t in seen[0].function_tools}
+    # The MCP server's reads, and the agent's own write tool.
+    assert offered.pop("apply_change")
     assert offered == {t["name"]: t["inputSchema"] for t in snapshot_tools()}
     assert [(c.tool, c.arguments, c.authorization) for c in mcp.calls] == [
         ("policy_list_files", {"project_id": "p1"}, "Bearer tok-a")

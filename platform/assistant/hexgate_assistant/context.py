@@ -6,7 +6,7 @@ and the conversation's.
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date
 from typing import Any
@@ -50,6 +50,16 @@ def estimate_tokens(text: str) -> int:
     return -(-len(text.encode()) // BYTES_PER_TOKEN)
 
 
+def definition_tokens(tools: Iterable[tuple[str, str | None, dict[str, Any]]]) -> int:
+    """The estimated size of tool definitions, each (name, description,
+    input schema), as a model is offered them."""
+    offered = [
+        {"name": name, "description": description, "parameters": schema}
+        for name, description, schema in tools
+    ]
+    return estimate_tokens(json.dumps(offered))
+
+
 def keep_ends(text: str, max_bytes: int, marker: str) -> str:
     """`text`, or when it is over `max_bytes` (UTF-8) its start and end with
     `marker` between them, `{cut}` in it replaced by the bytes left out. The
@@ -73,23 +83,26 @@ WHOLE_RESULT_TOOLS = frozenset({"policy_reference", "policy_read_file"})
 WHOLE_RESULT_BYTES = 64 * 1024
 
 
-def cap_tool_result(tool: str, text: str) -> str:
-    """A tool result as the model receives it."""
+# How a policy file refused for its size is answered: the start of it.
+TOO_LARGE = "file too large for the assistant"
+# What a result cut short says in its middle, by default.
+NARROWER = (
+    "\n[… {cut} bytes cut from the middle of this result: call the tool "
+    "again with a narrower request to read them …]\n"
+)
+
+
+def cap_tool_result(tool: str, text: str, marker: str = NARROWER) -> str:
+    """A tool result as the model receives it; `marker` marks a cut."""
     size = _whole_result_size(tool, text)
     if tool in WHOLE_RESULT_TOOLS and size <= WHOLE_RESULT_BYTES:
         return text
     if tool == "policy_read_file":
         return (
-            f"file too large for the assistant (over "
-            f"{WHOLE_RESULT_BYTES // 1024} KiB: {size // 1024} KiB); "
-            "edit it in the editor"
+            f"{TOO_LARGE} (over {WHOLE_RESULT_BYTES // 1024} KiB: "
+            f"{size // 1024} KiB); edit it in the editor"
         )
-    return keep_ends(
-        text,
-        TOOL_RESULT_TOKENS * BYTES_PER_TOKEN,
-        "\n[… {cut} bytes cut from the middle of this result: call the tool "
-        "again with a narrower request to read them …]\n",
-    )
+    return keep_ends(text, TOOL_RESULT_TOKENS * BYTES_PER_TOKEN, marker)
 
 
 def _whole_result_size(tool: str, text: str) -> int:
@@ -186,7 +199,7 @@ async def read_project(mcp: MCPToolset[Any], project_id: str) -> ProjectState:
     effort: a project with no policy store has none."""
     args = {"project_id": project_id}
     listed, (roles, agents) = await asyncio.gather(
-        _call(mcp, "policy_list_files", args), _read_graph(mcp, args)
+        call_text(mcp, "policy_list_files", args), _read_graph(mcp, args)
     )
     listed = _file_list(listed)
     snapshot = {f["name"]: f["text_hash"] for f in listed["files"]}
@@ -224,7 +237,7 @@ async def _read_graph(
     mcp: MCPToolset[Any], args: dict[str, Any]
 ) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
     try:
-        graph = json.loads(await _call(mcp, "policy_graph", args))
+        graph = json.loads(await call_text(mcp, "policy_graph", args))
     except (ModelRetry, ValueError):
         # No policy store, a policy that does not compose, or a graph cut
         # short (no longer JSON): the card says they are unknown, and the
@@ -233,7 +246,8 @@ async def _read_graph(
     return tuple(graph["roles"]), tuple(graph["declared_agents"])
 
 
-async def _call(mcp: MCPToolset[Any], tool: str, args: dict[str, Any]) -> str:
+async def call_text(mcp: MCPToolset[Any], tool: str, args: dict[str, Any]) -> str:
+    """A direct MCP tool call's result, as text."""
     return as_text(await mcp.direct_call_tool(tool, args))
 
 
@@ -251,7 +265,9 @@ async def read_reference(mcp: MCPToolset[Any]) -> str:
     """The policy reference the model is given beside its instructions: the
     section index, then each of :data:`REFERENCE_SECTIONS`."""
     calls = [{}, *({"section": s} for s in REFERENCE_SECTIONS)]
-    texts = await asyncio.gather(*(_call(mcp, "policy_reference", a) for a in calls))
+    texts = await asyncio.gather(
+        *(call_text(mcp, "policy_reference", a) for a in calls)
+    )
     return "\n\n".join(["# Policy reference", *texts])
 
 
