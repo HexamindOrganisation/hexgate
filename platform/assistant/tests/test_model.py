@@ -10,6 +10,7 @@ from hexgate_assistant.model import (
     MODEL_REQUEST_ATTEMPTS,
     PROVIDERS_BY_VENDOR,
     build_model,
+    session_settings,
 )
 
 MODEL = "openrouter:anthropic/claude-sonnet-4.5"
@@ -32,9 +33,10 @@ COMPLETION = {
 
 
 class OpenRouter:
-    """Answers each request with the next status of ``statuses``; records them."""
+    """Answers each request with the next of ``statuses`` (a status, or a 200
+    with that body); records them."""
 
-    def __init__(self, *statuses: int):
+    def __init__(self, *statuses: int | dict):
         self.statuses = list(statuses)
         self.requests: list[httpx2.Request] = []
 
@@ -44,6 +46,8 @@ class OpenRouter:
     def handle(self, request: httpx2.Request) -> httpx2.Response:
         self.requests.append(request)
         status = self.statuses.pop(0)
+        if isinstance(status, dict):
+            return httpx2.Response(200, json=status)
         if status == 200:
             return httpx2.Response(200, json=COMPLETION)
         # Retry-After 0 keeps the test fast and exercises the header path.
@@ -161,3 +165,97 @@ async def test_when_a_vendor_is_mapped_then_the_request_goes_only_to_its_provide
 def test_when_a_vendor_is_not_mapped_then_build_model_refuses(vendor: str):
     with pytest.raises(ValueError, match=f"'{vendor}'.*model.py"):
         build_model(f"openrouter:{vendor}/some-model", "sk-or-test")
+
+
+TOOL_CALL = {
+    **COMPLETION,
+    "choices": [
+        {
+            "index": 0,
+            "finish_reason": "tool_calls",
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "look", "arguments": "{}"},
+                    }
+                ],
+            },
+        }
+    ],
+}
+
+
+def cached(block: dict) -> bool:
+    return block.get("cache_control", {}).get("type") == "ephemeral"
+
+
+def unmarked(messages: list[dict]) -> list[dict]:
+    """`messages` without cache markers, each text as a list of blocks."""
+
+    def blocks(content):
+        if isinstance(content, str):
+            return [{"type": "text", "text": content}]
+        if isinstance(content, list):
+            return [
+                {k: v for k, v in b.items() if k != "cache_control"} for b in content
+            ]
+        return content
+
+    return [m | {"content": blocks(m.get("content"))} for m in messages]
+
+
+def last_block(message: dict) -> dict:
+    content = message["content"]
+    return content[-1] if isinstance(content, list) else {}
+
+
+async def test_when_a_session_runs_two_turns_then_every_request_carries_its_cache_breakpoints():
+    openrouter = OpenRouter(TOOL_CALL, COMPLETION, COMPLETION)
+
+    model = build_model(MODEL, "sk-or-test", transport=openrouter.transport())
+    agent = Agent(model, instructions="the instructions")
+    agent.tool_plain(lambda: "looked", name="look")
+    settings = session_settings(model, "session-1")
+
+    # The runner passes the reference as run-level instructions, after the
+    # agent's own.
+    run = {"instructions": "the reference", "model_settings": settings}
+    first = await agent.run("one", **run)
+    await agent.run("two", message_history=first.all_messages(), **run)
+
+    requests = [json.loads(r.content) for r in openrouter.requests]
+    # Two requests in the first turn (the tool call, then the answer), one in
+    # the second.
+    assert len(requests) == 3
+    for body in requests:
+        assert body["session_id"] == "session-1"
+        messages = body["messages"]
+        split = next(i for i, m in enumerate(messages) if m["role"] != "system")
+        system, conversation = messages[:split], messages[split:]
+        # One breakpoint, after the reference: both instructions are cached.
+        assert "the reference" in json.dumps(system[-1])
+        assert cached(last_block(system[-1]))
+        assert not any(cached(last_block(m)) for m in system[:-1])
+        assert cached(body["tools"][-1])
+        assert cached(last_block(conversation[-1]))
+        # The only message breakpoint is the last one: a turn's new user
+        # message never sits before a breakpoint the next turn reuses.
+        assert not any(cached(last_block(m)) for m in conversation[:-1])
+    # Each request resends the one before it unchanged, cache markers aside,
+    # and adds to its end: that prefix is what the provider reads back.
+    for earlier, later in zip(requests, requests[1:]):
+        sent = unmarked(earlier["messages"])
+        assert unmarked(later["messages"])[: len(sent)] == sent
+
+
+@pytest.mark.parametrize("name", ["openai:gpt-x", "openai-chat:llama"])
+def test_when_the_model_is_not_openrouter_then_session_settings_add_nothing(
+    monkeypatch, name: str
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    assert session_settings(build_model(name, None), "session-1") == {}

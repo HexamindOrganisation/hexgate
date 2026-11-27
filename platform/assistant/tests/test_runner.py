@@ -272,6 +272,43 @@ async def test_when_a_session_goes_on_then_the_model_gets_its_history(
     assert seen[1][1].parts[0].content == "ok"
 
 
+async def test_when_a_session_goes_on_then_each_turn_sends_its_session_id(
+    settings, mcp, key, monkeypatch
+):
+    # The real settings are OpenRouter's alone; here every model gets them.
+    monkeypatch.setattr(
+        runner, "session_settings", lambda _model, sid: {"extra_body": {"sid": sid}}
+    )
+    seen: list[object] = []
+
+    def respond(messages, info):
+        seen.append(info.model_settings["extra_body"])
+        return text(messages, info)
+
+    async with platform(settings, mcp, key, scripted(respond)) as (client, turns):
+        first = await turn(client, turns, message="one")
+        session_id = first[0]["threadId"]
+        await turn(client, turns, session_id=session_id, message="two")
+
+    assert seen == [{"sid": session_id}] * 2
+
+
+async def test_when_turns_run_then_the_instructions_do_not_carry_the_card(
+    settings, mcp, key
+):
+    seen: list[str | None] = []
+    model = scripted(recording(seen, lambda m: m[-1].instructions))
+
+    async with platform(settings, mcp, key, model) as (client, turns):
+        await turn(client, turns)
+        await turn(client, turns)
+
+    # The card goes in the user message: the instructions, cached ahead of
+    # it, are the same on every turn.
+    (instructions,) = set(seen)
+    assert "Project id:" not in instructions
+
+
 async def test_when_no_model_is_configured_then_503(settings, mcp, key):
     async with platform(settings, mcp, key, None) as (client, _):
         response = await post(client)
