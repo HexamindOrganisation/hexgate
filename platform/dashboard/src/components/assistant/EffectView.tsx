@@ -16,19 +16,19 @@ const MODE_LABEL: Record<string, string> = {
 /** What a change does to the policy: who gains or loses what, then the
  * agent-level and gate changes. `effect` is read from a stored row, so any
  * list may be missing. */
-export function EffectView({ effect }: { effect: PolicyDiff | null }) {
-  const changes = effect?.changes ?? [];
-  const agentChanges = effect?.agent_changes ?? [];
-  const gateChanges = effect?.gate_changes ?? [];
+export function EffectView({ effect }: { effect: PolicyDiff }) {
+  const changes = effect.changes ?? [];
+  const agentChanges = effect.agent_changes ?? [];
+  const gateChanges = effect.gate_changes ?? [];
   // Nothing was compared when a side does not compose: the note says so, and
   // "nothing changes" would contradict it.
   const compared =
-    !effect?.composes || (effect.composes.before && effect.composes.after);
+    !effect.composes || (effect.composes.before && effect.composes.after);
   const empty =
     compared && changes.length + agentChanges.length + gateChanges.length === 0;
   return (
     <div className="space-y-3 px-3 py-2">
-      <ComposesNote composes={effect?.composes} />
+      <ComposesNote composes={effect.composes} />
       {empty && (
         <p className="text-muted-foreground">
           No agent gains or loses anything.
@@ -84,7 +84,12 @@ function GrantRow({ change }: { change: PolicyChange }) {
           {change.agent} · {change.role} · {change.tool}
         </span>
         {keptMode !== null ? (
-          <span>{MODE_LABEL[keptMode] ?? keptMode}, constraints changed</span>
+          <span>
+            {MODE_LABEL[keptMode] ?? keptMode},{" "}
+            {added.length + removed.length === 0
+              ? "constraints reordered"
+              : "constraints changed"}
+          </span>
         ) : (
           <>
             <Grant grant={change.before} />

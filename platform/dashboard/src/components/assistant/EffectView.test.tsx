@@ -147,6 +147,30 @@ describe("EffectView", () => {
     );
   });
 
+  it("says reordered when a grant's constraints moved but none was added or removed", () => {
+    render(
+      <EffectView
+        effect={{
+          composes: { before: true, after: true },
+          changes: [
+            {
+              agent: "a",
+              role: "r",
+              tool: "t",
+              before: { mode: "allow", constraints: ["(a) and (b)"] },
+              after: { mode: "allow", constraints: ["(b) and (a)"] },
+              constraints_added: [],
+              constraints_removed: [],
+            },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByLabelText("Grant changes")).toHaveTextContent(
+      "allowed, constraints reordered",
+    );
+  });
+
   it("shows an unknown mode as it came", () => {
     render(
       <EffectView
@@ -166,10 +190,8 @@ describe("EffectView", () => {
     expect(screen.getByText("quarantine")).toBeInTheDocument();
   });
 
-  it("tolerates an effect stored without its lists, or without an effect", () => {
-    const { rerender } = render(<EffectView effect={{}} />);
-    expect(screen.getByText(/No agent gains or loses/)).toBeInTheDocument();
-    rerender(<EffectView effect={null} />);
+  it("tolerates an effect stored without its lists", () => {
+    render(<EffectView effect={{}} />);
     expect(screen.getByText(/No agent gains or loses/)).toBeInTheDocument();
   });
 

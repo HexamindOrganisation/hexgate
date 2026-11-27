@@ -115,6 +115,9 @@ function ChangeDetail({
   change: AssistantChange;
 }) {
   const stored = usePolicyChange(projectId, change.change_id);
+  // Kept here, not in ChangeFiles: an inactive tab's panel unmounts, and the
+  // picked file must survive a visit to the other tab.
+  const [picked, setPicked] = useState(change.files[0].name);
   return (
     <Tabs defaultValue="files" className="border-t border-border/60">
       <TabsList
@@ -125,7 +128,12 @@ function ChangeDetail({
         <TabsTrigger value="effect">Effect</TabsTrigger>
       </TabsList>
       <TabsContent value="files" className="mt-0">
-        <ChangeFiles change={change} stored={stored} />
+        <ChangeFiles
+          change={change}
+          stored={stored}
+          picked={picked}
+          onPick={setPicked}
+        />
       </TabsContent>
       <TabsContent value="effect" className="mt-0 border-t border-border/60">
         {stored.data ? (
@@ -146,15 +154,18 @@ function ChangeDetail({
 function ChangeFiles({
   change,
   stored,
+  picked,
+  onPick,
 }: {
   change: AssistantChange;
   stored: UseQueryResult<ChangeRead>;
+  picked: string;
+  onPick: (name: string) => void;
 }) {
-  const [picked, setPicked] = useState(change.files[0].name);
   const file = stored.data?.files.find((f) => f.name === picked);
   return (
     <div className="border-t border-border/60">
-      <Tabs value={picked} onValueChange={setPicked}>
+      <Tabs value={picked} onValueChange={onPick}>
         <TabsList
           aria-label="Changed files"
           className="flex h-auto flex-wrap justify-start gap-1 border-0 bg-transparent px-3 py-2"

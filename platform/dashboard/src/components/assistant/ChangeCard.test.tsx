@@ -143,6 +143,22 @@ describe("ChangeCard", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the picked file across a visit to the Effect tab", async () => {
+    stubChange(Response.json(STORED));
+    renderWithProviders(<ChangeCard projectId="p1" change={CHANGE} />);
+    await userEvent.click(screen.getByRole("tab", { name: /caps\/new\.yaml/ }));
+    await userEvent.click(screen.getByRole("tab", { name: "Effect" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Files" }));
+    expect(
+      screen.getByRole("tab", { name: /caps\/new\.yaml/ }),
+    ).toHaveAttribute("aria-selected", "true");
+    await waitFor(() =>
+      expect(screen.getByLabelText("after")).toHaveTextContent(
+        "approval: true",
+      ),
+    );
+  });
+
   it("says so when the stored change cannot be read", async () => {
     stubChange(new Response("not found", { status: 404 }));
     renderWithProviders(<ChangeCard projectId="p1" change={CHANGE} />);

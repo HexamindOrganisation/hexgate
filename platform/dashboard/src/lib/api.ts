@@ -1279,7 +1279,7 @@ export interface ChangeRead {
   created_at: string;
   files: ChangeFile[];
   checks: ChangeCheck[];
-  effect: PolicyDiff | null;
+  effect: PolicyDiff;
 }
 
 /** The api's assistant routes: both take the session cookie, so a 401 is an
