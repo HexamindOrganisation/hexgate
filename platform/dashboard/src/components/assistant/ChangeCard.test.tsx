@@ -89,7 +89,11 @@ describe("ChangeCard", () => {
       <ChangeCard projectId="p1" change={{ ...CHANGE, checks }} />,
     );
     const row = screen.getByText("edits").closest("li")!;
-    expect(row.querySelector("[aria-label=skipped]")).not.toBeNull();
+    // Shown as it came, never as a status this build knows.
+    expect(row).toHaveTextContent("status: queued");
+    expect(row.querySelector("[aria-label='status: queued']")).not.toBeNull();
+    expect(row.querySelector("[aria-label=skipped]")).toBeNull();
+    expect(row).not.toHaveTextContent("skipped");
   });
 
   it("reads the stored change and shows the first file's diff", async () => {

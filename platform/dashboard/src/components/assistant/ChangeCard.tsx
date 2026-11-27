@@ -2,6 +2,7 @@ import { memo, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  CircleHelp,
   CircleMinus,
   FileDiff,
   XCircle,
@@ -69,8 +70,16 @@ export const ChangeCard = memo(function ChangeCard({
 });
 
 function CheckRow({ check }: { check: ChangeCheck }) {
-  // The wire may carry a status or id newer than this build knows.
-  const status = STATUS_ICON[check.status] ?? STATUS_ICON.skipped;
+  // The wire may carry a status or id newer than this build knows: such a
+  // status is shown as it came, never as one this build does know.
+  const known = STATUS_ICON[check.status] as
+    | (typeof STATUS_ICON)[keyof typeof STATUS_ICON]
+    | undefined;
+  const status = known ?? {
+    Icon: CircleHelp,
+    tone: "text-muted-foreground",
+    label: `status: ${check.status}`,
+  };
   const { Icon } = status;
   return (
     <li className="flex items-start gap-1.5">
@@ -79,7 +88,12 @@ function CheckRow({ check }: { check: ChangeCheck }) {
         className={cn("mt-px size-3.5 shrink-0", status.tone)}
       />
       <div className="min-w-0">
-        <p>{CHECK_LABEL[check.id] ?? check.id}</p>
+        <p>
+          {CHECK_LABEL[check.id] ?? check.id}
+          {!known && (
+            <span className="text-muted-foreground"> ({status.label})</span>
+          )}
+        </p>
         {check.detail && (
           <p className="break-words text-muted-foreground">{check.detail}</p>
         )}
