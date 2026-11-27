@@ -12,8 +12,9 @@
  */
 
 import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Route, Routes } from "react-router-dom";
+import { Link, Route, Routes } from "react-router-dom";
 
 import { OrgSettingsPage } from "@/routes/OrgSettings";
 import { renderWithProviders } from "@/test/render";
@@ -38,11 +39,33 @@ function stubFetch(routes: Record<string, unknown>): void {
  * useParams, so the MemoryRouter needs the route shape mounted. */
 function renderSettings(orgId: string) {
   return renderWithProviders(
-    <Routes>
-      <Route path="/orgs/:orgId/settings" element={<OrgSettingsPage />} />
-    </Routes>,
+    <>
+      <Link to="/orgs/org-2/settings">switch org</Link>
+      <Routes>
+        <Route path="/orgs/:orgId/settings" element={<OrgSettingsPage />} />
+      </Routes>
+    </>,
     { initialRoute: `/orgs/${orgId}/settings` },
   );
+}
+
+const ME = {
+  id: "me",
+  email: "me@example.com",
+  is_active: true,
+  is_superuser: false,
+  is_verified: true,
+};
+
+function orgRow(role: "owner" | "member") {
+  return {
+    id: "org-1",
+    slug: "acme",
+    name: "Acme Inc",
+    assistant_mode: "read_write",
+    created_at: "2026-01-01T00:00:00Z",
+    role,
+  };
 }
 
 describe("OrgSettingsPage", () => {
@@ -62,6 +85,7 @@ describe("OrgSettingsPage", () => {
           id: "org-1",
           slug: "acme",
           name: "Acme Inc",
+          assistant_mode: "read_write",
           created_at: "2026-01-01T00:00:00Z",
           role: "member",
         },
@@ -93,6 +117,7 @@ describe("OrgSettingsPage", () => {
           id: "org-1",
           slug: "acme",
           name: "Acme Inc",
+          assistant_mode: "read_write",
           created_at: "2026-01-01T00:00:00Z",
           role: "owner",
         },
@@ -116,6 +141,87 @@ describe("OrgSettingsPage", () => {
     expect(screen.getByText("Save changes")).toBeInTheDocument();
     // The view-only banner shouldn't show.
     expect(screen.queryByText(/View-only/i)).not.toBeInTheDocument();
+  });
+
+  it("disables the assistant mode select for plain members", async () => {
+    stubFetch({ "/v1/orgs": [orgRow("member")], "/v1/users/me": ME });
+
+    renderSettings("org-1");
+
+    const select = await screen.findByLabelText("Policy assistant");
+    expect(select).toBeDisabled();
+    expect(select).toHaveTextContent("Read and write");
+  });
+
+  it("PATCHes only assistant_mode when an owner changes it", async () => {
+    stubFetch({ "/v1/orgs": [orgRow("owner")], "/v1/users/me": ME });
+    const user = userEvent.setup();
+
+    renderSettings("org-1");
+
+    await user.click(await screen.findByLabelText("Policy assistant"));
+    await user.click(await screen.findByRole("option", { name: "Read only" }));
+    await user.click(screen.getByText("Save changes"));
+
+    await waitFor(() => {
+      const patch = vi
+        .mocked(window.fetch)
+        .mock.calls.find(([, init]) => init?.method === "PATCH");
+      expect(patch?.[0]).toBe("/v1/orgs/org-1");
+      expect(JSON.parse(patch?.[1]?.body as string)).toEqual({
+        assistant_mode: "read_only",
+      });
+    });
+  });
+
+  it("goes clean after a save that changes only the assistant mode", async () => {
+    let row = orgRow("owner");
+    vi.spyOn(window, "fetch").mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = input.toString().split("?")[0];
+        if (init?.method === "PATCH") {
+          row = { ...row, ...JSON.parse(init.body as string) };
+          return Response.json(row);
+        }
+        return Response.json(path === "/v1/orgs" ? [row] : ME);
+      },
+    );
+    const user = userEvent.setup();
+
+    renderSettings("org-1");
+
+    await user.click(await screen.findByLabelText("Policy assistant"));
+    await user.click(await screen.findByRole("option", { name: "Read only" }));
+    await user.click(screen.getByText("Save changes"));
+
+    // The refetched org carries the saved mode; the form re-seeds from it.
+    await waitFor(() => {
+      expect(screen.getByText("Save changes")).toBeDisabled();
+    });
+  });
+
+  it("repopulates the assistant mode when switching org", async () => {
+    stubFetch({
+      "/v1/orgs": [
+        orgRow("owner"),
+        { ...orgRow("owner"), id: "org-2", assistant_mode: "off" },
+      ],
+      "/v1/users/me": ME,
+    });
+    const user = userEvent.setup();
+
+    renderSettings("org-1");
+    expect(await screen.findByLabelText("Policy assistant")).toHaveTextContent(
+      "Read and write",
+    );
+
+    await user.click(screen.getByText("switch org"));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Policy assistant")).toHaveTextContent(
+        "Off",
+      );
+    });
   });
 
   it("shows \"not found\" when the org isn't in the user's list", async () => {

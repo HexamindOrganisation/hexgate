@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
@@ -14,11 +14,24 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/ui/page-header";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ApiError } from "@/lib/api";
 import { useActive } from "@/lib/active";
 import { useUser } from "@/lib/auth";
 import { useLeaveOrg } from "@/lib/members";
-import { useOrgs, useUpdateOrg } from "@/lib/orgs";
+import { ASSISTANT_MODES, useOrgs, useUpdateOrg } from "@/lib/orgs";
+
+const ASSISTANT_MODE_LABELS = {
+  off: "Off",
+  read_only: "Read only",
+  read_write: "Read and write",
+} as const;
 
 /** Mirror of CreateOrgDialog's slug regex (DNS-label shape). */
 const SLUG_REGEX = /^([a-z]|[a-z][a-z0-9-]*[a-z0-9])$/;
@@ -33,13 +46,14 @@ const SettingsSchema = z.object({
       SLUG_REGEX,
       "Lowercase letters, digits, hyphens. Must start with a letter.",
     ),
+  assistant_mode: z.enum(ASSISTANT_MODES),
 });
 
 type SettingsValues = z.infer<typeof SettingsSchema>;
 
 /**
- * `/orgs/:orgId/settings` — name + slug editing + the "Leave organization"
- * danger zone.
+ * `/orgs/:orgId/settings` — name, slug and assistant mode editing + the
+ * "Leave organization" danger zone.
  *
  * Role-aware:
  *   - Plain members see read-only inputs + an explanatory line
@@ -63,7 +77,7 @@ export function OrgSettingsPage() {
 
   const form = useForm<SettingsValues>({
     resolver: zodResolver(SettingsSchema),
-    defaultValues: { name: "", slug: "" },
+    defaultValues: { name: "", slug: "", assistant_mode: "read_write" },
   });
 
   // Reset the form whenever the active org row changes — switching orgs
@@ -71,11 +85,15 @@ export function OrgSettingsPage() {
   // fields with the new org's values.
   useEffect(() => {
     if (org) {
-      form.reset({ name: org.name, slug: org.slug });
+      form.reset({
+        name: org.name,
+        slug: org.slug,
+        assistant_mode: org.assistant_mode,
+      });
       updateOrg.reset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [org?.id, org?.name, org?.slug]);
+  }, [org?.id, org?.name, org?.slug, org?.assistant_mode]);
 
   if (orgsQuery.isLoading) {
     return (
@@ -108,6 +126,10 @@ export function OrgSettingsPage() {
         orgId: org.id,
         name: values.name !== org.name ? values.name : undefined,
         slug: values.slug !== org.slug ? values.slug : undefined,
+        assistant_mode:
+          values.assistant_mode !== org.assistant_mode
+            ? values.assistant_mode
+            : undefined,
       });
       toast.success("Organization saved");
     } catch (err) {
@@ -170,7 +192,7 @@ export function OrgSettingsPage() {
             <Alert>
               <AlertDescription>
                 View-only — only admins and owners can edit this organization's
-                name or slug.
+                name, slug or assistant mode.
               </AlertDescription>
             </Alert>
           )}
@@ -206,6 +228,36 @@ export function OrgSettingsPage() {
                 {form.formState.errors.slug.message}
               </p>
             )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="org-assistant-mode">Policy assistant</Label>
+            <Controller
+              control={form.control}
+              name="assistant_mode"
+              render={({ field }) => (
+                <Select
+                  value={field.value}
+                  onValueChange={field.onChange}
+                  disabled={!canEdit}
+                >
+                  <SelectTrigger id="org-assistant-mode">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ASSISTANT_MODES.map((mode) => (
+                      <SelectItem key={mode} value={mode}>
+                        {ASSISTANT_MODE_LABELS[mode]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            />
+            <p className="text-xs text-muted-foreground">
+              Off hides the assistant; read only lets it inspect policies; read
+              and write lets it also apply changes.
+            </p>
           </div>
         </div>
 
