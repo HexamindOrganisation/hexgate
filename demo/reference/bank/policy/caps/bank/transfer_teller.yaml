@@ -1,0 +1,7 @@
+# Tellers move up to 1,000 EUR per transfer, and only to a beneficiary the customer has registered.
+tools:
+  transfer_funds:
+    mode: allow
+    constraints:
+      - args.amount_eur <= 1000
+      - any(ctx.session_beneficiaries, . == args.to_iban)

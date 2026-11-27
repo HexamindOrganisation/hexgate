@@ -10,9 +10,10 @@
  * is a separate, debounced read of an unsaved draft — it never writes.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   keepPreviousData,
+  type QueryClient,
   useMutation,
   useQuery,
   useQueryClient,
@@ -22,6 +23,7 @@ import { useActive } from "./active";
 import {
   api,
   ApiError,
+  type ChangeRead,
   type PolicyFileDraft,
   type PolicyFileRead,
   type PolicyMatrixCell,
@@ -39,14 +41,29 @@ const matrixKey = (pid: string, agent: string, tools: string[]) =>
 const resolveKey = (pid: string, role: string | null, agent: string | null) =>
   ["policy-resolve", pid, role, agent] as const;
 const checkKey = (pid: string) => ["policy-check", pid] as const;
+const changeKey = (pid: string, id: string) =>
+  ["policy-change", pid, id] as const;
+
+/** Retry only transient errors: a 4xx answer stays the answer. */
+const retryTransient = (n: number, err: unknown) =>
+  !(err instanceof ApiError && err.status < 500) && n < 2;
+
+type Invalidate = Parameters<QueryClient["invalidateQueries"]>[1];
 
 /** Bust every derived read for a project after a write. The stored files are
  * authoritative; resolve/graph/check/preview all recompute from them. */
-function invalidateDerived(qc: ReturnType<typeof useQueryClient>, pid: string) {
-  qc.invalidateQueries({ queryKey: ["policy-resolve", pid] });
-  qc.invalidateQueries({ queryKey: ["policy-graph", pid] });
-  qc.invalidateQueries({ queryKey: checkKey(pid) });
-  qc.invalidateQueries({ queryKey: ["policy-preview", pid] });
+function invalidateDerived(qc: QueryClient, pid: string, opts?: Invalidate) {
+  qc.invalidateQueries({ queryKey: ["policy-resolve", pid] }, opts);
+  qc.invalidateQueries({ queryKey: ["policy-graph", pid] }, opts);
+  qc.invalidateQueries({ queryKey: checkKey(pid) }, opts);
+  qc.invalidateQueries({ queryKey: ["policy-preview", pid] }, opts);
+}
+
+/** Refetch the files themselves, written outside this cache, and every read
+ * derived from them. */
+function invalidateFiles(qc: QueryClient, pid: string, opts?: Invalidate) {
+  qc.invalidateQueries({ queryKey: filesKey(pid) }, opts);
+  invalidateDerived(qc, pid, opts);
 }
 
 /** Every compose file in the project. Disabled while `projectId` is null so
@@ -58,6 +75,44 @@ export function usePolicyFiles(projectId: string | null) {
     enabled: !!projectId,
     staleTime: 30_000,
   });
+}
+
+/** One applied change, read back whole. A change row never changes once
+ * written, so it is fetched once. */
+export function usePolicyChange(projectId: string, changeId: string) {
+  return useQuery<ChangeRead>({
+    queryKey: changeKey(projectId, changeId),
+    queryFn: () => api.getPolicyChange(projectId, changeId),
+    retry: retryTransient,
+    staleTime: Infinity,
+  });
+}
+
+/** The last change each project's files were refetched for. Module-level,
+ * so a remount of the page does not refetch again for a change it handled. */
+const refetchedFor = new Map<string, string>();
+
+/** Refetch the project's files, and every read derived from them, once per
+ * change saved elsewhere (by the assistant); a change that landed while the
+ * page was away is caught up on mount. A clean editor buffer then shows the
+ * new text by itself. */
+export function useRefetchOnChange(
+  projectId: string | null,
+  changeId: string | null,
+) {
+  const qc = useQueryClient();
+  const mounting = useRef(true);
+  useEffect(() => {
+    const catchUp = mounting.current;
+    mounting.current = false;
+    if (!projectId || !changeId || refetchedFor.get(projectId) === changeId)
+      return;
+    refetchedFor.set(projectId, changeId);
+    // At mount, a read in flight is the mount's own, sent after the change:
+    // reuse it rather than send a second. A live change cancels a read in
+    // flight, which may predate the write, and reads again.
+    invalidateFiles(qc, projectId, { cancelRefetch: !catchUp });
+  }, [qc, projectId, changeId]);
 }
 
 /** Chip / cell colours for an engine matrix mode. */
@@ -81,7 +136,7 @@ export function usePolicyMatrix(
     // Classic (non-compose) projects have no matrix; don't fire the 422.
     enabled: !!projectId && enabled,
     // A policy that doesn't compose stays a 422; retry only transient errors.
-    retry: (n, err) => !(err instanceof ApiError && err.status < 500) && n < 2,
+    retry: retryTransient,
     // No placeholder: another agent's verdicts must never stand in for this
     // one's. Cached, so switching back to an agent shows its grid at once.
     staleTime: 15_000,
@@ -230,10 +285,7 @@ export function useRenameFile(projectId: string) {
       await api.deletePolicyFile(projectId, oldName);
       return { oldName, newName, importers: importers.length };
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: filesKey(projectId) });
-      invalidateDerived(qc, projectId);
-    },
+    onSuccess: () => invalidateFiles(qc, projectId),
   });
 }
 

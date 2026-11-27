@@ -1,4 +1,4 @@
-"""`policy_save`: the one write over the API, with the dashboard's permissions."""
+"""`policy_save`: save one policy file over the API, with the dashboard's permissions."""
 
 from urllib.parse import quote
 

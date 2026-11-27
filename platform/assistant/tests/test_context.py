@@ -93,6 +93,7 @@ def test_estimate_tokens_happy_path():
 
 def project(**changes) -> ProjectState:
     values = {
+        "project_id": "p1",
         "snapshot": {"policy.yaml": "h1"},
         "layout": "compose",
         "roles": ("support",),
@@ -105,6 +106,7 @@ def test_project_card_happy_path():
     card = project_card(project(), may_write=True, today=date(2026, 11, 25))
 
     assert card == (
+        "Project id: p1\n"
         "Today: 2026-11-25\n"
         "This turn may write: yes\n"
         "Layout: compose\n"

@@ -1077,6 +1077,11 @@ export const api = {
       `/v1/projects/${projectId}/policy/graph${qs({ role })}`,
     ),
 
+  getPolicyChange: (projectId: string, changeId: string) =>
+    request<ChangeRead>(
+      `/v1/projects/${projectId}/policy/changes/${encodeURIComponent(changeId)}`,
+    ),
+
   previewPolicy: (projectId: string, draft: PolicyFileDraft, agent?: string) =>
     request<PolicyPreviewResponse>(`/v1/projects/${projectId}/policy/preview`, {
       method: "POST",
@@ -1186,6 +1191,95 @@ export interface AssistantToken {
   token: string;
   expires_at: string;
   can_write: boolean;
+}
+
+/** The platform checks an applied change passed. Mirror of
+ * platform/api apply_checks.py's `CheckId` and `Status`. */
+export type ChangeCheckId =
+  | "yaml"
+  | "composes"
+  | "lints"
+  | "dry_runs"
+  | "boundary"
+  | "bundle";
+export type ChangeCheckStatus = "pass" | "warn" | "fail" | "skipped";
+
+/** One platform check of an applied change, as the api reports it. */
+export interface ChangeCheck {
+  id: ChangeCheckId;
+  status: ChangeCheckStatus;
+  detail?: string | null;
+}
+
+/** One file of an applied change; `before_content` is null for a file the
+ * change created. Mirror of platform/api schemas.py:ChangeFileOut. */
+export interface ChangeFile {
+  name: string;
+  before_content: string | null;
+  before_hash: string | null;
+  after_content: string;
+  after_hash: string;
+}
+
+/** What one role may do with one tool. Mirror of schemas.py:PolicyGrantOut. */
+export interface PolicyGrant {
+  mode: string;
+  constraints?: string[];
+}
+
+/** One (agent, role, tool) whose grant a change moves; null = not reachable.
+ * Mirror of schemas.py:PolicyChangeOut. */
+export interface PolicyChange {
+  agent: string;
+  role: string;
+  tool: string;
+  before: PolicyGrant | null;
+  after: PolicyGrant | null;
+  constraints_added?: string[];
+  constraints_removed?: string[];
+}
+
+/** An agent-level field (`guards` or `usage`) a change moves. Mirror of
+ * schemas.py:PolicyAgentChangeOut. */
+export interface PolicyAgentChange {
+  agent: string;
+  key: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+}
+
+/** An opt-in gate a change switches on or off. Mirror of
+ * schemas.py:PolicyGateChangeOut. */
+export interface PolicyGateChange {
+  agent: string;
+  gate: string;
+  before: boolean;
+  after: boolean;
+}
+
+/** What a change does to the policy. Mirror of schemas.py:PolicyDiffResponse.
+ * Stored rows are kept for the project's lifetime and a field added to the
+ * api later only gets a default, so every list may be missing from an older
+ * row. */
+export interface PolicyDiff {
+  changes?: PolicyChange[];
+  agent_changes?: PolicyAgentChange[];
+  gate_changes?: PolicyGateChange[];
+  agents_affected?: string[];
+  composes?: { before: boolean; after: boolean };
+}
+
+/** One applied policy change, as stored: the fields of schemas.py:ChangeRead
+ * the dashboard reads. `effect` is the diff computed before the save. */
+export interface ChangeRead {
+  id: string;
+  project_id: string;
+  session_id: string | null;
+  summary: string;
+  created_at: string;
+  files: ChangeFile[];
+  checks: ChangeCheck[];
+  effect: PolicyDiff;
 }
 
 /** The api's assistant routes: both take the session cookie, so a 401 is an

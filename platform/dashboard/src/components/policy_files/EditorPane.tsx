@@ -84,7 +84,9 @@ export function EditorPane({
     setDraft(drafts[name] ?? saved);
     setSaveError(null);
   } else if (saved !== syncSaved) {
-    const wasClean = draft === syncSaved;
+    // A buffer the page holds a draft for is the user's, even when it matches
+    // the old base (a new file typed into and emptied again).
+    const wasClean = draft === syncSaved && !(name in drafts);
     setSyncSaved(saved);
     if (wasClean) setDraft(saved);
   }

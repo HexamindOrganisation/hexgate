@@ -418,7 +418,12 @@ v1 had no full run: on the six cases it targeted it passed 11 of 18 samples
 (v0: 3). Partial runs: v2 15 of 18 on the same six, v3 12 of 15 on
 `must_refuse`, v4 12 of 12 on `admission`, `admission_with_global_cap`,
 `agent_as_tool` and `handoff_approval`, v5 18 of 18 on those four and the two
-revoke cases.
+revoke cases. After its full run, v6's `writing-a-policy.mdx` gained two
+dry-run fallbacks for tools that take one role at a time or no usage values,
+such as the MCP server's `policy_dry_run`; the skill text did not change. On
+the five cases about usage caps and several roles it passed 15 of 15, every
+case as before, and the samples that ran dry-runs still tested several roles
+at once with `--roles`.
 
 Two cases came after v4's full run, so the tables above don't count them:
 `robustness/revoke_last_tool_reach` and `robustness/revoke_last_handoff`
@@ -460,6 +465,7 @@ with its real task and id:
 | `admission-reach4` | `admission`, `admission_with_global_cap`, `agent_as_tool`, `handoff_approval` |
 | `revoke-last2` | `revoke_last_tool_reach`, `revoke_last_handoff` |
 | `admission-reach-revoke6` | the four of `admission-reach4` and the two of `revoke-last2` |
+| `victor5` | `rate_limit_unsupported`, `admission`, `admission_with_global_cap`, `l2b_roles_no_meaning`, `l2_roles_hierarchy` |
 
 A copy can be checked by its SHA-256:
 
@@ -479,6 +485,7 @@ A copy can be checked by its SHA-256:
 | v5, all | `2026-11-24T11-45-08-00-00_policy-writing_sonnet-5-5-epoch-3-all-072433d7_5rbJq6fYubTs7fvjvLvP72.eval` | `254eac933b9ce95ac575d6051c731a48f596ae864c7b3bf5d8288c0a011e600e` |
 | v5, all, docs in the sandbox | `2026-11-25T13-59-37-00-00_policy-writing_sonnet-5-5-epoch-3-all-f48eed06_4qMuKyL6wt2scWLcVGuYNR.eval` | `fa396d84e41fa798dfbf49c596bb8d654c789849f4f7a2b721288048f8b606a1` |
 | v6, all, docs in the sandbox | `2026-11-26T15-04-15-00-00_policy-writing_sonnet-5-5-epoch-3-all-e908462d_SHjAruvj7w5e4yG7KVyYpD.eval` | `ecf5e96f8c0cd98312bb5915948322e1edb813a1d865519ac786dbafc2dba374` |
+| v6, five cases, dry-run fallbacks | `2026-11-27T14-56-31-00-00_policy-writing_sonnet-5-5-epoch-3-victor5-0f883a32_cEffxhCNvkogYAnuUUYhWL.eval` | `832d52cd1a2f2fe5e85f3011e7e1bec9684764af77b0a82262fc442f35d71ec4` |
 
 ## Adding a case
 

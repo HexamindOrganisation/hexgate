@@ -73,6 +73,11 @@ def test_when_both_scope_and_project_are_missing_then_the_scope_is_named(signed_
     ("tool", "arguments", "scope"),
     [
         ("policy_save", {"name": "policy.yaml", "content": ""}, "policy:write"),
+        (
+            "policy_apply",
+            {"files": [], "summary": ""},
+            "policy:apply",
+        ),
         ("audit_decisions", {}, "audit:read"),
         ("agents_list", {}, "agents:read"),
     ],

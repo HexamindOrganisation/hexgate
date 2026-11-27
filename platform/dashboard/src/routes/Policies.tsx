@@ -12,9 +12,15 @@ import {
   usePolicyFiles,
   usePolicyMatrix,
   usePolicyPreview,
+  useRefetchOnChange,
   useRenameFile,
   useResolvedPolicy,
 } from "@/lib/policy_files";
+import {
+  lastChangeTo,
+  useAssistantChanges,
+  useClosedChangeBars,
+} from "@/lib/assistant";
 import { useEmptyFolders } from "@/lib/empty_folders";
 import { composeAgentNames, referencesImport } from "@/lib/imports";
 import { baseName, ENTRY_FILE, isModular } from "@/lib/file_tree";
@@ -29,6 +35,7 @@ import {
 import { FileTree } from "@/components/policy_files/FileTree";
 import { EditorPane } from "@/components/policy_files/EditorPane";
 import { InspectorTabs } from "@/components/policy_files/InspectorTabs";
+import { AssistantChangeBar } from "@/components/assistant/AssistantChangeBar";
 
 const MAX_TABS = 6;
 
@@ -57,6 +64,8 @@ export function PoliciesPage() {
   const [selection, setSelection] = useState<string | null>(null);
   const [openTabs, setOpenTabs] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  // New files the user has not typed into yet (an empty "untitled" buffer).
+  const [untouchedNew, setUntouchedNew] = useState<string[]>([]);
   const dirtyKeys = useMemo(() => new Set(Object.keys(drafts)), [drafts]);
 
   // Default the open file once files load: the entry file, else the first one.
@@ -89,6 +98,7 @@ export function PoliciesPage() {
   // A deleted file must leave no phantom tab/selection/draft — otherwise its
   // stale buffer could be Saved and re-create the file.
   const onFileDeleted = useCallback((name: string) => {
+    setUntouchedNew((prev) => prev.filter((n) => n !== name));
     setOpenTabs((prev) => prev.filter((t) => t !== name));
     setSelection((sel) => (sel === name ? null : sel));
     setDrafts((prev) => {
@@ -102,10 +112,28 @@ export function PoliciesPage() {
   const onNewFile = useCallback(
     (name: string) => {
       setDrafts((prev) => ({ ...prev, [name]: prev[name] ?? "" }));
+      // Reopening a new file that already has a draft keeps it the user's.
+      if (drafts[name] === undefined) {
+        setUntouchedNew((prev) => [...prev.filter((n) => n !== name), name]);
+      }
       openFile(name);
     },
-    [openFile],
+    [openFile, drafts],
   );
+
+  // A new file the user has not typed into stops being a draft once a file
+  // of that name is stored, saved elsewhere (by the assistant): else its tab
+  // would show the empty buffer, unsaved, over the stored file. Render-phase,
+  // like the project reset.
+  const storedNew = untouchedNew.filter((n) => files.some((f) => f.name === n));
+  if (storedNew.length) {
+    setUntouchedNew((prev) => prev.filter((n) => !storedNew.includes(n)));
+    setDrafts((prev) => {
+      const next = { ...prev };
+      for (const n of storedNew) delete next[n];
+      return next;
+    });
+  }
 
   // Empty folders live per-device (localStorage); creating a file under a
   // prefix reconciles it out of the cache automatically (see useEmptyFolders).
@@ -164,6 +192,10 @@ export function PoliciesPage() {
   );
 
   const onPersist = useCallback((key: string, text: string, dirty: boolean) => {
+    // An edit or a Save: the buffer is the user's from now on.
+    setUntouchedNew((prev) =>
+      prev.includes(key) ? prev.filter((n) => n !== key) : prev,
+    );
     setDrafts((prev) => {
       if (dirty) return { ...prev, [key]: text };
       if (!(key in prev)) return prev;
@@ -203,11 +235,18 @@ export function PoliciesPage() {
     setSelection(null);
     setOpenTabs([]);
     setDrafts({});
+    setUntouchedNew([]);
     // The first project to resolve keeps the hub link's agent.
     setInspectAgent(scopedProject == null ? params.get("agent") || "*" : "*");
     setDraft(null);
     setDraftParses(true);
   }
+
+  // A change the assistant saved rewrites stored files: refetch them, and a
+  // clean buffer shows the new text. One with unsaved edits keeps them.
+  const assistantChanges = useAssistantChanges(projectId);
+  useRefetchOnChange(projectId, assistantChanges.at(-1)?.change_id ?? null);
+  const closedBars = useClosedChangeBars(projectId);
 
   const debouncedDraft = useDebouncedValue(draft, 600);
   const draftActive = draft !== null;
@@ -370,6 +409,16 @@ export function PoliciesPage() {
                     );
                   })}
                 </div>
+                {active !== null && (
+                  <AssistantChangeBar
+                    last={lastChangeTo(assistantChanges, active)}
+                    file={active}
+                    storedHash={files.find((f) => f.name === active)?.text_hash}
+                    dirty={dirtyKeys.has(active)}
+                    closed={closedBars.closed}
+                    onDismiss={closedBars.close}
+                  />
+                )}
                 <div className="flex-1 overflow-hidden">
                   {active === null ? (
                     <div className="h-full grid place-items-center px-6 text-center">
@@ -411,7 +460,7 @@ export function PoliciesPage() {
                   agentNames={agentNames}
                   inspectAgent={inspectAgent}
                   onInspectAgentChange={setInspectAgent}
-                  unsaved={dirtyKeys.size > 0}
+                  editor={{ open_file: active, unsaved: [...dirtyKeys] }}
                 />
               </div>
             </div>

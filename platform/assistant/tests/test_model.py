@@ -67,7 +67,7 @@ async def test_build_model_happy_path():
     body = json.loads(request.content)
     assert body["model"] == "anthropic/claude-sonnet-4.5"
     assert body["provider"] == {
-        "only": ["anthropic"],
+        "only": ["anthropic", "amazon-bedrock", "google-vertex"],
         "allow_fallbacks": False,
         "data_collection": "deny",
         "zdr": True,

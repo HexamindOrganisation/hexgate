@@ -16,6 +16,7 @@ from typing import Any
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
+from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools import Tool
 from fastmcp.tools.base import ToolResult
 from fastmcp.utilities.tests import run_server_async
@@ -51,6 +52,15 @@ class FakeMCP:
     # it sleeps on top of `delay`.
     results: dict[str, str] = field(default_factory=dict)
     delays: dict[str, float] = field(default_factory=dict)
+    # Per tool: the message it is refused with, after its sleep, as the
+    # platform's server words it (see `_RecordingTool.run`).
+    errors: dict[str, str] = field(default_factory=dict)
+    # Every request's method, in order, as the server received them.
+    methods: list[str] = field(default_factory=list)
+    # tools/list is refused while this is set, and answers after this many
+    # seconds.
+    refuse_listing: bool = False
+    list_delay: float = 0.0
 
 
 class _RecordingTool(Tool):
@@ -61,15 +71,35 @@ class _RecordingTool(Tool):
         headers = get_http_headers(include={"authorization"})
         state.calls.append(Call(self.name, arguments, headers.get("authorization")))
         await asyncio.sleep(state.delay + state.delays.get(self.name, 0))
+        if self.name in state.errors:
+            # The platform's server is the official SDK's FastMCP, which
+            # rewraps every error a tool raises with this prefix.
+            raise ToolError(
+                f"Error executing tool {self.name}: {state.errors[self.name]}"
+            )
         if state.refusal is not None:
             raise ToolError(state.refusal)
         text = state.results.get(self.name, f"{self.name} result")
         return ToolResult(content=[TextContent(type="text", text=text)])
 
 
+class _Recording(Middleware):
+    def __init__(self, state: FakeMCP) -> None:
+        self._state = state
+
+    async def on_request(self, context: MiddlewareContext, call_next):
+        self._state.methods.append(context.method or "")
+        if context.method == "tools/list":
+            await asyncio.sleep(self._state.list_delay)
+            if self._state.refuse_listing:
+                raise ToolError("listing refused")
+        return await call_next(context)
+
+
 def _server(state: FakeMCP) -> FastMCP:
     # As the platform's server lists them: with $defs, not inlined.
     server = FastMCP("fake-hexgate-mcp", dereference_schemas=False)
+    server.add_middleware(_Recording(state))
     definitions = snapshot_tools() + [
         {"name": n, "description": n, "inputSchema": {"type": "object"}}
         for n in OFF_ALLOWLIST

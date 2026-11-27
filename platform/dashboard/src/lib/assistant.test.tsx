@@ -7,18 +7,20 @@ import viteConfig from "../../vite.config.ts?raw";
 import { useActive } from "./active";
 import { ApiError, authRedirect } from "./api";
 import {
+  changesOf,
   errorMessage,
+  lastChangeTo,
   resetAssistant,
   SseParser,
   useAssistant,
+  useAssistantChanges,
+  type AssistantChange,
+  type AssistantMessage,
 } from "./assistant";
 import { useLogout } from "./auth";
+import { sse } from "@/test/sse";
 
 const EDITOR = { open_file: "policy.yaml", unsaved: [] };
-
-function sse(...events: object[]): string {
-  return events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
-}
 
 const TURN = sse(
   { type: "RUN_STARTED", threadId: "s1", runId: "t1" },
@@ -278,12 +280,49 @@ describe("useAssistant", () => {
     [403, /cannot work on this project/],
     [404, /no longer available/],
     [409, /still being answered/],
+    [422, /over 8 000 characters or malformed/],
+    [502, /could not reach the platform/],
     [503, /no model/],
   ])("shows the assistant's %i refusal", async (status, message) => {
     stubFetch({ turn: () => new Response(null, { status }) });
     const { result } = renderAssistant();
-    await act(() => result.current.send("hi", EDITOR));
+    let sent: boolean | undefined;
+    await act(async () => {
+      sent = await result.current.send("hi", EDITOR);
+    });
     expect(result.current.state.messages[1].turn?.error).toMatch(message);
+    // Refused before any stream: the caller gives the text back.
+    expect(sent).toBe(false);
+  });
+
+  it("reports a refusal before the stream, and only that, as unsent", async () => {
+    let turns = 0;
+    stubFetch({
+      token: (n) =>
+        n === 1
+          ? Response.json(
+              { detail: { code: "assistant_off" } },
+              { status: 403 },
+            )
+          : undefined,
+      turn: () => {
+        turns += 1;
+        return turns <= 2
+          ? new Response(null, { status: 401 })
+          : streamResponse(
+              sse({ type: "RUN_ERROR", message: "failed", code: "provider" }),
+            );
+      },
+    });
+    const { result } = renderAssistant();
+    const sent: boolean[] = [];
+    for (const text of ["token refused", "401 twice", "stream opened"]) {
+      await act(async () => {
+        sent.push(await result.current.send(text, EDITOR));
+      });
+    }
+    // A run error ends a turn whose stream opened: that message was sent.
+    expect(sent).toEqual([false, false, true]);
   });
 
   it("shows a token refusal on the turn", async () => {
@@ -302,7 +341,11 @@ describe("useAssistant", () => {
         streamResponse(
           sse(
             { type: "TOOL_CALL_START", toolCallId: "c1", toolCallName: "x" },
-            { type: "RUN_ERROR", message: "full", code: "context_full" },
+            {
+              type: "RUN_ERROR",
+              message: "This conversation is full; start a new chat.",
+              code: "context_full",
+            },
           ),
         ),
     });
@@ -311,6 +354,20 @@ describe("useAssistant", () => {
     const turn = result.current.state.messages[1].turn;
     expect(turn?.error).toBe("This conversation is full; start a new chat.");
     expect(turn?.tools[0].state).toBe("failed");
+  });
+
+  it.each([
+    ["limit_reached", "This answer reached its length limit."],
+    ["limit_reached", "This answer reached its step limit."],
+    ["provider", "The model answered in a way it cannot use."],
+  ])("keeps the server's message for the run error %s", async (code, msg) => {
+    stubFetch({
+      turn: () =>
+        streamResponse(sse({ type: "RUN_ERROR", message: msg, code })),
+    });
+    const { result } = renderAssistant();
+    await act(() => result.current.send("hi", EDITOR));
+    expect(result.current.state.messages[1].turn?.error).toBe(msg);
   });
 
   it("ends a turn whose stream closes without finishing", async () => {
@@ -341,7 +398,7 @@ describe("useAssistant", () => {
     const stream = deferredStream();
     const fetch = stubFetch({ turn: () => stream.response });
     const { result } = renderAssistant();
-    let sent: Promise<void> = Promise.resolve();
+    let sent: Promise<boolean> = Promise.resolve(false);
     act(() => {
       sent = result.current.send("hi", EDITOR);
     });
@@ -390,7 +447,7 @@ describe("useAssistant", () => {
     const stream = deferredStream();
     const fetch = stubFetch({ turn: () => stream.response });
     const { result, rerender } = renderAssistant();
-    let sent: Promise<void> = Promise.resolve();
+    let sent: Promise<boolean> = Promise.resolve(false);
     act(() => {
       sent = result.current.send("hi", EDITOR);
     });
@@ -426,7 +483,7 @@ describe("useAssistant", () => {
       turn: () => deferredStream().response,
     });
     const { result, rerender } = renderAssistant();
-    let first: Promise<void> = Promise.resolve();
+    let first: Promise<boolean> = Promise.resolve(false);
     act(() => {
       first = result.current.send("on p1", EDITOR);
     });
@@ -443,5 +500,91 @@ describe("useAssistant", () => {
 
     expect(result.current.state.messages[1].turn?.error).toBeUndefined();
     expect(result.current.streaming).toBe(true);
+  });
+});
+
+function change(id: string, files: [string, string][]): AssistantChange {
+  return {
+    change_id: id,
+    summary: id,
+    files: files.map(([name, after_hash]) => ({
+      name,
+      before_hash: null,
+      after_hash,
+    })),
+    checks: [],
+  };
+}
+
+function turnWith(c?: AssistantChange): AssistantMessage {
+  return {
+    id: c?.change_id ?? "m",
+    role: "assistant",
+    content: "",
+    turn: { streaming: false, reasoning: "", tools: [], change: c },
+  };
+}
+
+describe("changesOf and lastChangeTo", () => {
+  const first = change("chg_1", [
+    ["a.yaml", "h1"],
+    ["b.yaml", "h2"],
+  ]);
+  const second = change("chg_2", [["a.yaml", "h3"]]);
+  const changes = changesOf([
+    { id: "u", role: "user", content: "hi" },
+    turnWith(first),
+    turnWith(),
+    turnWith(second),
+  ]);
+
+  it("lists the turns' changes, oldest first", () => {
+    expect(changes).toEqual([first, second]);
+  });
+
+  it("finds the latest change to a file and the hash it left", () => {
+    expect(lastChangeTo(changes, "a.yaml")).toEqual({
+      change: second,
+      afterHash: "h3",
+    });
+    expect(lastChangeTo(changes, "b.yaml")).toEqual({
+      change: first,
+      afterHash: "h2",
+    });
+    expect(lastChangeTo(changes, "c.yaml")).toBeNull();
+  });
+});
+
+describe("useAssistantChanges", () => {
+  afterEach(() => {
+    resetAssistant();
+    vi.restoreAllMocks();
+  });
+
+  it("returns the changes saved on the chat's project only", async () => {
+    stubFetch();
+    const chat = renderAssistant();
+    await act(() => chat.result.current.send("lower it", EDITOR));
+    const here = renderHook(() => useAssistantChanges("p1"));
+    const elsewhere = renderHook(() => useAssistantChanges("p2"));
+    expect(here.result.current.map((c) => c.change_id)).toEqual(["chg_1"]);
+    expect(elsewhere.result.current).toEqual([]);
+    expect(renderHook(() => useAssistantChanges(null)).result.current).toEqual(
+      [],
+    );
+  });
+
+  it("does not re-render its caller for a streamed token", async () => {
+    stubFetch();
+    const chat = renderAssistant();
+    let renders = 0;
+    renderHook(() => {
+      renders++;
+      return useAssistantChanges("p1");
+    });
+    await act(() => chat.result.current.send("lower it", EDITOR));
+    // The first render, and the one for the change; text and tool events
+    // land in the same chunk, so a re-render per event would also be one.
+    expect(renders).toBe(2);
   });
 });
