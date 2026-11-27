@@ -8,9 +8,12 @@ import {
   XCircle,
 } from "lucide-react";
 
+import { EffectView } from "@/components/assistant/EffectView";
 import { FilesDiff } from "@/components/assistant/FilesDiff";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { ChangeCheck, ChangeCheckId } from "@/lib/api";
+import type { UseQueryResult } from "@tanstack/react-query";
+
+import type { ChangeCheck, ChangeCheckId, ChangeRead } from "@/lib/api";
 import type { AssistantChange } from "@/lib/assistant";
 import { usePolicyChange } from "@/lib/policy_files";
 import { cn } from "@/lib/utils";
@@ -64,7 +67,7 @@ export const ChangeCard = memo(function ChangeCard({
           <CheckRow key={c.id} check={c} />
         ))}
       </ul>
-      <ChangeFiles projectId={projectId} change={change} />
+      <ChangeDetail projectId={projectId} change={change} />
     </section>
   );
 });
@@ -102,16 +105,52 @@ function CheckRow({ check }: { check: ChangeCheck }) {
   );
 }
 
-/** The change's files, one picked at a time, and the picked one's diff. */
-function ChangeFiles({
+/** The change's two views, Files and Effect, both read from the stored
+ * change. A further view is one more entry here. */
+function ChangeDetail({
   projectId,
   change,
 }: {
   projectId: string;
   change: AssistantChange;
 }) {
-  const [picked, setPicked] = useState(change.files[0].name);
   const stored = usePolicyChange(projectId, change.change_id);
+  return (
+    <Tabs defaultValue="files" className="border-t border-border/60">
+      <TabsList
+        aria-label="Change views"
+        className="h-auto w-full justify-start rounded-none border-0 bg-transparent px-3 pt-1"
+      >
+        <TabsTrigger value="files">Files</TabsTrigger>
+        <TabsTrigger value="effect">Effect</TabsTrigger>
+      </TabsList>
+      <TabsContent value="files" className="mt-0">
+        <ChangeFiles change={change} stored={stored} />
+      </TabsContent>
+      <TabsContent value="effect" className="mt-0 border-t border-border/60">
+        {stored.data ? (
+          <EffectView effect={stored.data.effect} />
+        ) : (
+          <p className="px-3 py-2 text-muted-foreground">
+            {stored.isError
+              ? "The change's effect could not be loaded."
+              : "Loading the effect…"}
+          </p>
+        )}
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+/** The change's files, one picked at a time, and the picked one's diff. */
+function ChangeFiles({
+  change,
+  stored,
+}: {
+  change: AssistantChange;
+  stored: UseQueryResult<ChangeRead>;
+}) {
+  const [picked, setPicked] = useState(change.files[0].name);
   const file = stored.data?.files.find((f) => f.name === picked);
   return (
     <div className="border-t border-border/60">

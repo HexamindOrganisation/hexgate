@@ -59,7 +59,17 @@ const STORED: ChangeRead = {
     },
   ],
   checks: CHANGE.checks,
-  effect: {},
+  effect: {
+    changes: [
+      {
+        agent: "billing",
+        role: "member",
+        tool: "refund_order",
+        before: { mode: "allow" },
+        after: { mode: "approval_required" },
+      },
+    ],
+  },
 };
 
 function stubChange(res: Response) {
@@ -123,11 +133,25 @@ describe("ChangeCard", () => {
     expect(screen.getByLabelText("before")).toHaveTextContent("(none)");
   });
 
+  it("shows the effect from the same stored change on the Effect tab", async () => {
+    const fetch = stubChange(Response.json(STORED));
+    renderWithProviders(<ChangeCard projectId="p1" change={CHANGE} />);
+    await userEvent.click(screen.getByRole("tab", { name: "Effect" }));
+    expect(
+      await screen.findByText(/billing · member · refund_order/),
+    ).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("says so when the stored change cannot be read", async () => {
     stubChange(new Response("not found", { status: 404 }));
     renderWithProviders(<ChangeCard projectId="p1" change={CHANGE} />);
     expect(
       await screen.findByText("The change's files could not be loaded."),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "Effect" }));
+    expect(
+      screen.getByText("The change's effect could not be loaded."),
     ).toBeInTheDocument();
   });
 });
