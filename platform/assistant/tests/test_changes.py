@@ -582,21 +582,18 @@ def test_redact_calls_happy_path():
     read = ModelResponse(parts=[ToolCallPart("policy_read_file", {"name": "x"}, "r")])
 
     once = redact_calls([applied, unanswered, read], Applied("chg_1", "a1"))
-    # A later turn, which knows no applied call: the id is ours only while
-    # this turn holds it (the stored change event keeps it for the card).
-    twice = redact_calls(once, None)
+    # A later turn: stored history keeps the id we stored; the same call in
+    # this turn's messages (the model's own) cannot carry one.
+    later = redact_calls(once, None, stored=len(once))
+    current = redact_calls(once, None)
 
-    assert [p.args for m in once for p in m.parts] == [
+    assert [p.args for m in later for p in m.parts] == [
         {**REDACTED, "change_id": "chg_1"},
         REDACTED,
         {"name": "x"},
     ]
-    assert [p.args for m in twice for p in m.parts] == [
-        REDACTED,
-        REDACTED,
-        {"name": "x"},
-    ]
-    assert twice[2] is read
+    assert current[0].parts[0].args == REDACTED
+    assert later[2] is read
 
 
 async def test_when_a_file_was_never_read_then_refused_without_mcp(settings, mcp, key):
@@ -890,3 +887,57 @@ async def test_when_a_file_was_too_large_in_an_earlier_turn_then_it_is_read_agai
 
     assert apply_calls(mcp) == []
     assert answer(second) == f"saw: {READ_FIRST.format(files='caps/refund.yaml')}"
+
+
+def stored_apply_args(rows_: list) -> list[dict]:
+    return [
+        p["args"]
+        for r in rows_
+        if r.kind == "messages"
+        for m in r.content
+        for p in m["parts"]
+        if p.get("tool_name") == "apply_change" and p["part_kind"] == "tool-call"
+    ]
+
+
+async def test_when_a_change_is_applied_then_its_id_stays_in_the_history(
+    settings, mcp, key, db
+):
+    mcp.results["policy_apply"] = APPLIED
+    seen: list[list[ModelMessage]] = []
+    respond = script(READ, apply_call(1), None)
+
+    def recording(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(list(messages))
+        return respond(messages, info)
+
+    async with platform(settings, mcp, key, scripted(recording)) as (client, turns):
+        client.headers["Authorization"] = f"Bearer {key.mint(scope=APPLY_SCOPE_TOKEN)}"
+        first = await turn(client, turns)
+        await turn(client, turns, session_id=first[0]["threadId"])
+
+    # The turn's stored row, and the next turn's request.
+    assert (
+        stored_apply_args(await rows(db, AssistantMessage))[0]["change_id"] == "chg_1"
+    )
+    later = [
+        p.args
+        for m in seen[-1]
+        for p in m.parts
+        if isinstance(p, ToolCallPart) and p.tool_name == "apply_change"
+    ]
+    assert later == [{**REDACTED, "change_id": "chg_1"}]
+
+
+async def test_when_a_call_brings_its_own_change_id_then_none_is_stored(
+    settings, mcp, key, db
+):
+    fake = ToolCallPart(
+        "apply_change", {"change_id": "chg_fake", "files": NAMES, "summary": "s"}, "a1"
+    )
+
+    await apply_turn(settings, mcp, key, script(fake))
+
+    assert [
+        a["change_id"] for a in stored_apply_args(await rows(db, AssistantMessage))
+    ] == [None]

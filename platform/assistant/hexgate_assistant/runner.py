@@ -323,8 +323,6 @@ class _Run:
         started_at: datetime,
     ) -> None:
         thread_id = str(self._session.id)
-        if self._writes is not None:
-            self._writes.turn_start = len(history)
         self._send(events.run_started(thread_id, self._turn_id))
         deadline = (started_at + TURN_DEADLINE - utcnow()).total_seconds()
         with capture_run_messages() as captured:
@@ -334,7 +332,10 @@ class _Run:
                     message_history=history,
                     instructions=self._turns.reference,
                     deps=TurnDeps(
-                        self._token.token, snapshot=snapshot, writes=self._writes
+                        self._token.token,
+                        snapshot=snapshot,
+                        writes=self._writes,
+                        turn_start=len(history),
                     ),
                     usage_limits=TURN_LIMITS,
                     timeout=max(deadline, 0),

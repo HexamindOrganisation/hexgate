@@ -192,7 +192,7 @@ class _Call:
         """Refused without a call: an existing file the model did not build
         from its text as the turn found it."""
         snapshot = self.ctx.deps.snapshot
-        reads = reads_in(self.ctx.messages, self.writes.turn_start)
+        reads = reads_in(self.ctx.messages, self.ctx.deps.turn_start)
         existing = [f.name for f in self.files if f.name in snapshot]
         # Refused as too large in this turn; an older refusal may be stale.
         too_large = [
@@ -501,31 +501,52 @@ def _names(value: Any) -> list[str] | None:
 
 
 def redact_calls(
-    messages: list[ModelMessage], applied: Applied | None
+    messages: list[ModelMessage], applied: Applied | None, stored: int = 0
 ) -> list[ModelMessage]:
     """`messages` with every tool call's arguments :func:`redact`ed, and
-    every retry's validation errors without the arguments they echo."""
+    every retry's validation errors without the arguments they echo.
+
+    The first `stored` messages are the session's stored history, which the
+    store already redacted: an `apply_change` call there keeps the change id
+    it was stored with. Every other call's id is ours (`applied`) or none."""
     return [
-        _redact_response(m, applied)
+        _redact_response(m, applied, trusted=index < stored)
         if isinstance(m, ModelResponse)
         else _redact_retries(m)
-        for m in messages
+        for index, m in enumerate(messages)
     ]
 
 
-def _redact_response(response: ModelResponse, applied: Applied | None) -> ModelResponse:
+def _redact_response(
+    response: ModelResponse, applied: Applied | None, trusted: bool
+) -> ModelResponse:
     parts = [
-        _redact_call(p, applied) if isinstance(p, ToolCallPart) else p
+        _redact_call(p, applied, trusted) if isinstance(p, ToolCallPart) else p
         for p in response.parts
     ]
     return response if parts == response.parts else replace(response, parts=parts)
 
 
-def _redact_call(part: ToolCallPart, applied: Applied | None) -> ToolCallPart:
+def _redact_call(
+    part: ToolCallPart, applied: Applied | None, trusted: bool
+) -> ToolCallPart:
     args = part.args_as_dict()
+    if trusted and part.tool_name == TOOL_NAME and _is_redacted(args):
+        return part
     mine = applied is not None and applied.call_id == part.tool_call_id
     kept = redact(part.tool_name, args, applied.change_id if mine else None)
     return part if kept is args else replace(part, args=dict(kept))
+
+
+def _is_redacted(args: Mapping[str, Any]) -> bool:
+    """Whether `args` are an `apply_change` call as :func:`redact` left it."""
+    change_id = args.get("change_id")
+    return (
+        set(args) == {"change_id", "files", "summary"}
+        and (change_id is None or isinstance(change_id, str))
+        and _names(args["files"]) is not None
+        and isinstance(args["summary"], str)
+    )
 
 
 def _redact_retries(request: ModelRequest) -> ModelRequest:
@@ -559,4 +580,5 @@ async def redact_history(
     """Before every model request: the file text of every call made so far
     leaves the history; the model sent it, and needs it no more."""
     writes = ctx.deps.writes
-    return redact_calls(messages, None if writes is None else writes.applied)
+    applied = None if writes is None else writes.applied
+    return redact_calls(messages, applied, stored=ctx.deps.turn_start)

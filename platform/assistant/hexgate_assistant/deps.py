@@ -23,9 +23,6 @@ class TurnWrites:
     session_id: str | None
     # Called with the `change` event's value once a change is saved.
     on_change: Callable[[dict[str, Any]], None]
-    # Where this turn's messages start in the run's history: a read made
-    # before it was made in an earlier turn.
-    turn_start: int = 0
     attempts: int = 0
     # The change this turn applied, once it did.
     applied: "Applied | None" = None
@@ -48,3 +45,6 @@ class TurnDeps:
     # What `apply_change` counts this turn; None when the token may not
     # write, and it then refuses every call.
     writes: TurnWrites | None = None
+    # Where this turn's messages start in the run's history: before it, the
+    # session's stored history (earlier turns).
+    turn_start: int = 0
