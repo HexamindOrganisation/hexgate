@@ -1,0 +1,28 @@
+# watsonx Orchestrate external agent pointing at the Hexgate bridge.
+# Field reference: https://developer.watson-orchestrate.ibm.com/agents/connect_agent
+#
+#   orchestrate agents import -f external_agent.yaml
+#
+# Fill in api_url and token before importing. The token is the same value as the
+# bridge's HEXGATE_ORCHESTRATE_TOKEN — do NOT commit the filled-in file.
+spec_version: v1
+kind: external
+name: hexgate_devops_agent
+title: Hexgate DevOps Agent
+nickname: hexgate_devops_agent
+provider: external_chat
+description: |
+  DevOps assistant for a Kubernetes platform: reads service logs, restarts
+  services, and scales deployments in dev, staging, or prod. Every action is
+  checked against the Hexgate policy before it runs.
+# Public server:       https://<your-host>/chat/completions
+# Developer Edition:   http://host.docker.internal:8080/chat/completions
+api_url: "https://<your-host>/chat/completions"
+auth_scheme: BEARER_TOKEN
+auth_config:
+  token: "<HEXGATE_ORCHESTRATE_TOKEN>"
+chat_params:
+  stream: true
+config:
+  hidden: false
+  enable_cot: true
