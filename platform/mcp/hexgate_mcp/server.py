@@ -23,6 +23,7 @@ from hexgate_mcp.tools import (
     agents,
     audit,
     policy,
+    policy_apply,
     policy_save,
     projects,
     reference,
@@ -68,7 +69,7 @@ def build_app(settings: Settings, http: httpx.AsyncClient) -> Starlette:
     mcp.custom_route("/health", methods=["GET"], include_in_schema=False)(health)
     reference.register(mcp)
     api = ApiClient(settings.api_v1_url, http)
-    for tools in (projects, policy, policy_save, audit, agents):
+    for tools in (projects, policy, policy_save, policy_apply, audit, agents):
         tools.register(mcp, api)
     if settings.local_policy_dir is not None:
         write_local.register(mcp, settings.local_policy_dir)

@@ -13,18 +13,28 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from hexgate_api.constants import OAUTH_SCOPE_KEY
+from hexgate_api.constants import ASSISTANT_CLIENT_ID, OAUTH_SCOPE_KEY
 from hexgate_api.core.db import get_session
 from hexgate_api.core.locks import project_lock
+from hexgate_api.deps.identity import oauth_client_id
 from hexgate_api.deps.org import require_org_member
 from hexgate_api.deps.project import require_project_admin
-from hexgate_api.features.policy_modules import coverage, diff, service, similar
-from hexgate_api.models import OrganizationMember, PolicyFile, PolicyModule, User
+from hexgate_api.features.assistant.service import mode_lets_write
+from hexgate_api.features.policy_modules import apply, coverage, diff, service, similar
+from hexgate_api.models import (
+    Organization,
+    OrganizationMember,
+    PolicyFile,
+    PolicyModule,
+    User,
+)
 from hexgate_api.schemas import (
     ChangeRead,
+    PolicyApplyRequest,
+    PolicyApplyResponse,
     PolicyCheckRequest,
     PolicyCheckResponse,
     PolicyCoverageResponse,
@@ -691,6 +701,51 @@ async def api_diff_policy(
     except service.InvalidModuleError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PolicyDiffResponse(**out)
+
+
+@router.post(
+    "/projects/{project_id}/policy/apply",
+    openapi_extra={OAUTH_SCOPE_KEY: "policy:apply"},
+    tags=["policy"],
+)
+async def api_apply_policy(
+    project_id: str,
+    body: PolicyApplyRequest,
+    request: Request,
+    membership: tuple[User, OrganizationMember] = Depends(require_project_admin),
+    session: AsyncSession = Depends(get_session),
+) -> PolicyApplyResponse:
+    """Check a change to the project's policy files and, when every check
+    passes, save it with its record and the agents' rebuilt bundles at once.
+    A failed check is a 200 with ``applied`` false and nothing saved. 409
+    ``{"code": "stale", "files": [...]}`` when a file changed since the caller
+    read it; 409 ``{"code": "layout"}`` when the project has no stored
+    ``policy.yaml``; 403 ``{"code": "assistant_mode"}`` when the dashboard's
+    assistant calls in an org that does not let it write."""
+    caller, member = membership
+    client_id = oauth_client_id(request)
+    # Read before the apply: a refused change rolls the session back, which
+    # expires every object loaded in it, the caller included.
+    actor = caller.id
+    if client_id == ASSISTANT_CLIENT_ID:
+        await _require_assistant_may_write(session, member.org_id)
+    try:
+        return await apply.apply_change(session, project_id, body, actor, client_id)
+    except service.NoEntryFileError as exc:
+        raise HTTPException(status_code=409, detail={"code": "layout"}) from exc
+    except service.StaleBaseError as exc:
+        raise HTTPException(
+            status_code=409, detail={"code": "stale", "files": exc.files}
+        ) from exc
+
+
+async def _require_assistant_may_write(session: AsyncSession, org_id: str) -> None:
+    """403 unless the org lets its assistant write. Read now, not at mint time:
+    a token minted before the org's mode changed still carries the scope.
+    Every other client keeps the scope its user granted it."""
+    org = await session.get(Organization, org_id)
+    if not mode_lets_write(org.assistant_mode):
+        raise HTTPException(status_code=403, detail={"code": "assistant_mode"})
 
 
 @router.get(

@@ -1,0 +1,7 @@
+# Read-only: the inbox, and the open customer's accounts.
+tools:
+  list_inbox: { mode: allow }
+  read_message: { mode: allow }
+  get_balance: { mode: allow }
+  list_transactions: { mode: allow }
+  get_statement: { mode: allow }
