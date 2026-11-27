@@ -42,8 +42,13 @@ class ApiClient:
         query = {k: v for k, v in (params or {}).items() if v is not None}
         return await self._send("GET", path, token, params=query)
 
-    async def post(self, path: str, token: str, body: dict) -> Any:
-        return await self._send("POST", path, token, json=body)
+    async def post(
+        self, path: str, token: str, body: dict, timeout: float | None = None
+    ) -> Any:
+        # `timeout` replaces the shared client's for this call; left out, the
+        # client's own applies (httpx reads an explicit None as "no limit").
+        extra = {} if timeout is None else {"timeout": timeout}
+        return await self._send("POST", path, token, json=body, **extra)
 
     async def put(self, path: str, token: str, body: dict) -> Any:
         return await self._send("PUT", path, token, json=body)

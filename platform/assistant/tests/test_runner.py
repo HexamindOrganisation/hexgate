@@ -577,6 +577,18 @@ async def test_when_the_token_may_apply_then_the_card_says_this_turn_may_write(
     assert "This turn may write: no" in seen[1]
 
 
+async def test_when_a_turn_runs_then_the_card_names_the_turns_project_id(
+    settings, mcp, key
+):
+    seen: list[str] = []
+    model = scripted(recording(seen, last_prompt))
+
+    async with platform(settings, mcp, key, model) as (client, turns):
+        await turn(client, turns)
+
+    assert f"<project>\nProject id: {PROJECT}\n" in seen[0]
+
+
 async def test_when_turns_run_then_the_reference_is_read_once_and_given_as_instructions(
     settings, mcp, key
 ):

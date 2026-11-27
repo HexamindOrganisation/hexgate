@@ -48,7 +48,7 @@ the login with nothing granted.
 | `audit:read` | Read their audit decisions. |
 | `policy:read` | Read, resolve, check and dry-run their policies. |
 | `policy:write` | Save policy files in them. |
-| `policy:apply` | Apply policy changes in them, after their checks pass. No tool uses it yet. |
+| `policy:apply` | Apply policy changes in them, after their checks pass. |
 
 Scopes limit what you let the client do; your own rights still apply on top.
 Saving a policy file needs admin rights on the project, for example, whatever the
@@ -70,6 +70,7 @@ connection lacks. To change what a client may do, revoke it and connect again.
 | `policy_coverage` | `policy:read` | Each agent's policy gaps: the manifest tools a role leaves to a default looser than deny or no rule names, and the sub-agents no rule names, for every agent or one. |
 | `policy_search_similar` | `policy:read` | The registered agents closest to one agent by shared tool names, words in tool names and roles, each with why it ranked and whether it has a policy to start from. |
 | `policy_save` | `policy:write` | Create or replace one policy file. Nothing is saved if the result is invalid. |
+| `policy_apply` | `policy:apply` | Check a change to up to 10 policy files and save it all at once. Nothing is saved if a check fails. |
 | `policy_reference` | none | The policy documentation, so the client can learn the format. |
 
 What an agent's code, the integrator or an end user's request supplied (a tool

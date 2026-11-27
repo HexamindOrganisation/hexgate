@@ -44,8 +44,8 @@ def test_translate_happy_path():
         {"type": "TEXT_MESSAGE_CONTENT", "messageId": message_id, "delta": "llo"},
         {"type": "TEXT_MESSAGE_END", "messageId": message_id},
         {"type": "TOOL_CALL_START", "toolCallId": "c1", "toolCallName": "policy_graph"},
-        {"type": "TOOL_CALL_ARGS", "toolCallId": "c1", "delta": '{"a"'},
-        {"type": "TOOL_CALL_ARGS", "toolCallId": "c1", "delta": ": 1}"},
+        # Held until the call is complete, then sent once.
+        {"type": "TOOL_CALL_ARGS", "toolCallId": "c1", "delta": '{"a": 1}'},
         {"type": "TOOL_CALL_END", "toolCallId": "c1"},
     ]
 
@@ -63,7 +63,10 @@ def test_when_two_text_parts_follow_each_other_then_each_is_its_own_message():
 
 
 def test_when_args_arrive_as_a_dict_then_they_stream_as_json():
-    out = translate(PartStartEvent(index=0, part=ToolCallPart("t", {"a": 1}, "c1")))
+    part = ToolCallPart("t", {"a": 1}, "c1")
+    out = translate(
+        PartStartEvent(index=0, part=part), PartEndEvent(index=0, part=part)
+    )
 
     assert json.loads(out[1]["delta"]) == {"a": 1}
 
@@ -97,10 +100,15 @@ def test_sse_happy_path():
     assert PING == ": ping\n\n"
 
 
-def test_when_streamed_args_arrive_as_a_dict_then_they_go_out_as_json():
+def test_when_a_call_carries_files_then_the_browser_gets_their_names_only():
+    args = {"project_id": "p", "drafts": [{"name": "a.yaml", "content": "SECRET"}]}
     out = translate(
-        PartStartEvent(index=0, part=ToolCallPart("t", "", "c1")),
-        PartDeltaEvent(index=0, delta=ToolCallPartDelta(args_delta={"a": 1})),
+        PartStartEvent(index=0, part=ToolCallPart("policy_check", "", "c1")),
+        PartDeltaEvent(index=0, delta=ToolCallPartDelta(args_delta=json.dumps(args))),
+        PartEndEvent(
+            index=0, part=ToolCallPart("policy_check", json.dumps(args), "c1")
+        ),
     )
 
-    assert json.loads(out[-1]["delta"]) == {"a": 1}
+    assert "SECRET" not in json.dumps(out)
+    assert json.loads(out[1]["delta"]) == {"project_id": "p", "drafts": ["a.yaml"]}

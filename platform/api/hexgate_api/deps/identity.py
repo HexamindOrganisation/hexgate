@@ -95,6 +95,12 @@ def oauth_projects(request: Request) -> frozenset[str] | None:
     return None if claims is None else claims.projects
 
 
+def oauth_client_id(request: Request) -> str | None:
+    """The OAuth client a token was issued to, or None for a dashboard caller."""
+    claims = request.state.oauth
+    return None if claims is None else claims.client_id
+
+
 def _oauth_bearer(authorization: str | None) -> str | None:
     """The bearer of ``authorization`` if it is an OAuth token, not an SDK key."""
     if authorization is None:

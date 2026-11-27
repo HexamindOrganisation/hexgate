@@ -2,9 +2,9 @@
  * The policy assistant's client: its config, one token per message, the turn
  * stream, and the chat store.
  *
- * The chat lives in a module-level store, not in component state: the
- * inspector unmounts the tabs it is not showing, and a stream must survive a
- * switch to another tab and back. The store belongs to one org and project;
+ * The chat lives in a module-level store, not in component state: a stream
+ * must survive the pane unmounting, as when the user leaves the Policies page
+ * and comes back. The store belongs to one org and project;
  * moving to another, or signing out, empties it.
  *
  * A turn goes to the assistant service, not the api, with a token the api
@@ -14,9 +14,10 @@
  * redirect, since a 401 there means the session itself has expired.
  */
 
-import { useEffect } from "react";
+import { useCallback, useEffect, useReducer } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 
 import type {
   ChatMessageData,
@@ -24,7 +25,13 @@ import type {
   ChatTurn,
 } from "@/components/chat/types";
 import { useActive } from "./active";
-import { ApiError, assistantApi, send, UnauthenticatedError } from "./api";
+import {
+  ApiError,
+  assistantApi,
+  send,
+  UnauthenticatedError,
+  type ChangeCheck,
+} from "./api";
 import { randomId } from "./utils";
 
 export type { AssistantConfig } from "./api";
@@ -36,7 +43,7 @@ export interface AssistantChange {
   change_id: string;
   summary: string;
   files: { name: string; before_hash: string | null; after_hash: string }[];
-  checks: { id: string; status: string; detail?: string | null }[];
+  checks: ChangeCheck[];
 }
 
 export type AssistantEvent =
@@ -252,7 +259,9 @@ export function applyEvent(
     case "RUN_FINISHED":
       return endTurn(state);
     case "RUN_ERROR":
-      return endTurn(state, messageFor(event.code, event.message));
+      // The server words every run error for the user, and its code alone
+      // does not say which (a step or a length limit, for one).
+      return endTurn(state, event.message);
     default:
       return state;
   }
@@ -260,9 +269,8 @@ export function applyEvent(
 
 // ——— Refusals and errors, in the user's words ———
 
-/** One table for every way a message can fail: the token route's codes, the
- * assistant's refusals (plain HTTP, keyed by status) and the run's error
- * codes. */
+/** The ways a message can be refused before its turn runs: the token route's
+ * codes and the assistant's refusals (plain HTTP, keyed by status). */
 const MESSAGES: Record<string, string> = {
   assistant_disabled: "The assistant is not enabled on this platform.",
   user_not_verified: "Verify your email address to use the assistant.",
@@ -274,13 +282,14 @@ const MESSAGES: Record<string, string> = {
   "404": "This conversation is no longer available; start a new chat.",
   "409":
     "Another of your messages is still being answered; wait for it to finish.",
+  "422":
+    "The message is over 8 000 characters or malformed; shorten it and resend.",
+  "502": "The assistant could not reach the platform; try again.",
   "503": "The assistant has no model configured.",
-  timeout: "The answer took too long and was stopped.",
-  limit_reached: "This answer reached its step limit and was stopped.",
-  budget: "Your daily assistant budget is used up.",
-  context_full: "This conversation is full; start a new chat.",
-  provider: "The model provider failed; try again.",
 };
+
+/** The most unsaved file names a turn may carry. */
+const MAX_UNSAVED = 50;
 
 function messageFor(code: unknown, fallback: string): string {
   return (typeof code === "string" && MESSAGES[code]) || fallback;
@@ -395,11 +404,13 @@ async function readStream(
   }
 }
 
-async function runTurn(
+/** Posts the turn and returns its open stream; throws when the turn is
+ * refused before any stream opens. */
+async function openTurn(
   projectId: string,
   body: string,
   turn: AbortController,
-): Promise<void> {
+): Promise<ReadableStream<Uint8Array>> {
   let res: Response;
   try {
     res = await postTurn(projectId, body, turn.signal);
@@ -410,7 +421,14 @@ async function runTurn(
     res = await postTurn(projectId, body, turn.signal);
   }
   if (!res.body) throw new TurnRefused(res.status);
-  await readStream(res.body, turn);
+  return res.body;
+}
+
+async function readTurn(
+  stream: ReadableStream<Uint8Array>,
+  turn: AbortController,
+): Promise<void> {
+  await readStream(stream, turn);
   updateFromTurn(turn, (s) =>
     isStreaming(s)
       ? endTurn(s, "The connection closed before the answer finished.")
@@ -418,20 +436,23 @@ async function runTurn(
   );
 }
 
-/** Sends a message on the store's project. Ignored while a turn runs. */
+/** Sends a message on the store's project. Ignored while a turn runs.
+ * Resolves once the turn ends: false when the message was refused or
+ * ignored, so the caller can give its text back; true when its stream had
+ * opened or the turn was cancelled. */
 async function sendMessage(
   message: string,
   editor: AssistantEditor,
-): Promise<void> {
+): Promise<boolean> {
   const state = useStore.getState();
-  if (!scope || isStreaming(state)) return;
+  if (!scope || isStreaming(state)) return false;
   const projectId = scope.projectId;
   const turn = new AbortController();
   activeTurn = turn;
   const body = JSON.stringify({
     session_id: state.sessionId,
     message,
-    editor,
+    editor: { ...editor, unsaved: editor.unsaved.slice(0, MAX_UNSAVED) },
   });
   useStore.setState({
     messages: [
@@ -445,10 +466,20 @@ async function sendMessage(
       },
     ],
   });
-  try {
-    await runTurn(projectId, body, turn);
-  } catch (err) {
+  const fail = (err: unknown) =>
     updateFromTurn(turn, (s) => endTurn(s, errorMessage(err)));
+  try {
+    let stream: ReadableStream<Uint8Array>;
+    try {
+      stream = await openTurn(projectId, body, turn);
+    } catch (err) {
+      // Cancelled (New chat, another project, logout): nothing to give back.
+      if (turn.signal.aborted) return true;
+      fail(err);
+      return false;
+    }
+    await readTurn(stream, turn).catch(fail);
+    return true;
   } finally {
     if (turn === activeTurn) activeTurn = null;
   }
@@ -464,6 +495,63 @@ export function useAssistantConfig(projectId: string | null) {
     enabled: !!projectId,
     staleTime: 30_000,
   });
+}
+
+/** The changes the chat's turns saved, oldest first. */
+export function changesOf(messages: AssistantMessage[]): AssistantChange[] {
+  return messages.flatMap((m) => (m.turn?.change ? [m.turn.change] : []));
+}
+
+/** The latest of `changes` that wrote `name`, with the hash it left. */
+export function lastChangeTo(
+  changes: AssistantChange[],
+  name: string,
+): { change: AssistantChange; afterHash: string } | null {
+  for (let i = changes.length - 1; i >= 0; i--) {
+    const file = changes[i].files.find((f) => f.name === name);
+    if (file) return { change: changes[i], afterHash: file.after_hash };
+  }
+  return null;
+}
+
+/** The changes the chat has saved on `projectId`, oldest first. None while
+ * the store holds no chat, or another project's. Compared item by item, so a
+ * streamed token does not re-render the caller. */
+export function useAssistantChanges(
+  projectId: string | null,
+): AssistantChange[] {
+  return useStore(
+    useShallow((s) =>
+      projectId !== null && scope?.projectId === projectId
+        ? changesOf(s.messages)
+        : [],
+    ),
+  );
+}
+
+/** The change bars closed on each project, as "change_id:file". Module-level,
+ * so a bar stays closed after its file's tab closes or the page unmounts. */
+const closedBars = new Map<string, Set<string>>();
+const NONE_CLOSED: ReadonlySet<string> = new Set();
+
+/** The change bars closed on `projectId`, and `close` to close one. */
+export function useClosedChangeBars(projectId: string | null): {
+  closed: ReadonlySet<string>;
+  close: (key: string) => void;
+} {
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
+  const close = useCallback(
+    (key: string) => {
+      if (projectId === null) return;
+      const set = closedBars.get(projectId) ?? new Set<string>();
+      closedBars.set(projectId, set.add(key));
+      rerender();
+    },
+    [projectId],
+  );
+  const closed =
+    (projectId !== null && closedBars.get(projectId)) || NONE_CLOSED;
+  return { closed, close };
 }
 
 /** The chat for the active org's project. Another org or project empties it. */
