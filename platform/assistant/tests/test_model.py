@@ -242,8 +242,9 @@ async def test_when_a_session_runs_two_turns_then_every_request_carries_its_cach
         assert not any(cached(last_block(m)) for m in system[:-1])
         assert cached(body["tools"][-1])
         assert cached(last_block(conversation[-1]))
-        # The only message breakpoint is the last one: a turn's new user
-        # message never sits before a breakpoint the next turn reuses.
+        # The message breakpoint is on the last message (a lookback point is
+        # added only once more than 18 blocks follow the previous request's
+        # end, which these short turns never reach).
         assert not any(cached(last_block(m)) for m in conversation[:-1])
     # Each request resends the one before it unchanged, cache markers aside,
     # and adds to its end: that prefix is what the provider reads back.

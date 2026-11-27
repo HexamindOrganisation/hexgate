@@ -80,12 +80,13 @@ def build_model(
             # The transport retries; the SDK's own retries would multiply them.
             max_retries=0,
             # A cache breakpoint after the instructions (the reference
-            # included), after the tool definitions and at the end of the
-            # conversation, so each request of a turn and the next turn read
-            # the prefix the last one wrote. The project card is in the user
-            # message, after every breakpoint but the moving last one, so a
-            # new card costs only that message. Ignored by vendors without
-            # explicit cache control.
+            # included), after the tool definitions, and in the conversation
+            # on the last message, plus a lookback point once more than 18
+            # blocks follow the previous request's end, so each request of a
+            # turn and the next turn read the prefix the last one wrote. The
+            # project card is in the turn's user message, never in the
+            # instructions, so a new card leaves the cached prefix before it
+            # unchanged. Ignored by vendors without explicit cache control.
             openrouter_cache_instructions=True,
             openrouter_cache_tool_definitions=True,
             openrouter_cache_messages=True,
@@ -98,11 +99,12 @@ def session_settings(model: Model, session_id: str) -> ModelSettings:
 
     OpenRouter routes every request carrying the same `session_id` to the
     provider that served the first, so the cache written on Bedrock is read
-    on Bedrock and not missed on Vertex; a provider that goes down hands the
-    session to the next one
+    on Bedrock and not missed on Vertex
     (https://openrouter.ai/docs/guides/best-practices/prompt-caching).
-    Other backends get nothing: an unknown body field is refused by OpenAI's
-    API.
+    OpenRouter documents that a sticky provider's error lets the next request
+    be re-routed; how that combines with `only` and `allow_fallbacks=False`
+    is not documented. Other backends get nothing: an unknown body field is
+    refused by OpenAI's API.
     """
     if not isinstance(model, OpenRouterModel):
         return ModelSettings()
