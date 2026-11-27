@@ -136,8 +136,12 @@ role resolved to see its effective policy.
   that looks like it**: `a..b.md` next to a `..` guard, `environment.py` next
   to a `.env` deny. If it is wrongly denied, narrow the constraint rather than
   reporting the over-block as an accepted risk;
-- a usage cap at `limit - 1` and at `limit`;
-- a caller holding several roles, where the most permissive role wins.
+- a usage cap at `limit - 1` and at `limit`. If your dry-run can't supply
+  usage values, report those rows as "not run". Never edit a cap to make a
+  dry-run pass: without a usage value the cap denies even below the limit;
+- a caller holding several roles, where the most permissive role wins. If your
+  dry-run takes one role at a time, run each role and take the most permissive
+  result, and say so in the report.
 
 Run the dry-runs on the production engine (WASM) when you can, and say so when
 you couldn't. Every result must match the table. When one doesn't, fix the
