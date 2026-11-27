@@ -17,7 +17,6 @@ default_policy: { mode: deny }
 tools:
   refund_order:
     mode: approval_required
-    reason: "financial mutation, needs a human"
 ```
 
 Write a handler and pass it when you bind the policy:
@@ -48,7 +47,7 @@ The `Decision` object holds everything the enforcer knew when it flagged the cal
 |---|---|---|
 | `tool_name` | `str` | Name the model asked to call, e.g. `refund_order`, `mcp-slack-send_message`. |
 | `arguments` | `dict[str, Any]` | Exact arguments the model produced. Show these to the human verbatim, they're what will run. |
-| `reason` | `str` | Human-readable string from the policy engine, usually the failing constraint or the `reason:` field. |
+| `reason` | `str` | Human-readable string from the policy engine, e.g. `Policy requires approval for tool "refund_order"`. |
 | `deciding_role` | `str \| None` | The role whose policy gated the call — the one the approver is deciding for. `None` when no role granted it. |
 | `user_roles` | `tuple[str, ...]` | Every role the caller carried, in order. Empty when no scope was active. |
 | `agent_name` | `str` | Which agent issued the call. Useful when several agents share one approval sink. |
