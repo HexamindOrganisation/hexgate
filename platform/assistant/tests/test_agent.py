@@ -129,6 +129,13 @@ async def test_when_a_turn_runs_then_the_model_gets_the_prompt_and_the_model_set
     assert seen[0].instructions == INSTRUCTIONS.strip()
 
 
+def test_when_a_tool_takes_a_project_id_then_the_instructions_point_at_the_card():
+    assert (
+        "A tool that takes a `project_id` gets the id on the project card"
+        in INSTRUCTIONS
+    )
+
+
 async def test_when_the_model_never_stops_calling_tools_then_the_turn_ends_at_25_requests(
     mcp: FakeMCP,
 ):
