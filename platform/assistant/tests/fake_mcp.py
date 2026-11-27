@@ -16,6 +16,7 @@ from typing import Any
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
+from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools import Tool
 from fastmcp.tools.base import ToolResult
 from fastmcp.utilities.tests import run_server_async
@@ -54,6 +55,10 @@ class FakeMCP:
     # Per tool: the message it is refused with, after its sleep, as the
     # platform's server words it (see `_RecordingTool.run`).
     errors: dict[str, str] = field(default_factory=dict)
+    # Every request's method, in order, as the server received them.
+    methods: list[str] = field(default_factory=list)
+    # tools/list is refused while this is set.
+    refuse_listing: bool = False
 
 
 class _RecordingTool(Tool):
@@ -76,9 +81,21 @@ class _RecordingTool(Tool):
         return ToolResult(content=[TextContent(type="text", text=text)])
 
 
+class _Recording(Middleware):
+    def __init__(self, state: FakeMCP) -> None:
+        self._state = state
+
+    async def on_request(self, context: MiddlewareContext, call_next):
+        self._state.methods.append(context.method or "")
+        if context.method == "tools/list" and self._state.refuse_listing:
+            raise ToolError("listing refused")
+        return await call_next(context)
+
+
 def _server(state: FakeMCP) -> FastMCP:
     # As the platform's server lists them: with $defs, not inlined.
     server = FastMCP("fake-hexgate-mcp", dereference_schemas=False)
+    server.add_middleware(_Recording(state))
     definitions = snapshot_tools() + [
         {"name": n, "description": n, "inputSchema": {"type": "object"}}
         for n in OFF_ALLOWLIST

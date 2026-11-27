@@ -1,9 +1,9 @@
 """`apply_change`: the model's one write tool.
 
-The model sends whole files, a summary and samples; our code calls the MCP
-server's `policy_apply` with each existing file's base hash, the hash of the
-model's latest read of it, and the platform runs every check and saves only
-if all of them pass. The model is never offered `policy_apply` itself, so
+The model sends whole files, a summary and samples. Our code checks each
+existing file against the model's latest read of it, then calls the MCP
+server's `policy_apply` with that read's hash as the file's base hash; the
+platform runs every check and saves only if all of them pass. The model is never offered `policy_apply` itself, so
 the limits below cannot be stepped around.
 
 Per turn: at most `MAX_ATTEMPTS` calls and one applied change. A file read
@@ -14,7 +14,9 @@ a 409 or an answer that never came ends writing for the turn.
 
 import json
 import logging
+import re
 from collections.abc import Mapping
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
@@ -23,6 +25,7 @@ from pydantic import BaseModel, ConfigDict
 from pydantic_ai import RunContext, Tool
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.messages import (
+    INVALID_JSON_KEY,
     ModelMessage,
     ModelRequest,
     ModelResponse,
@@ -90,12 +93,16 @@ NO_ANSWER = (
     "the Hexgate API did not answer; the change may be saved: read the files "
     "again with policy_read_file before retrying"
 )
-# After any silence. The re-read and retry belong in the next message: a
-# file read again in this turn would differ from the turn's snapshot.
+# After any silence: a file read again in this turn would differ from the
+# turn's snapshot, so any re-read and retry belong in the next message.
 AFTER_SILENCE = (
-    "That re-read and retry belong in the user's next message: do not call "
-    "apply_change again in this turn. Tell the user to look at the Policies "
-    "page and send their message again if the change is not there."
+    "Do not read the files again or call apply_change again in this turn. "
+    "Tell the user to look at the Policies page first, and to send their "
+    "message again only if the change is not there."
+)
+NOT_SENT = (
+    "refused, nothing saved: the MCP server could not be reached before the "
+    "change was sent. Try again."
 )
 # Our own limit ran out before the server answered.
 NO_REPLY = "the MCP server did not reply in time; the change may be saved"
@@ -187,7 +194,12 @@ class _Call:
         snapshot = self.ctx.deps.snapshot
         reads = reads_in(self.ctx.messages, self.writes.turn_start)
         existing = [f.name for f in self.files if f.name in snapshot]
-        too_large = [n for n in existing if n in reads and reads[n].text_hash is None]
+        # Refused as too large in this turn; an older refusal may be stale.
+        too_large = [
+            n
+            for n in existing
+            if n in reads and reads[n].this_turn and reads[n].text_hash is None
+        ]
         if too_large:
             return TOO_LARGE_TO_EDIT.format(files=", ".join(too_large))
         differs = [
@@ -227,16 +239,38 @@ class _Call:
             read_timeout=APPLY_CALL_SECONDS,
             tool_error_behavior="error",
         )
+        answer: str | None = None
+        try:
+            async with AsyncExitStack() as session:
+                try:
+                    await session.enter_async_context(mcp)
+                    # Listed first: the client checks a call's result against
+                    # the tool's listed schema, and would otherwise list the
+                    # tools after the call, a failure there losing an answer
+                    # the API has committed.
+                    await mcp.list_tools()
+                except Exception as exc:
+                    return _not_sent(exc)
+                answer = await self._call(mcp, arguments)
+        except Exception as exc:
+            # Closing the session failed: the answer, if any, stands.
+            if answer is None:
+                return _not_sent(exc)
+        assert answer is not None
+        return answer
+
+    async def _call(self, mcp: MCPToolset[None], arguments: dict[str, Any]) -> str:
+        """The answer to the `policy_apply` call itself."""
         try:
             text = await call_text(mcp, "policy_apply", arguments)
         except Exception as exc:
             refusal = _refusal_text(exc)
             if refusal is not None:
-                return _refused(refusal, writes)
+                return _refused(refusal, self.writes)
             # A timeout or a connection lost: whether the API committed is
             # unknown.
             logger.warning("policy_apply gave no answer (%s)", type(exc).__name__)
-            return _silence(NO_REPLY, writes)
+            return _silence(NO_REPLY, self.writes)
         return self._record(text)
 
     def _record(self, text: str) -> str:
@@ -371,6 +405,13 @@ def drop_inputs(value: Any) -> Any:
     return value
 
 
+def _not_sent(exc: Exception) -> str:
+    """Before the call was sent: nothing can have been saved, and writing
+    goes on."""
+    logger.warning("policy_apply not sent (%s)", type(exc).__name__)
+    return NOT_SENT
+
+
 def _silence(what: str, writes: TurnWrites) -> str:
     return _end(writes, f"{what}. {AFTER_SILENCE}")
 
@@ -395,57 +436,68 @@ def _stale_files(message: str) -> list[str] | None:
 
 # ——— File contents reach the model once ———
 
+# Where a tool's arguments carry whole files: `apply_change`'s files, the
+# draft checks' drafts.
+FILE_KEYS = ("files", "drafts")
+# A file name, which the platform does not restrict: any one line. File
+# text runs over several lines and fails it.
+_FILE_NAME = re.compile(r"[^\x00-\x1f]{1,255}")
+
 
 def redact(
     tool: str, args: Mapping[str, Any], change_id: str | None = None
 ) -> Mapping[str, Any]:
     """A tool call's arguments as they are kept and shown once the call is
-    made: when any carries whole files (a list of items with `content`, as
-    `apply_change` and the draft checks take them), each such list becomes
-    its file names. An `apply_change` call becomes `{change_id, files,
-    summary}`; `change_id` is ours, the one its applied result gave, never
-    one in `args`. Any other call is returned as it is.
+    made, without the file text they may carry.
 
-    Decided by shape, not by name, so a call under another name, or one that
-    imitates a redacted call, keeps no file text either."""
-    if not _carries_files(args):
-        return args
-    if "INVALID_JSON" in args and tool != TOOL_NAME:
-        return {}
+    An `apply_change` call always becomes `{change_id, files, summary}`,
+    whatever shape the model gave it: `files` the names it can tell apart,
+    else none, and `change_id` ours, the one its applied result gave, never
+    one in `args`. Any other call loses the text under its file keys (each
+    item reduced to its name, or the key dropped when it does not reduce
+    cleanly), and, when its arguments were cut short and mention content,
+    all of them. Otherwise it is returned as it is."""
     if tool == TOOL_NAME:
-        files, summary = args.get("files"), args.get("summary")
+        summary = args.get("summary")
         return {
             "change_id": change_id,
-            "files": _names(files) if isinstance(files, list) else [],
+            "files": _names(args.get("files")) or [],
             "summary": summary if isinstance(summary, str) else "",
         }
-    return {
-        k: _names(v) if _file_items(v) else v
-        for k, v in args.items()
-        if k != "change_id"
-    }
-
-
-def _carries_files(args: Mapping[str, Any]) -> bool:
-    raw = args.get("INVALID_JSON")
+    raw = args.get(INVALID_JSON_KEY)
     if isinstance(raw, str):
-        # Arguments cut short: whole files, for all anyone can tell.
-        return '"content"' in raw
-    return any(_file_items(v) for v in args.values())
+        return {} if "content" in raw else args
+    if not any(k in FILE_KEYS or _has_content(v) for k, v in args.items()):
+        return args
+    kept: dict[str, Any] = {}
+    for key, value in args.items():
+        if key in FILE_KEYS or _has_content(value):
+            names = _names(value)
+            if names is not None:
+                kept[key] = names
+        else:
+            kept[key] = value
+    return kept
 
 
-def _file_items(value: Any) -> bool:
+def _has_content(value: Any) -> bool:
     return isinstance(value, list) and any(
         isinstance(item, dict) and "content" in item for item in value
     )
 
 
-def _names(items: list[Any]) -> list[str]:
-    return [
-        item["name"]
-        for item in items
-        if isinstance(item, dict) and isinstance(item.get("name"), str)
-    ]
+def _names(value: Any) -> list[str] | None:
+    """The file names of a file list (`[{name, content}]`, or the names
+    themselves); None when it is anything else, text included."""
+    if not isinstance(value, list):
+        return None
+    names = []
+    for item in value:
+        name = item.get("name") if isinstance(item, dict) else item
+        if not isinstance(name, str) or not _FILE_NAME.fullmatch(name):
+            return None
+        names.append(name)
+    return names
 
 
 def redact_calls(
@@ -481,14 +533,23 @@ def _redact_retries(request: ModelRequest) -> ModelRequest:
     return request if parts == list(request.parts) else replace(request, parts=parts)
 
 
+# How pydantic quotes the value it refused in a validation error's text.
+_INPUT_VALUE = re.compile(r"input_value=.*?(?=, input_type=|\]|$)", re.DOTALL)
+_CUT_INPUT = "input_value=…"
+# The outcome pydantic-ai gives a tool return that asks for a retry.
+RETRIED = "retried"
+
+
 def redact_retry[P](part: P) -> P:
     """`part`, or when it answers a call with validation errors (a retry),
     the same part without each error's `input`: it can hold whole files."""
     retry = isinstance(part, RetryPromptPart) or (
-        isinstance(part, ToolReturnPart) and part.outcome == "retried"
+        isinstance(part, ToolReturnPart) and part.outcome == RETRIED
     )
     if retry and isinstance(part.content, list):
         return replace(part, content=drop_inputs(part.content))
+    if retry and isinstance(part.content, str):
+        return replace(part, content=_INPUT_VALUE.sub(_CUT_INPUT, part.content))
     return part
 
 

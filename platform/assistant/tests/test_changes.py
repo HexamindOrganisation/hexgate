@@ -7,6 +7,7 @@ import json
 import pytest
 from fastmcp.exceptions import ToolError
 from pydantic_ai.messages import (
+    ERROR_OUTCOMES,
     ModelMessage,
     ModelRequest,
     ModelResponse,
@@ -26,6 +27,7 @@ from hexgate_assistant.changes import (
     NO_REPLY,
     NO_SCOPE,
     NO_TIME,
+    NOT_SENT,
     READ_FIRST,
     STALE,
     TOO_LARGE_TO_EDIT,
@@ -34,6 +36,7 @@ from hexgate_assistant.changes import (
     reads_in,
     redact,
     redact_calls,
+    redact_retry,
 )
 from hexgate_assistant.context import definition_tokens, estimate_tokens
 from hexgate_assistant.deps import Applied
@@ -534,6 +537,12 @@ REDACTED = {"change_id": None, "files": NAMES, "summary": "lower the refund cap"
         ("apply_change", {**ARGS, "change_id": "chg_fake"}, REDACTED),
         # Another name, the same shape.
         ("apply_changes", ARGS, {"files": NAMES, "summary": "lower the refund cap"}),
+        # A name with a space is still a name.
+        (
+            "policy_check",
+            {"drafts": [{"name": "caps/refund rules.yaml", "content": "x"}]},
+            {"drafts": ["caps/refund rules.yaml"]},
+        ),
         (
             "policy_check",
             {"project_id": "p", "drafts": FILES},
@@ -551,15 +560,17 @@ def test_redact_happy_path(tool, args, expected):
     assert redact(tool, args) == expected
 
 
-@pytest.mark.parametrize(
-    "args",
-    [
-        {"project_id": "p", "name": "x"},
-        {"change_id": "chg_1", "files": NAMES, "summary": "s"},
-    ],
-)
-def test_when_no_file_text_is_carried_then_redact_keeps_the_arguments(args):
-    assert redact("apply_change", args) is args
+def test_when_no_file_text_is_carried_then_redact_keeps_the_arguments():
+    args = {"project_id": "p", "name": "x"}
+
+    assert redact("policy_read_file", args) is args
+
+
+def test_when_a_redacted_call_is_redacted_again_then_only_our_change_id_stays():
+    once = {"change_id": "chg_1", "files": NAMES, "summary": "s"}
+
+    assert redact("apply_change", once) == {**once, "change_id": None}
+    assert redact("apply_change", once, "chg_1") == once
 
 
 def test_redact_calls_happy_path():
@@ -571,11 +582,17 @@ def test_redact_calls_happy_path():
     read = ModelResponse(parts=[ToolCallPart("policy_read_file", {"name": "x"}, "r")])
 
     once = redact_calls([applied, unanswered, read], Applied("chg_1", "a1"))
-    # A later request (or turn), which knows no applied call, keeps them.
+    # A later turn, which knows no applied call: the id is ours only while
+    # this turn holds it (the stored change event keeps it for the card).
     twice = redact_calls(once, None)
 
-    assert [p.args for m in twice for p in m.parts] == [
+    assert [p.args for m in once for p in m.parts] == [
         {**REDACTED, "change_id": "chg_1"},
+        REDACTED,
+        {"name": "x"},
+    ]
+    assert [p.args for m in twice for p in m.parts] == [
+        REDACTED,
         REDACTED,
         {"name": "x"},
     ]
@@ -770,3 +787,106 @@ async def test_when_failed_checks_run_long_then_the_cut_offers_no_narrower_call(
     text = answer(events)
     assert "bytes of check details cut" in text
     assert "narrower" not in text
+
+
+CONTENT = FILES[0]["content"]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"files": json.dumps(FILES), "summary": "s"},
+        {"files": FILES[0], "summary": "s"},
+        {"files": {"caps/refund.yaml": CONTENT}, "summary": "s"},
+        {"files": [f["content"] for f in FILES], "summary": "s"},
+        {"files": [{"name": "caps/refund.yaml", "contnet": CONTENT}], "summary": "s"},
+        # Encoded twice: a JSON string of the arguments.
+        json.dumps(json.dumps(ARGS)),
+        # Cut short, files as a string and as a list.
+        '{"files": "' + CONTENT.replace("\n", "\\n"),
+        '{"files": [{"name": "caps/refund.yaml", "content": "' + CONTENT[:12],
+    ],
+)
+async def test_when_apply_change_gets_files_in_any_shape_then_their_text_goes_nowhere(
+    settings, mcp, key, db, args
+):
+    seen: list[list[ModelMessage]] = []
+    respond = script(READ, ToolCallPart("apply_change", args, "a1"))
+
+    def recording(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(list(messages))
+        return respond(messages, info)
+
+    events = await apply_turn(settings, mcp, key, recording)
+
+    assert apply_calls(mcp) == []
+    assert SENTINEL not in json.dumps(events)
+    assert SENTINEL not in await stored_text(db)
+    assert SENTINEL not in repr(seen[-1])
+
+
+def test_when_a_retry_quotes_the_refused_value_then_the_quote_is_cut():
+    text = (
+        "1 validation error for apply_change\nfiles\n  Input should be a valid "
+        f"list [type=list_type, input_value='{CONTENT}', input_type=str]"
+    )
+    part = ToolReturnPart("apply_change", text, "a1", outcome=changes.RETRIED)
+
+    assert SENTINEL not in redact_retry(part).content
+    assert "input_value=…" in redact_retry(part).content
+
+
+async def test_when_policy_apply_is_called_then_nothing_is_sent_after_it(
+    settings, mcp, key
+):
+    mcp.results["policy_apply"] = APPLIED
+
+    events = await apply_turn(settings, mcp, key, applying())
+
+    assert len(change_events(events)) == 1
+    # Listed before the call, so the client never lists after it.
+    assert mcp.methods[-2:] == ["tools/list", "tools/call"]
+
+
+async def test_when_the_call_cannot_be_sent_then_nothing_saved_and_writing_goes_on(
+    settings, mcp, key
+):
+    mcp.results["policy_apply"] = APPLIED
+    respond = applying(times=2)
+
+    def flaky(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        response = respond(messages, info)
+        call = response.parts[0]
+        # The first apply's session cannot list the tools; the second can.
+        mcp.refuse_listing = (
+            isinstance(call, ToolCallPart) and call.tool_call_id == "a1"
+        )
+        return response
+
+    events = await apply_turn(settings, mcp, key, flaky)
+
+    assert len(apply_calls(mcp)) == 1
+    assert len(change_events(events)) == 1
+    results = [e["content"] for e in events if e["type"] == "TOOL_CALL_RESULT"]
+    assert NOT_SENT in results
+
+
+def test_retried_happy_path():
+    # The outcome a retry is told apart by, as pydantic-ai names it.
+    assert changes.RETRIED in ERROR_OUTCOMES
+
+
+async def test_when_a_file_was_too_large_in_an_earlier_turn_then_it_is_read_again(
+    settings, mcp, key
+):
+    mcp.results["policy_read_file"] = json.dumps(
+        {"name": "caps/refund.yaml", "content": "x" * 70_000, "text_hash": "h-refund"}
+    )
+    model = script(READ, None, apply_call(1))
+    async with platform(settings, mcp, key, scripted(model)) as (client, turns):
+        client.headers["Authorization"] = f"Bearer {key.mint(scope=APPLY_SCOPE_TOKEN)}"
+        first = await turn(client, turns)
+        second = await turn(client, turns, session_id=first[0]["threadId"])
+
+    assert apply_calls(mcp) == []
+    assert answer(second) == f"saw: {READ_FIRST.format(files='caps/refund.yaml')}"

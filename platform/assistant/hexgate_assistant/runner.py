@@ -409,11 +409,16 @@ class _Run:
                 cost_micros=0,
                 cost_source="none",
             )
-            # After the usage: the spend is recorded whatever this costs.
-            if self._change is not None:
-                await self._turns.store.append_event(self._session, self._change)
         except Exception:
             logger.exception("turn %s: storing its messages failed", self._turn_id)
+        if self._change is None:
+            return
+        # Apart: the change is saved in the platform whatever became of the
+        # messages, and the next turn's card reads it from here.
+        try:
+            await self._turns.store.append_event(self._session, self._change)
+        except Exception:
+            logger.exception("turn %s: storing its change failed", self._turn_id)
 
     def _send(self, event: events.Event) -> None:
         self._queue.put_nowait(events.sse(event))
