@@ -181,8 +181,12 @@ class BudgetGuard:
 
 @dataclass(frozen=True)
 class ProjectState:
-    """The project as the turn found it, read once through MCP."""
+    """The project as the turn found it: its id, and what was read once
+    through MCP."""
 
+    # Every project tool takes it as `project_id`, and the model copies it
+    # from the card: the tools do not fill it in.
+    project_id: str
     # {file name: text_hash}: the base each write of this turn is checked
     # against. Taken once; a write never re-reads it.
     snapshot: Mapping[str, str]
@@ -209,7 +213,13 @@ async def read_project(mcp: MCPToolset[Any], project_id: str) -> ProjectState:
         layout = "modules"
     else:
         layout = "empty"
-    return ProjectState(snapshot=snapshot, layout=layout, roles=roles, agents=agents)
+    return ProjectState(
+        project_id=project_id,
+        snapshot=snapshot,
+        layout=layout,
+        roles=roles,
+        agents=agents,
+    )
 
 
 # How the MCP server ends a result it cut short at its size cap (its
@@ -290,6 +300,7 @@ def project_card(project: ProjectState, *, may_write: bool, today: date) -> str:
     in for the user's role: the token names neither the role nor the
     project's name, and files are listed by name, without reading each."""
     lines = [
+        f"Project id: {project.project_id}",
         f"Today: {today.isoformat()}",
         f"This turn may write: {'yes' if may_write else 'no'}",
         f"Layout: {project.layout}",
@@ -344,7 +355,8 @@ def editor_text(editor: Editor) -> str:
 
 # Each part of the user message is at most this long, so a long name list
 # cannot crowd out the message. The card keeps to it by construction (three
-# NAMES_LINE_BYTES lines and a short header); the cut below never reaches it.
+# NAMES_LINE_BYTES lines and a short header holding the project's UUID); the
+# cut below never reaches it.
 CARD_TOKENS = 1000
 CHANGE_TOKENS = 500
 EDITOR_TOKENS = 1000
