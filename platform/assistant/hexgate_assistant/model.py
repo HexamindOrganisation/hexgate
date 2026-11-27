@@ -24,6 +24,7 @@ from pydantic_ai.retries import (
     RetryConfig,
     wait_retry_after,
 )
+from pydantic_ai.settings import ModelSettings
 from tenacity import RetryCallState, retry_if_exception_type, stop_after_attempt
 
 OPENROUTER_PREFIX = "openrouter:"
@@ -78,8 +79,36 @@ def build_model(
             openrouter_provider=provider_routing(slug),
             # The transport retries; the SDK's own retries would multiply them.
             max_retries=0,
+            # A cache breakpoint after the instructions (the reference
+            # included), after the tool definitions, and in the conversation
+            # on the last message, plus a lookback point once more than 18
+            # blocks follow the previous request's end, so each request of a
+            # turn and the next turn read the prefix the last one wrote. The
+            # project card is in the turn's user message, never in the
+            # instructions, so a new card leaves the cached prefix before it
+            # unchanged. Ignored by vendors without explicit cache control.
+            openrouter_cache_instructions=True,
+            openrouter_cache_tool_definitions=True,
+            openrouter_cache_messages=True,
         ),
     )
+
+
+def session_settings(model: Model, session_id: str) -> ModelSettings:
+    """Per-run settings that keep one assistant session on one provider.
+
+    OpenRouter routes every request carrying the same `session_id` to the
+    provider that served the first, so the cache written on Bedrock is read
+    on Bedrock and not missed on Vertex
+    (https://openrouter.ai/docs/guides/best-practices/prompt-caching).
+    OpenRouter documents that a sticky provider's error lets the next request
+    be re-routed; how that combines with `only` and `allow_fallbacks=False`
+    is not documented. Other backends get nothing: an unknown body field is
+    refused by OpenAI's API.
+    """
+    if not isinstance(model, OpenRouterModel):
+        return ModelSettings()
+    return ModelSettings(extra_body={"session_id": session_id})
 
 
 def provider_routing(slug: str) -> OpenRouterProviderConfig:

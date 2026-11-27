@@ -65,6 +65,7 @@ from hexgate_assistant.context import (
 )
 from hexgate_assistant.deps import TurnDeps, TurnWrites
 from hexgate_assistant.lock import TURN_DEADLINE, turn_lock
+from hexgate_assistant.model import session_settings
 from hexgate_assistant.models import AssistantSession, utcnow
 from hexgate_assistant.sessions import CHANGE_EVENT, SessionStore
 
@@ -337,6 +338,7 @@ class _Run:
                         writes=self._writes,
                         turn_start=len(history),
                     ),
+                    model_settings=session_settings(self._turns.agent.model, thread_id),
                     usage_limits=TURN_LIMITS,
                     timeout=max(deadline, 0),
                     event_stream_handler=self._forward,
