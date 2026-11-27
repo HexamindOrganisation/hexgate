@@ -435,7 +435,12 @@ same median cost ($0.096). Every sample read both shared pages, and only one
 opened a concept page: `reach_in_modules`, for the definition of the two ways
 one agent reaches another, which then moved into `policy/agents.mdx` too.
 On the seven agent-reach cases, the run after that move gave 18 of 21, every
-case as in v6, and no sample opened a concept page.
+case as in v6, and no sample opened a concept page. The shared pages then kept
+only what holds for both the CLI and the MCP server: the `--role` and
+`--roles` rules and "a path you don't pass reads zero" went back to
+`cli/policy.mdx`. On the five cases of the fallbacks run it passed 15 of 15
+again, and the samples that ran dry-runs still used `--roles`, which the skill
+names.
 
 Two cases came after v4's full run, so the tables above don't count them:
 `robustness/revoke_last_tool_reach` and `robustness/revoke_last_handoff`
@@ -479,6 +484,7 @@ with its real task and id:
 | `admission-reach-revoke6` | the four of `admission-reach4` and the two of `revoke-last2` |
 | `victor5` | `rate_limit_unsupported`, `admission`, `admission_with_global_cap`, `l2b_roles_no_meaning`, `l2_roles_hierarchy` |
 | `reach7` | the six of `admission-reach-revoke6` and `reach_in_modules` |
+| `cli-split5` | the five of `victor5` |
 
 A copy can be checked by its SHA-256:
 
@@ -501,6 +507,7 @@ A copy can be checked by its SHA-256:
 | v6, five cases, dry-run fallbacks | `2026-11-27T14-56-31-00-00_policy-writing_sonnet-5-5-epoch-3-victor5-0f883a32_cEffxhCNvkogYAnuUUYhWL.eval` | `832d52cd1a2f2fe5e85f3011e7e1bec9684764af77b0a82262fc442f35d71ec4` |
 | v6, all, rules moved into `docs/policy/` | `2026-11-27T12-31-11-00-00_policy-writing_sonnet-5-5-epoch-3-all-a68f7def_kx8iqjMNrLjC8heRZPfs6y.eval` | `6c4ecb4d1273a9aa84b5b7d3651b9fde98a0ac0c6128697875dd3c5a44dd91ed` |
 | v6, seven reach cases, `via` modes moved too | `2026-11-27T13-57-12-00-00_policy-writing_sonnet-5-5-epoch-3-reach7-21c9ea31_LHTzUXK3dKZrBmTCD4P4xP.eval` | `3c8f8b1848f6f1ded6d55b9208c852596c698553beadd182471590bcf226c3f3` |
+| v6, five cases, CLI flags back on the CLI page | `2026-11-27T16-45-58-00-00_policy-writing_sonnet-5-5-epoch-3-cli-split5-82ca16af_VgZPphXjH6f638ZBgWzpzw.eval` | `2c8a9a690c7364c970aa222517601305c21314c27c5909998e1aa01eec633cdd` |
 
 ## Adding a case
 
