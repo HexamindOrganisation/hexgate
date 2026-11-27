@@ -10,9 +10,10 @@
  * is a separate, debounced read of an unsaved draft — it never writes.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   keepPreviousData,
+  type QueryClient,
   useMutation,
   useQuery,
   useQueryClient,
@@ -47,20 +48,22 @@ const changeKey = (pid: string, id: string) =>
 const retryTransient = (n: number, err: unknown) =>
   !(err instanceof ApiError && err.status < 500) && n < 2;
 
+type Invalidate = Parameters<QueryClient["invalidateQueries"]>[1];
+
 /** Bust every derived read for a project after a write. The stored files are
  * authoritative; resolve/graph/check/preview all recompute from them. */
-function invalidateDerived(qc: ReturnType<typeof useQueryClient>, pid: string) {
-  qc.invalidateQueries({ queryKey: ["policy-resolve", pid] });
-  qc.invalidateQueries({ queryKey: ["policy-graph", pid] });
-  qc.invalidateQueries({ queryKey: checkKey(pid) });
-  qc.invalidateQueries({ queryKey: ["policy-preview", pid] });
+function invalidateDerived(qc: QueryClient, pid: string, opts?: Invalidate) {
+  qc.invalidateQueries({ queryKey: ["policy-resolve", pid] }, opts);
+  qc.invalidateQueries({ queryKey: ["policy-graph", pid] }, opts);
+  qc.invalidateQueries({ queryKey: checkKey(pid) }, opts);
+  qc.invalidateQueries({ queryKey: ["policy-preview", pid] }, opts);
 }
 
 /** Refetch the files themselves, written outside this cache, and every read
  * derived from them. */
-function invalidateFiles(qc: ReturnType<typeof useQueryClient>, pid: string) {
-  qc.invalidateQueries({ queryKey: filesKey(pid) });
-  invalidateDerived(qc, pid);
+function invalidateFiles(qc: QueryClient, pid: string, opts?: Invalidate) {
+  qc.invalidateQueries({ queryKey: filesKey(pid) }, opts);
+  invalidateDerived(qc, pid, opts);
 }
 
 /** Every compose file in the project. Disabled while `projectId` is null so
@@ -98,11 +101,17 @@ export function useRefetchOnChange(
   changeId: string | null,
 ) {
   const qc = useQueryClient();
+  const mounting = useRef(true);
   useEffect(() => {
+    const catchUp = mounting.current;
+    mounting.current = false;
     if (!projectId || !changeId || refetchedFor.get(projectId) === changeId)
       return;
     refetchedFor.set(projectId, changeId);
-    invalidateFiles(qc, projectId);
+    // At mount, a read in flight is the mount's own, sent after the change:
+    // reuse it rather than send a second. A live change cancels a read in
+    // flight, which may predate the write, and reads again.
+    invalidateFiles(qc, projectId, { cancelRefetch: !catchUp });
   }, [qc, projectId, changeId]);
 }
 
