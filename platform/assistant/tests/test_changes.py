@@ -6,6 +6,7 @@ import json
 
 import pytest
 from fastmcp.exceptions import ToolError
+from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.messages import (
     ERROR_OUTCOMES,
     ModelMessage,
@@ -31,6 +32,7 @@ from hexgate_assistant.changes import (
     READ_FIRST,
     STALE,
     TOO_LARGE_TO_EDIT,
+    UNEXPLAINED,
     UNREADABLE,
     Read,
     reads_in,
@@ -941,3 +943,99 @@ async def test_when_a_call_brings_its_own_change_id_then_none_is_stored(
     assert [
         a["change_id"] for a in stored_apply_args(await rows(db, AssistantMessage))
     ] == [None]
+
+
+async def test_when_the_listing_is_slow_then_the_apply_is_not_sent_past_the_guard(
+    settings, mcp, key, monkeypatch
+):
+    # The guard passes at the start (300 s left) but not after a 15 s listing.
+    monkeypatch.setattr(changes, "APPLY_START_SECONDS", 290)
+    respond = applying()
+
+    def slow(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        response = respond(messages, info)
+        applies = getattr(response.parts[0], "tool_name", None) == "apply_change"
+        mcp.list_delay = 15 if applies else 0
+        return response
+
+    events = await apply_turn(settings, mcp, key, slow)
+
+    assert apply_calls(mcp) == []
+    assert mcp.methods[-1] == "tools/list"
+    assert answer(events) == f"saw: {NO_TIME}"
+
+
+async def test_when_the_server_fails_unexplained_then_the_change_may_be_saved(
+    settings, mcp, key
+):
+    mcp.errors["policy_apply"] = "500 boom"
+
+    events = await apply_turn(settings, mcp, key, applying(times=2))
+
+    assert len(apply_calls(mcp)) == 1
+    assert answer(events) == f"saw: {UNEXPLAINED}: 500 boom. {AFTER_SILENCE}"
+
+
+async def test_when_the_api_refuses_the_request_then_writing_stays_open(
+    settings, mcp, key
+):
+    mcp.errors["policy_apply"] = '422 invalid request: [{"msg": "bad"}]'
+
+    await apply_turn(settings, mcp, key, applying(times=2))
+
+    assert len(apply_calls(mcp)) == 2
+
+
+async def test_when_the_messages_cannot_be_stored_then_the_change_still_is(
+    settings, mcp, key, db
+):
+    mcp.results["policy_apply"] = APPLIED
+    async with platform(settings, mcp, key, scripted(applying())) as (client, turns):
+        client.headers["Authorization"] = f"Bearer {key.mint(scope=APPLY_SCOPE_TOKEN)}"
+
+        async def broken(*_args, **_kwargs):
+            raise RuntimeError("database gone")
+
+        turns.store.append_messages = broken
+        await turn(client, turns)
+
+    (event,) = [r for r in await rows(db, AssistantMessage) if r.kind == "event"]
+    assert event.content["value"]["change_id"] == "chg_1"
+
+
+async def test_when_the_session_fails_to_close_then_the_answer_stands(
+    settings, mcp, key, monkeypatch
+):
+    mcp.results["policy_apply"] = APPLIED
+
+    class FailingClose(MCPToolset):
+        async def __aexit__(self, *args):
+            result = await super().__aexit__(*args)
+            # The session itself, not each call's nested use of it.
+            if self._running_count == 0:
+                raise RuntimeError("close failed")
+            return result
+
+    monkeypatch.setattr(changes, "MCPToolset", FailingClose)
+
+    events = await apply_turn(settings, mcp, key, applying())
+
+    assert len(change_events(events)) == 1
+    assert NOT_SENT not in json.dumps(events)
+
+
+async def test_when_the_call_is_never_sent_then_it_still_counts_as_an_attempt(
+    settings, mcp, key
+):
+    respond = applying(times=4)
+
+    def unreachable(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        response = respond(messages, info)
+        part = response.parts[0]
+        mcp.refuse_listing = getattr(part, "tool_name", None) == "apply_change"
+        return response
+
+    events = await apply_turn(settings, mcp, key, unreachable)
+
+    assert apply_calls(mcp) == []
+    assert answer(events) == f"saw: {ATTEMPT_LIMIT}"

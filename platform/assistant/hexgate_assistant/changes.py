@@ -96,9 +96,15 @@ NO_ANSWER = (
 # After any silence: a file read again in this turn would differ from the
 # turn's snapshot, so any re-read and retry belong in the next message.
 AFTER_SILENCE = (
-    "Do not read the files again or call apply_change again in this turn. "
-    "Tell the user to look at the Policies page first, and to send their "
-    "message again only if the change is not there."
+    "Whatever the answer above advises, do not read the files again or call "
+    "apply_change again in this turn: a re-read now would not match the "
+    "files as this turn found them. Tell the user to look at the Policies "
+    "page first, and to send their message again only if the change is not "
+    "there."
+)
+# An error that is neither a refusal nor an answer.
+UNEXPLAINED = (
+    "the platform failed with an error it does not explain, so the change may be saved"
 )
 NOT_SENT = (
     "refused, nothing saved: the MCP server could not be reached before the "
@@ -180,13 +186,17 @@ class _Call:
         if refusal is not None:
             return refusal
         self.writes.attempts += 1
-        left = self.ctx.remaining_time()
-        if left is not None and left < APPLY_START_SECONDS:
+        if self._too_late():
             return NO_TIME
         refusal = self._read_refusal()
         if refusal is not None:
             return refusal
         return await self._apply()
+
+    def _too_late(self) -> bool:
+        """Whether the turn's deadline could land inside the MCP call."""
+        left = self.ctx.remaining_time()
+        return left is not None and left < APPLY_START_SECONDS
 
     def _read_refusal(self) -> str | None:
         """Refused without a call: an existing file the model did not build
@@ -251,6 +261,9 @@ class _Call:
                     await mcp.list_tools()
                 except Exception as exc:
                     return _not_sent(exc)
+                # Again after the listing, which takes its own time.
+                if self._too_late():
+                    return NO_TIME
                 answer = await self._call(mcp, arguments)
         except Exception as exc:
             # Closing the session failed: the answer, if any, stands.
@@ -352,6 +365,8 @@ def _refusal(writes: TurnWrites) -> str | None:
 
 # How the MCP server words the API's 409 refusals (hexgate_mcp/api.py).
 CONFLICT_PREFIX = "409 conflict: "
+# The API's other refusals it words (TOOL_ERRORS): nothing was saved.
+_REFUSED = re.compile(r"(401|403|404|422) ")
 # What the platform's MCP server (the official SDK's FastMCP) puts before
 # every error a tool raises.
 SERVER_PREFIX = "Error executing tool policy_apply: "
@@ -376,11 +391,15 @@ def _refused(message: str, writes: TurnWrites) -> str:
     stale = _stale_files(message)
     if stale is not None:
         return _end(writes, STALE.format(files=", ".join(stale) or "unknown"))
-    refused = f"refused, nothing saved: {_without_inputs(message)}"
+    detail = _without_inputs(message)
     if message.startswith(CONFLICT_PREFIX):
         # Any conflict ends writing: this turn's retry would meet it again.
-        return _end(writes, f"{refused}. {CONFLICT}")
-    return refused
+        return _end(writes, f"refused, nothing saved: {detail}. {CONFLICT}")
+    if _REFUSED.match(message):
+        return f"refused, nothing saved: {detail}"
+    # A 5xx, or an error the server does not word as a refusal: whether the
+    # API committed is unknown.
+    return _silence(f"{UNEXPLAINED}: {detail}", writes)
 
 
 def _without_inputs(message: str) -> str:
@@ -544,6 +563,8 @@ def _is_redacted(args: Mapping[str, Any]) -> bool:
     return (
         set(args) == {"change_id", "files", "summary"}
         and (change_id is None or isinstance(change_id, str))
+        and isinstance(args["files"], list)
+        and all(isinstance(name, str) for name in args["files"])
         and _names(args["files"]) is not None
         and isinstance(args["summary"], str)
     )

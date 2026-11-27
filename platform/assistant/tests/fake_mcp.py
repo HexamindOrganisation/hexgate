@@ -57,8 +57,10 @@ class FakeMCP:
     errors: dict[str, str] = field(default_factory=dict)
     # Every request's method, in order, as the server received them.
     methods: list[str] = field(default_factory=list)
-    # tools/list is refused while this is set.
+    # tools/list is refused while this is set, and answers after this many
+    # seconds.
     refuse_listing: bool = False
+    list_delay: float = 0.0
 
 
 class _RecordingTool(Tool):
@@ -87,8 +89,10 @@ class _Recording(Middleware):
 
     async def on_request(self, context: MiddlewareContext, call_next):
         self._state.methods.append(context.method or "")
-        if context.method == "tools/list" and self._state.refuse_listing:
-            raise ToolError("listing refused")
+        if context.method == "tools/list":
+            await asyncio.sleep(self._state.list_delay)
+            if self._state.refuse_listing:
+                raise ToolError("listing refused")
         return await call_next(context)
 
 
