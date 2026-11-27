@@ -7,6 +7,21 @@ Who may run an agent, and which other agents it may reach, is written in the
 policy next to its tools. Why these gates exist, how each framework enforces
 them and their limits are in [agent-level enforcement](/concepts/agent-level-enforcement).
 
+## The two ways one agent reaches another
+
+They are genuinely different, so a policy can treat them differently, via the
+`via` modes:
+
+- **agent-as-tool** (`via: tool`) — the caller invokes a helper agent like a
+  tool and folds the result back into its own answer. Control stays with the
+  caller.
+- **handoff** (`via: handoff`) — the caller transfers the whole conversation to
+  another agent, which takes over and answers the user directly. Control does
+  not return.
+
+Handing the user to `billing-bot` is a bigger deal than asking it to compute one
+number, so a policy can allow the tool mode freely and gate the handoff.
+
 ## Write the policy
 
 Agent rules sit next to `tools:` in a role and read the same way — a `mode` plus

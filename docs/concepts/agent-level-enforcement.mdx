@@ -19,18 +19,10 @@ all apply unchanged.
 
 ## The two ways one agent reaches another
 
-They are genuinely different, so a policy can treat them differently, via the
-`via` modes:
-
-- **agent-as-tool** (`via: tool`) — the caller invokes a helper agent like a
-  tool and folds the result back into its own answer. Control stays with the
-  caller.
-- **handoff** (`via: handoff`) — the caller transfers the whole conversation to
-  another agent, which takes over and answers the user directly. Control does
-  not return.
-
-Handing the user to `billing-bot` is a bigger deal than asking it to compute one
-number, so a policy can allow the tool mode freely and gate the handoff.
+One agent reaches another either as a tool (`via: tool`, control stays with the
+caller) or by handing the conversation off (`via: handoff`, control does not
+return). What each mode means for a policy, and why a policy treats them
+differently, is in [Agent admission and reach](/policy/agents#the-two-ways-one-agent-reaches-another).
 
 ## Write the policy
 
