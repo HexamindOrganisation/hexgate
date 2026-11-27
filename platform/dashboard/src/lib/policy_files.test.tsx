@@ -15,8 +15,10 @@ import {
   useCanManagePolicy,
   useDebouncedValue,
   useDeleteFile,
+  usePolicyFiles,
   usePolicyGraph,
   usePolicyPreview,
+  useRefetchOnChange,
   useRenameFile,
   useResolvedPolicy,
   useTestPolicy,
@@ -402,5 +404,72 @@ describe("useCanManagePolicy", () => {
     });
     // Wait for orgs to load, then assert the gate stays closed.
     await waitFor(() => expect(result.current).toBe(false));
+  });
+});
+
+describe("useRefetchOnChange", () => {
+  it("catches up on a change at mount with one files read", async () => {
+    const qc = makeClient();
+    // Files cached long ago: mounting refetches them by itself.
+    qc.setQueryData(["policy-files", "p1"], [], { updatedAt: 1 });
+    stubFetch({ "/v1/projects/p1/policy-files": [] });
+
+    renderHook(
+      () => {
+        usePolicyFiles("p1");
+        useRefetchOnChange("p1", "chg_mount");
+      },
+      { wrapper: wrapper(qc) },
+    );
+
+    await waitFor(() =>
+      expect(qc.getQueryState(["policy-files", "p1"])?.fetchStatus).toBe(
+        "idle",
+      ),
+    );
+    const reads = vi
+      .mocked(window.fetch)
+      .mock.calls.filter(([u]) => String(u).endsWith("/p1/policy-files"));
+    expect(reads).toHaveLength(1);
+  });
+
+  it("reads the files again for a live change, past a read in flight", async () => {
+    const qc = makeClient();
+    let stored = "old";
+    let release = () => {};
+    stubFetch({});
+    vi.mocked(window.fetch).mockImplementation(async () => {
+      const body = JSON.stringify([{ name: stored }]);
+      // A read held until `release`, answering what was stored when sent.
+      await new Promise<void>((r) => (release = r));
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    qc.setQueryData(["policy-files", "p1"], [{ name: "old" }]);
+    const view = renderHook(
+      ({ change }) => {
+        useRefetchOnChange("p1", change);
+        return usePolicyFiles("p1");
+      },
+      { wrapper: wrapper(qc), initialProps: { change: "chg_seen" } },
+    );
+    act(() => release());
+    await waitFor(() => expect(view.result.current.isFetching).toBe(false));
+
+    // A read goes out, then the assistant's write lands and its event comes.
+    act(() => {
+      void qc.refetchQueries({ queryKey: ["policy-files", "p1"] });
+    });
+    stored = "new";
+    const sent = release;
+    view.rerender({ change: "chg_live" });
+    act(() => sent());
+    await waitFor(() => expect(release).not.toBe(sent));
+    act(() => release());
+    await waitFor(() =>
+      expect(view.result.current.data).toEqual([{ name: "new" }]),
+    );
   });
 });

@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { resetAssistant } from "@/lib/assistant";
@@ -159,6 +159,81 @@ describe("AssistantPane", () => {
     rerender(<AssistantPane projectId="p1" editor={EDITOR} />);
     expect(screen.getByRole("textbox")).toBeVisible();
     expect(transcript.scrollTop).toBe(1000);
+  });
+
+  describe("when content grows after the last token", () => {
+    /** A fake ResizeObserver; `grow` sets the transcript's height and
+     * reports the resize, as the browser does when a change card's diff
+     * loads after the turn ended. */
+    function observeResizes(transcript: HTMLElement) {
+      let height = 1000;
+      Object.defineProperty(transcript, "scrollHeight", {
+        configurable: true,
+        get: () => height,
+      });
+      Object.defineProperty(transcript, "clientHeight", { value: 100 });
+      const callbacks: (() => void)[] = [];
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          constructor(cb: () => void) {
+            callbacks.push(cb);
+          }
+          observe() {}
+          disconnect() {}
+        },
+      );
+      return (next: number) => {
+        height = next;
+        act(() => callbacks.forEach((cb) => cb()));
+      };
+    }
+
+    const CHANGE_TURN = () =>
+      sseResponse(
+        {
+          type: "CUSTOM",
+          name: "change",
+          value: {
+            change_id: "chg_1",
+            summary: "Lower the cap",
+            files: [{ name: "a.yaml", before_hash: "h0", after_hash: "h1" }],
+            checks: [{ id: "yaml", status: "pass" }],
+          },
+        },
+        { type: "RUN_FINISHED" },
+      );
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("then the transcript follows it to the bottom", async () => {
+      stubTurns([CHANGE_TURN()]);
+      const { container } = renderWithProviders(
+        <AssistantPane projectId="p1" editor={EDITOR} />,
+      );
+      const transcript = transcriptOf(container);
+      const grow = observeResizes(transcript);
+      await ask("lower it");
+      await screen.findByText("Lower the cap");
+      await waitFor(() => expect(transcript.scrollTop).toBe(1000));
+      grow(1400);
+      expect(transcript.scrollTop).toBe(1400);
+    });
+
+    it("then a user who scrolled up stays where they are", async () => {
+      stubTurns([CHANGE_TURN()]);
+      const { container } = renderWithProviders(
+        <AssistantPane projectId="p1" editor={EDITOR} />,
+      );
+      const transcript = transcriptOf(container);
+      const grow = observeResizes(transcript);
+      await ask("lower it");
+      await screen.findByText("Lower the cap");
+      transcript.scrollTop = 0;
+      fireEvent.scroll(transcript);
+      grow(1400);
+      expect(transcript.scrollTop).toBe(0);
+    });
   });
 
   it("gives a refused message back to the composer", async () => {

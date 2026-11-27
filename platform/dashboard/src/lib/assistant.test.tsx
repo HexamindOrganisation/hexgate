@@ -7,10 +7,15 @@ import viteConfig from "../../vite.config.ts?raw";
 import { useActive } from "./active";
 import { ApiError, authRedirect } from "./api";
 import {
+  changesOf,
   errorMessage,
+  lastChangeTo,
   resetAssistant,
   SseParser,
   useAssistant,
+  useAssistantChanges,
+  type AssistantChange,
+  type AssistantMessage,
 } from "./assistant";
 import { useLogout } from "./auth";
 import { sse } from "@/test/sse";
@@ -495,5 +500,91 @@ describe("useAssistant", () => {
 
     expect(result.current.state.messages[1].turn?.error).toBeUndefined();
     expect(result.current.streaming).toBe(true);
+  });
+});
+
+function change(id: string, files: [string, string][]): AssistantChange {
+  return {
+    change_id: id,
+    summary: id,
+    files: files.map(([name, after_hash]) => ({
+      name,
+      before_hash: null,
+      after_hash,
+    })),
+    checks: [],
+  };
+}
+
+function turnWith(c?: AssistantChange): AssistantMessage {
+  return {
+    id: c?.change_id ?? "m",
+    role: "assistant",
+    content: "",
+    turn: { streaming: false, reasoning: "", tools: [], change: c },
+  };
+}
+
+describe("changesOf and lastChangeTo", () => {
+  const first = change("chg_1", [
+    ["a.yaml", "h1"],
+    ["b.yaml", "h2"],
+  ]);
+  const second = change("chg_2", [["a.yaml", "h3"]]);
+  const changes = changesOf([
+    { id: "u", role: "user", content: "hi" },
+    turnWith(first),
+    turnWith(),
+    turnWith(second),
+  ]);
+
+  it("lists the turns' changes, oldest first", () => {
+    expect(changes).toEqual([first, second]);
+  });
+
+  it("finds the latest change to a file and the hash it left", () => {
+    expect(lastChangeTo(changes, "a.yaml")).toEqual({
+      change: second,
+      afterHash: "h3",
+    });
+    expect(lastChangeTo(changes, "b.yaml")).toEqual({
+      change: first,
+      afterHash: "h2",
+    });
+    expect(lastChangeTo(changes, "c.yaml")).toBeNull();
+  });
+});
+
+describe("useAssistantChanges", () => {
+  afterEach(() => {
+    resetAssistant();
+    vi.restoreAllMocks();
+  });
+
+  it("returns the changes saved on the chat's project only", async () => {
+    stubFetch();
+    const chat = renderAssistant();
+    await act(() => chat.result.current.send("lower it", EDITOR));
+    const here = renderHook(() => useAssistantChanges("p1"));
+    const elsewhere = renderHook(() => useAssistantChanges("p2"));
+    expect(here.result.current.map((c) => c.change_id)).toEqual(["chg_1"]);
+    expect(elsewhere.result.current).toEqual([]);
+    expect(renderHook(() => useAssistantChanges(null)).result.current).toEqual(
+      [],
+    );
+  });
+
+  it("does not re-render its caller for a streamed token", async () => {
+    stubFetch();
+    const chat = renderAssistant();
+    let renders = 0;
+    renderHook(() => {
+      renders++;
+      return useAssistantChanges("p1");
+    });
+    await act(() => chat.result.current.send("lower it", EDITOR));
+    // The first render, and the one for the change; text and tool events
+    // land in the same chunk, so a re-render per event would also be one.
+    expect(renders).toBe(2);
   });
 });
